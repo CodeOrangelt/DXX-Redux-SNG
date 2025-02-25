@@ -409,56 +409,72 @@ void draw_copyright()
 
 int main_menu_handler(newmenu *menu, d_event *event, int *menu_choice )
 {
-	newmenu_item *items = newmenu_get_items(menu);
+    newmenu_item *items = newmenu_get_items(menu);
 
-	switch (event->type)
-	{
-		case EVENT_WINDOW_ACTIVATED:
-			if ( Players[Player_num].callsign[0]==0 )
-				RegisterPlayer();
-			else
-				keyd_time_when_last_pressed = timer_query();		// .. 20 seconds from now!
-			break;
+    switch (event->type)
+    {
+        case EVENT_WINDOW_ACTIVATED:
+            if ( Players[Player_num].callsign[0]==0 )
+                RegisterPlayer();
+            else
+                keyd_time_when_last_pressed = timer_query();		// .. 20 seconds from now!
+            break;
 
-		case EVENT_KEY_COMMAND:
-			// Don't allow them to hit ESC in the main menu.
-			if (event_key_get(event)==KEY_ESC)
-				return 1;
-			break;
+        case EVENT_KEY_COMMAND:
+            // Don't allow them to hit ESC in the main menu.
+            if (event_key_get(event)==KEY_ESC)
+                return 1;
+            break;
 
-		case EVENT_MOUSE_BUTTON_DOWN:
-		case EVENT_MOUSE_BUTTON_UP:
-			// Don't allow mousebutton-closing in main menu.
-			if (event_mouse_get_button(event) == MBTN_RIGHT)
-				return 1;
-			break;
+        case EVENT_MOUSE_BUTTON_DOWN:
+        case EVENT_MOUSE_BUTTON_UP:
+            // Don't allow mousebutton-closing in main menu.
+            if (event_mouse_get_button(event) == MBTN_RIGHT)
+                return 1;
+            break;
 
-		case EVENT_IDLE:
-			if ( /*keyd_time_when_last_pressed+i2f(45) < timer_query() || */ GameArg.SysAutoDemo  )
-			{
-				keyd_time_when_last_pressed = timer_query();			// Reset timer so that disk won't thrash if no demos.
-				newdemo_start_playback(NULL);		// Randomly pick a file
-			}
-			break;
+        case EVENT_IDLE:
+            if ( GameArg.SysAutoDemo )
+            {
+                keyd_time_when_last_pressed = timer_query();		// Reset timer so that disk won't thrash if no demos.
+                newdemo_start_playback(NULL);		// Randomly pick a file
+            }
+            break;
 
-		case EVENT_NEWMENU_DRAW:
-			draw_copyright();
-			break;
+        case EVENT_NEWMENU_DRAW:
+            // Draw the normal copyright text.
+            draw_copyright();
+            {
+                static grs_bitmap website_preview;
+                static int preview_loaded = 0;
 
-		case EVENT_NEWMENU_SELECTED:
-			return do_option(menu_choice[newmenu_get_citem(menu)]);
-			break;
+                // Load the preview image once. Make sure that "descentnexus_preview.pcx" exists.
+                if (!preview_loaded)
+                {
+                    website_preview = *bm_load("descentnexus_preview.pcx");
+                    preview_loaded = 1;
+                }
+                // Draw the preview image centered at the bottom of the screen.
+                int x = (SWIDTH - website_preview.bm_w) / 2;
+                int y = (SHEIGHT - website_preview.bm_h - 5);
+                gr_bitmap(x, y, &website_preview);
+            }
+            break;
 
-		case EVENT_WINDOW_CLOSE:
-			d_free(menu_choice);
-			d_free(items);
-			break;
+        case EVENT_NEWMENU_SELECTED:
+            return do_option(menu_choice[newmenu_get_citem(menu)]);
+            break;
 
-		default:
-			break;
-	}
+        case EVENT_WINDOW_CLOSE:
+            d_free(menu_choice);
+            d_free(items);
+            break;
 
-	return 0;
+        default:
+            break;
+    }
+
+    return 0;
 }
 
 //	-----------------------------------------------------------------------------
@@ -2698,7 +2714,7 @@ int sandbox_menuset(newmenu *menu, d_event *event, void *userdata)
 
 void do_sandbox_menu()
 {
-	newmenu_item *m;
+	newmenu_item m[2];
 
 	MALLOC(m, newmenu_item, 2);
 	if (!m)
