@@ -1315,26 +1315,40 @@ void InitPlayerPosition(int random)
 #endif
 	else if (random == 1)
 	{
-		int i, trys=0;
-		fix closest_dist = 0x7ffffff, dist;
+		int best_spawn = -1;
+		fix best_min_dist = 0; // best candidate so far
+		int j, i;
 
-		timer_update();
-		d_srand((fix)timer_query());
-		do {
-			trys++;
-			NewPlayer = d_rand() % NumNetPlayerPositions;
-
-			closest_dist = 0x7fffffff;
-
-			for (i=0; i<N_players; i++ )	{
-				if ( (i!=Player_num) && (Objects[Players[i].objnum].type == OBJ_PLAYER) )	{
-					dist = find_connected_distance(&Objects[Players[i].objnum].pos, Objects[Players[i].objnum].segnum, &Player_init[NewPlayer].pos, Player_init[NewPlayer].segnum, 15, WID_FLY_FLAG ); // Used to be 5, search up to 15 segments
-					if ( (dist < closest_dist) && (dist >= 0) )	{
-						closest_dist = dist;
-					}
+		// For every spawn candidate in Player_init[]
+		for (j = 0; j < NumNetPlayerPositions; j++)
+		{
+			fix min_dist = 0x7fffffff; // start with a very large distance
+			// Calculate the minimum distance from this spawn to all other players.
+			for (i = 0; i < N_players; i++)
+			{
+				if ((i != Player_num) && (Objects[Players[i].objnum].type == OBJ_PLAYER))
+				{
+					fix dist = find_connected_distance(&Objects[Players[i].objnum].pos,
+														Objects[Players[i].objnum].segnum,
+														&Player_init[j].pos,
+														Player_init[j].segnum,
+														15, /* maximum search depth */
+														WID_FLY_FLAG);
+					if (dist >= 0 && dist < min_dist)
+						min_dist = dist;
 				}
 			}
-		} while ( (closest_dist<i2f(15*20)) && (trys<MAX_PLAYERS*2) );
+			// If this candidate is farther away from its closest player than any we've tested, select it.
+			if (min_dist > best_min_dist)
+			{
+				best_min_dist = min_dist;
+				best_spawn = j;
+			}
+		}
+		// Fallback: if no suitable candidate found, default to Player_num.
+		if (best_spawn < 0)
+			best_spawn = Player_num;
+		NewPlayer = best_spawn;
 	}
 	else
 	{
