@@ -1348,6 +1348,10 @@ void InitPlayerPosition(int random)
 		// Fallback: if no suitable candidate found, default to Player_num.
 		if (best_spawn < 0)
 			best_spawn = Player_num;
+
+		con_printf(CON_NORMAL, "[Spawn] Selected spawn candidate %d (segment %d) with minimum distance %d from other players.",
+			best_spawn, Player_init[best_spawn].segnum, best_min_dist);
+
 		NewPlayer = best_spawn;
 	}
 	else
