@@ -47,6 +47,8 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 //   will return a value between 0 and 100 that tells how much fuel
 //   he got.
 
+//flags scores
+void display_score_ctf();
 
 // Destroys all fuel centers, clears segment backpointer array.
 void fuelcen_reset();

@@ -33,6 +33,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "fireball.h"
 #include "robot.h"
 #include "byteswap.h"
+#include "gamefont.h"
 
 #include "wall.h"
 #include "sounds.h"
@@ -557,15 +558,92 @@ void fuelcen_update_all()
 	}
 }
 
+int redscore;
+int bluescore;
+
+void display_score_ctf()
+{
+	//static const char* team_names[] = { "\x01\x53\Blue:\x01\x99", "\x01\xC0\Red:\x01\x99" };
+	//int blueteam_num = (get_team(Player_num) == 0);
+	//int redteam_num = (get_team(Player_num) == 1);
+	int redscore = 0;
+	int bluescore = 0;
+
+	if (Netgame.CTF)
+	{
+		int    xkeys = FSPACX2(1);
+		int    ykeys = grd_curcanv->cv_bitmap.bm_h;
+
+		for (int i = 0; i < N_players; i++)
+		{
+			if (get_team(i) == 0)
+				bluescore += Players[i].score;
+		}
+		for (int i = 0; i < N_players; i++)
+		{
+			if (get_team(i) == 1)
+				redscore += Players[i].score;
+		}
+		
+		// winning team will be scored on top - code fix: Sypwn
+		
+		if (redscore > bluescore)
+		{
+			gr_printf(xkeys * 0.5, ykeys / 1.60, "\x01\xC0\Red:\x01\x99 %d", redscore);
+			gr_printf(xkeys * 0.5, ykeys / 1.50, "\x01\x53\Blue:\x01\x99 %d", bluescore);
+		}
+		else
+		{
+			gr_printf(xkeys * 0.5, ykeys / 1.60, "\x01\x53\Blue:\x01\x99 %d", bluescore);
+			gr_printf(xkeys * 0.5, ykeys / 1.50, "\x01\xC0\Red:\x01\x99 %d", redscore);
+		}
+	}
+}
+
 //-------------------------------------------------------------
-fix fuelcen_give_fuel(segment *segp, fix MaxAmountCanTake )
+fix fuelcen_give_fuel(segment* segp, fix MaxAmountCanTake)
 {
 	static fix64 last_play_time = 0;
-        #define REFUEL_SOUND_DELAY (F1_0/3)
+#define REFUEL_SOUND_DELAY (F1_0/3)
 
-	Assert( segp != NULL );
+	Assert(segp != NULL);
 
 	PlayerSegment = segp;
+
+	extern int drop_powerup(int type, int id, int num, vms_vector * init_vel, vms_vector * pos, int segnum);
+
+	if (blue_key_seg == ConsoleObject->segnum)
+	{
+			if (Netgame.CTF && (Players[Player_num].flags & PLAYER_FLAGS_RED_KEY))
+			{
+				int objnum = drop_powerup(OBJ_POWERUP, POW_KEY_RED, 1, &vmd_zero_vector, &red_key_pos, red_key_seg);
+				multi_send_create_powerup(POW_KEY_RED, red_key_seg, objnum, &red_key_pos);
+				sprintf(Network_message, "has scored!");
+				Network_message_reciever = 100;
+				Players[Player_num].flags &= ~PLAYER_FLAGS_RED_KEY;
+				PALETTE_FLASH_ADD(0, 15, 0);
+				multi_send_flags();
+				digi_play_sample_once(SOUND_HOSTAGE_RESCUED, F1_0);
+				add_points_to_score(5);
+			}
+	}
+
+	if (red_key_seg == ConsoleObject->segnum)
+	{
+			if (Netgame.CTF && (Players[Player_num].flags & PLAYER_FLAGS_BLUE_KEY))
+			{
+				int objnum = drop_powerup(OBJ_POWERUP, POW_KEY_BLUE, 1, &vmd_zero_vector, &blue_key_pos, blue_key_seg);
+				multi_send_create_powerup(POW_KEY_BLUE, blue_key_seg, objnum, &blue_key_pos);
+				sprintf(Network_message, "has scored!");
+				Network_message_reciever = 100;
+				Players[Player_num].flags &= ~PLAYER_FLAGS_BLUE_KEY;
+				PALETTE_FLASH_ADD(0, 15, 0);
+				multi_send_flags();
+				digi_play_sample_once(SOUND_HOSTAGE_RESCUED, F1_0);
+				add_points_to_score(5);
+
+			}
+	}
 
 	if ( (segp) && (segp->special==SEGMENT_IS_FUELCEN) )	{
 		fix amount;

@@ -346,7 +346,7 @@ void init_player_stats_level(int secret_flag)
 		Players[Player_num].cloak_time = 0;
 		Players[Player_num].invulnerable_time = 0;
 
-		if ((Game_mode & GM_MULTI) && !(Game_mode & GM_MULTI_COOP))
+	if ((Game_mode & GM_MULTI) && !(Game_mode & GM_MULTI_COOP) && !Netgame.CTF)
 			Players[Player_num].flags |= (KEY_BLUE | KEY_RED | KEY_GOLD);
 
 	Player_is_dead = 0; // Added by RH
@@ -1157,6 +1157,25 @@ void StartNewLevelSub(int level_num, int page_in_textures, int secret_flag)
 	gameseq_init_network_players(); // Initialize the Players array for
 											  // this level
 
+
+		if (Netgame.CTF)
+	{
+		for (int i = 0; i <= Highest_object_index; i++)
+		{
+			if (Objects[i].type == OBJ_POWERUP && Objects[i].id == POW_KEY_BLUE)
+			{
+				blue_key_pos = Objects[i].pos;
+				blue_key_seg = Objects[i].segnum;
+			}
+			if (Objects[i].type == OBJ_POWERUP && Objects[i].id == POW_KEY_RED)
+			{
+				red_key_pos = Objects[i].pos;
+				red_key_seg = Objects[i].segnum;
+			}
+
+		}
+	}										  
+
 #ifdef NETWORK
 	if (Game_mode & GM_NETWORK)
 	{
@@ -1412,12 +1431,12 @@ void StartLevel(int random)
 	// create_player_appearance_effect(ConsoleObject);
 	Do_appearance_effect = 1;
 
-	if (Game_mode & GM_MULTI)
+	if (Game_mode & GM_MULTI | Netgame.CTF)
 	{
-		if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS))
+		if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) || Netgame.CTF)
 			multi_send_score();
-	 	multi_send_reappear();
-		multi_do_protocol_frame(1, 1);
+	 		multi_send_reappear();
+			multi_do_protocol_frame(1, 1);
 	}
 	else // in Singleplayer, after we died ...
 	{

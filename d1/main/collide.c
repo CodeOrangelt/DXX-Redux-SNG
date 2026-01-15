@@ -50,6 +50,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "robot.h"
 #include "weapon.h"
 #include "player.h"
+#include "powerup.h"
 #include "gauges.h"
 #include "powerup.h"
 #include "newmenu.h"
@@ -1193,6 +1194,11 @@ void drop_player_eggs_remote(object *playerobj, ubyte remote)
 
 		//	If the player dies and he has powerful lasers, create the powerups here.
 
+		if (Netgame.CTF)
+		{
+			// drop nothing in CTF
+		}
+
 		if (Players[pnum].laser_level >= 1)
 			call_object_create_egg(playerobj, Players[pnum].laser_level, OBJ_POWERUP, POW_LASER);	// Note: laser_level = 0 for laser level 1.
 
@@ -1202,6 +1208,11 @@ void drop_player_eggs_remote(object *playerobj, ubyte remote)
 
 		if (Players[pnum].flags & PLAYER_FLAGS_CLOAKED)
 			call_object_create_egg(playerobj, 1, OBJ_POWERUP, POW_CLOAK);
+
+		if (Netgame.CTF)
+		{
+			// drop nothing in CTF
+		}
 
 		//Drop the vulcan, gauss, and ammo
 		vulcan_ammo = Players[pnum].primary_ammo[VULCAN_INDEX];
@@ -1281,6 +1292,28 @@ void drop_player_eggs_remote(object *playerobj, ubyte remote)
 			call_object_create_egg(playerobj, 1, OBJ_POWERUP, POW_SHIELD_BOOST);
 			call_object_create_egg(playerobj, 1, OBJ_POWERUP, POW_ENERGY);
 		}
+	}
+	
+	extern int drop_powerup(int type, int id, int num, vms_vector * init_vel, vms_vector * pos, int segnum);
+	if (Netgame.CTF && (Players[playerobj->id].flags & PLAYER_FLAGS_BLUE_KEY))
+	{
+		Players[playerobj->id].flags &= ~PLAYER_FLAGS_BLUE_KEY;
+		int objnum = drop_powerup(OBJ_POWERUP, POW_KEY_BLUE, 1, &vmd_zero_vector, &blue_key_pos, blue_key_seg);
+		multi_send_create_powerup(POW_KEY_BLUE, blue_key_seg, objnum, &blue_key_pos);
+		strcpy(Network_message, "has lost the flag!");
+		Network_message_reciever = 100;
+		digi_play_sample(SOUND_INVULNERABILITY_OFF, F1_0);
+		multi_send_play_sound(SOUND_INVULNERABILITY_OFF, F1_0);
+	}
+	if (Netgame.CTF && (Players[playerobj->id].flags & PLAYER_FLAGS_RED_KEY))
+	{
+		Players[playerobj->id].flags &= ~PLAYER_FLAGS_RED_KEY;
+		int objnum = drop_powerup(OBJ_POWERUP, POW_KEY_RED, 1, &vmd_zero_vector, &red_key_pos, red_key_seg);
+		multi_send_create_powerup(POW_KEY_RED, red_key_seg, objnum, &red_key_pos);
+		strcpy(Network_message, "has lost the flag!");
+		Network_message_reciever = 100;
+		digi_play_sample(SOUND_INVULNERABILITY_OFF, F1_0);
+		multi_send_play_sound(SOUND_INVULNERABILITY_OFF, F1_0);
 	}
 }
 

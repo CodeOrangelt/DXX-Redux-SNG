@@ -1044,7 +1044,7 @@ multi_sort_kill_list(void)
 
 	for (i = 0; i < MAX_PLAYERS; i++)
 	{
-		if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS))
+		if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS || Netgame.CTF))
 			kills[i] = Players[i].score;
 		else
 			kills[i] = Players[i].net_kills_total;
@@ -2060,7 +2060,7 @@ multi_do_death(int objnum)
 
 	objnum = objnum;
 
-	if (!(Game_mode & GM_MULTI_COOP))
+	if (!(Game_mode & GM_MULTI_COOP | Netgame.CTF ))
 	{
 		Players[Player_num].flags |= (PLAYER_FLAGS_RED_KEY | PLAYER_FLAGS_BLUE_KEY | PLAYER_FLAGS_GOLD_KEY);
 	}
@@ -3870,13 +3870,13 @@ multi_send_audio_taunt(int taunt_num)
 void
 multi_send_score(void)
 {
-	if(is_observer()) { return; }
+	if(Game_mode & GM_OBSERVER) { return; }
 
 	// Send my current score to all other players so it will remain
 	// synced.
 	int count = 0;
 
-	if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS)) {
+	if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS || Netgame.CTF)) {
 		multi_sort_kill_list();
 		multibuf[count] = MULTI_SCORE;                  count += 1;
 		multibuf[count] = Player_num;                           count += 1;
@@ -4093,7 +4093,7 @@ multi_prep_level(void)
 
 			}
 
-			if (!(Game_mode & GM_MULTI_COOP))
+			if (!(Game_mode & GM_MULTI_COOP || Netgame.CTF))
 				if ((Objects[i].id >= POW_KEY_BLUE) && (Objects[i].id <= POW_KEY_GOLD))
 				{
 					Objects[i].id = POW_SHIELD_BOOST;
@@ -4735,6 +4735,21 @@ void multi_do_repair( const ubyte *buf )
 			add_observatory_damage_stat(buf[1], shields_delta, new_shields, old_shields, 0, 0, DAMAGE_SHIELD, 0);
 		}
 	}
+}
+
+void multi_send_flags(void)
+{
+	// Setup flags packet.
+	multibuf[0] = MULTI_FLAGS;
+	multibuf[1] = Player_num;
+	PUT_INTEL_INT(multibuf + 2, Players[Player_num].flags);
+
+	multi_send_data(multibuf, 6, 0);
+}
+
+void multi_do_flags(const ubyte* buf)
+{
+	Players[buf[1]].flags = GET_INTEL_INT(buf + 2);
 }
 
 void multi_send_ship_status()

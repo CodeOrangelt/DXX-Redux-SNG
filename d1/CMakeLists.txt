@@ -127,3 +127,4 @@ if(EDITOR)
     add_subdirectory(ui)
     add_dependencies(d1x-redux editor ui)
 endif()
+

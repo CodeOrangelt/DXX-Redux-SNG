@@ -207,13 +207,19 @@ int pick_up_vulcan_ammo(void)
 	return used;
 }
 
+vms_vector blue_key_pos;// position flag(blue) is in
+int blue_key_seg;// segment flag(blue) is in
+vms_vector red_key_pos;// position flag(red) is in
+int red_key_seg;// segment flag(red) is in
+
 //	returns true if powerup consumed
 int do_powerup(object *obj)
 {
+
 	int used=0;
-	int special_used=0;
-	int id=obj->id;
-	int ammo;
+	int vulcan_ammo_to_add_with_cannon;
+	int only_sound;
+
 
 	if ((Player_is_dead) || (ConsoleObject->type == OBJ_GHOST) || (Players[Player_num].shields < 0))
 		return 0;
@@ -256,7 +262,6 @@ int do_powerup(object *obj)
 		case POW_SHIELD_BOOST:
 			if (Players[Player_num].shields < MAX_SHIELDS) {
 				fix repair = 3*F1_0 + 3*F1_0*(NDL - Difficulty_level);
-
 				if (Game_mode & GM_MULTI)
 					multi_send_repair(repair, Players[Player_num].shields, OBJ_POWERUP);
 
@@ -264,29 +269,33 @@ int do_powerup(object *obj)
 				if (Players[Player_num].shields > MAX_SHIELDS)
 					Players[Player_num].shields = MAX_SHIELDS;
 				powerup_basic(0, 0, 15, SHIELD_SCORE, "%s %s %d",TXT_SHIELD,TXT_BOOSTED_TO,f2ir(Players[Player_num].shields));
-				if (Game_mode & GM_MULTI && PlayerCfg.MultiMessages)
-					con_printf(CON_NORMAL, "You picked up %.1f shields, shields now %.1f\n", f2fl(repair), f2fl(Players[Player_num].shields));
 				used=1;
 			} else
 				HUD_init_message(HM_DEFAULT|HM_REDUNDANT|HM_MAYDUPL, TXT_MAXED_OUT,TXT_SHIELD);
 			break;
 		case POW_LASER:
-			if (Players[Player_num].laser_level >= MAX_LASER_LEVEL) {
+			if (Players[Player_num].laser_level >= MAX_LASER_LEVEL)
+			{
 				Players[Player_num].laser_level = MAX_LASER_LEVEL;
 				HUD_init_message(HM_DEFAULT|HM_REDUNDANT|HM_MAYDUPL, TXT_MAXED_OUT,TXT_LASER);
 			} else {
 				if (Newdemo_state == ND_STATE_RECORDING)
 					newdemo_record_laser_level(Players[Player_num].laser_level, Players[Player_num].laser_level + 1);
 				Players[Player_num].laser_level++;
-
 				powerup_basic(10, 0, 10, LASER_SCORE, "%s %s %d",TXT_LASER,TXT_BOOSTED_TO, Players[Player_num].laser_level+1);
 				update_laser_weapon_info();
 				pick_up_primary (LASER_INDEX);
-				used=1;
-
-				if (Game_mode & GM_MULTI)
-					multi_send_ship_status();
+					if (Netgame.CTF)
+					{
+						only_sound = used;
+						used = 0;
+					}
+					else
+					{
+						used=1;
+					}
 			}
+
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
 			break;
@@ -296,8 +305,29 @@ int do_powerup(object *obj)
 		case POW_MISSILE_4:
 			used=pick_up_secondary(CONCUSSION_INDEX,4);
 			break;
-
 		case POW_KEY_BLUE:
+			blue_key_pos = obj->pos;
+			blue_key_seg = obj->segnum;
+			if (Netgame.CTF && !(Players[Player_num].flags & PLAYER_FLAGS_BLUE_KEY))
+			{
+				if (get_team(Player_num) == 0)
+				{
+					only_sound = used;
+					break;
+				}
+				else 
+				{
+					only_sound = used;
+					used = 1;
+					PALETTE_FLASH_ADD(0, 15, 0);
+					sprintf(Network_message, "has picked up the \x01\xD7\ blue \x01\x99\ Flag!");
+					Network_message_reciever = 100;
+					HUD_init_message(HM_MULTI, "\x01\xC0\The other team has been alerted!");
+					digi_play_sample(SOUND_CONTROL_CENTER_WARNING_SIREN, F1_0);
+					multi_send_play_sound(SOUND_CONTROL_CENTER_WARNING_SIREN, F1_0);
+				}
+			}
+
 			if (Players[Player_num].flags & PLAYER_FLAGS_BLUE_KEY)
 				break;
 #ifdef NETWORK
@@ -305,34 +335,56 @@ int do_powerup(object *obj)
 #endif
 			digi_play_sample( Powerup_info[obj->id].hit_sound, F1_0 );
 			Players[Player_num].flags |= PLAYER_FLAGS_BLUE_KEY;
-			powerup_basic(0, 0, 15, KEY_SCORE, "%s %s",TXT_BLUE,TXT_ACCESS_GRANTED);
-			if (Game_mode & GM_MULTI)
+			if ((Game_mode & GM_MULTI) && Netgame.CTF)
+				multi_send_flags();
+			if (!Netgame.CTF)
+				powerup_basic(0, 0, 15, KEY_SCORE, "%s %s",TXT_BLUE,TXT_ACCESS_GRANTED);
+			else if ((Game_mode & GM_MULTI) & !Netgame.CTF)
 				used=0;
 			else
 				used=1;
-
-			if (Game_mode & GM_MULTI)
-				multi_send_ship_status();
-
 			break;
+
 		case POW_KEY_RED:
+			red_key_pos = obj->pos;
+			red_key_seg = obj->segnum;
+			if (Netgame.CTF && !(Players[Player_num].flags & PLAYER_FLAGS_RED_KEY))
+			{
+				if (get_team(Player_num) == 1)
+				{
+					only_sound = used;
+					break;
+				}
+				else
+				{
+					only_sound = used;
+					used = 1;
+					PALETTE_FLASH_ADD(0, 15, 0);
+					sprintf(Network_message, "has picked up the \x01\xC0\ red \x01\x99\ Flag!");
+					Network_message_reciever = 100;
+					HUD_init_message(HM_MULTI, "\x01\xD7\The other team has been alerted!");
+					digi_play_sample(SOUND_CONTROL_CENTER_WARNING_SIREN, F1_0);
+					multi_send_play_sound(SOUND_CONTROL_CENTER_WARNING_SIREN, F1_0);
+				}
+			}
 			if (Players[Player_num].flags & PLAYER_FLAGS_RED_KEY)
 				break;
+
 #ifdef NETWORK
 			multi_send_play_sound(Powerup_info[obj->id].hit_sound, F1_0);
 #endif
 			digi_play_sample( Powerup_info[obj->id].hit_sound, F1_0 );
 			Players[Player_num].flags |= PLAYER_FLAGS_RED_KEY;
-			powerup_basic(15, 0, 0, KEY_SCORE, "%s %s",TXT_RED,TXT_ACCESS_GRANTED);
-			if (Game_mode & GM_MULTI)
+			if ((Game_mode & GM_MULTI) && Netgame.CTF)
+				multi_send_flags();
+			if(!Netgame.CTF)
+				powerup_basic(15, 0, 0, KEY_SCORE, "%s %s",TXT_RED,TXT_ACCESS_GRANTED);
+			else if ((Game_mode & GM_MULTI) & !Netgame.CTF)
 				used=0;
 			else
 				used=1;
-
-			if (Game_mode & GM_MULTI)
-				multi_send_ship_status();
-
 			break;
+
 		case POW_KEY_GOLD:
 			if (Players[Player_num].flags & PLAYER_FLAGS_GOLD_KEY)
 				break;
@@ -347,10 +399,6 @@ int do_powerup(object *obj)
 			else
 				used=1;
 
-			if (Game_mode & GM_MULTI)
-				multi_send_ship_status();
-
-			break;
 		case POW_QUAD_FIRE:
 			if (!(Players[Player_num].flags & PLAYER_FLAGS_QUAD_LASERS)) {
 				Players[Player_num].flags |= PLAYER_FLAGS_QUAD_LASERS;
@@ -358,51 +406,37 @@ int do_powerup(object *obj)
 				update_laser_weapon_info();
 				pick_up_quads();
 				used=1;
-
-				if (Game_mode & GM_MULTI)
-					multi_send_ship_status();
 			} else
 				HUD_init_message(HM_DEFAULT|HM_REDUNDANT|HM_MAYDUPL, "%s %s!",TXT_ALREADY_HAVE,TXT_QUAD_LASERS);
+			if (Netgame.CTF)
+			{
+				only_sound = used;
+				used = 0;
+			}
+
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
 			break;
 		case	POW_VULCAN_WEAPON:
-			ammo = obj->ctype.powerup_info.count;
-
-			used = pick_up_primary(VULCAN_INDEX);
-
-			//didn't get the weapon (because we already have it), but
-			//maybe snag some of the ammo.  if single-player, grab all the ammo
-			//and remove the powerup.  If multi-player take ammo in excess of
-			//the amount in a powerup, and leave the rest.
-			if (! used)
-				if ((Game_mode & GM_MULTI) ) {
-					if(Netgame.GaussAmmoStyle == GAUSS_STYLE_DUPLICATING) {
-						ammo -= VULCAN_AMMO_AMOUNT;
-					} else {
-						ammo = 0; // Forgot to tell other players we took ammo, it dups, very bad
-					}
+			if ((used = pick_up_primary(VULCAN_INDEX)) != 0) 
+			{
+				vulcan_ammo_to_add_with_cannon = obj->ctype.powerup_info.count;
+				if (vulcan_ammo_to_add_with_cannon < VULCAN_WEAPON_AMMO_AMOUNT) vulcan_ammo_to_add_with_cannon = VULCAN_WEAPON_AMMO_AMOUNT;
+				if ( (Game_mode & GM_MULTI) &&
+					 (!(Game_mode & GM_MULTI_COOP)) &&
+					 Netgame.LowVulcan &&
+					 vulcan_ammo_to_add_with_cannon > VULCAN_WEAPON_AMMO_AMOUNT/2) 
+				{
+					vulcan_ammo_to_add_with_cannon = VULCAN_WEAPON_AMMO_AMOUNT/2;
 				}
-			if (used || ((Game_mode & GM_MULTI) && ammo > 0)) {
-				if (used) {
-					if (ammo < VULCAN_WEAPON_AMMO_AMOUNT)
-						ammo = VULCAN_WEAPON_AMMO_AMOUNT;
-					if ( (Game_mode & GM_MULTI) && (!(Game_mode & GM_MULTI_COOP)) &&
-						 Netgame.LowVulcan && ammo > VULCAN_WEAPON_AMMO_AMOUNT/2)
-						ammo = VULCAN_WEAPON_AMMO_AMOUNT/2;
-				}
-				int ammo_used;
-				ammo_used = pick_up_ammo(CLASS_PRIMARY, VULCAN_INDEX, ammo);
-				obj->ctype.powerup_info.count -= ammo_used;
-				if (!used && ammo_used) {
-					powerup_basic(7, 14, 21, VULCAN_AMMO_SCORE, "%s!", TXT_VULCAN_AMMO);
-					special_used = 1;
-					id = POW_VULCAN_AMMO;		//set new id for making sound at end of this function
-					if (obj->ctype.powerup_info.count == 0)
-						used = 1;		//say used if all ammo taken
-				}
+				pick_up_ammo(CLASS_PRIMARY, VULCAN_INDEX, vulcan_ammo_to_add_with_cannon);
 			}
 
+			if (Netgame.CTF)
+			{
+				only_sound = used;
+				used = 0;
+			}
 //added/edited 8/3/98 by Victor Rachels to fix vulcan multi bug
 //check if multi, if so, pick up ammo w/o using, set ammo left. else, normal
 
@@ -425,9 +459,19 @@ int do_powerup(object *obj)
 			used = pick_up_primary(SPREADFIRE_INDEX);
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
+			if (Netgame.CTF)
+			{
+				only_sound = used;
+				used = 0;
+			}
 			break;
 		case	POW_PLASMA_WEAPON:
 			used = pick_up_primary(PLASMA_INDEX);
+			if (Netgame.CTF)
+			{
+				only_sound = used;
+				used = 0;
+			}
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
 			break;
@@ -435,6 +479,11 @@ int do_powerup(object *obj)
 			used = pick_up_primary(FUSION_INDEX);
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
+			if (Netgame.CTF)
+			{
+				only_sound = used;
+				used = 0;
+			}
 			break;
 
 		case	POW_PROXIMITY_WEAPON:
@@ -473,10 +522,6 @@ int do_powerup(object *obj)
 				#endif
 				powerup_basic(-10,-10,-10, CLOAK_SCORE, "%s!",TXT_CLOAKING_DEVICE);
 				used = 1;
-
-				if (Game_mode & GM_MULTI)
-					multi_send_ship_status();
-
 				break;
 			}
 		case	POW_INVULNERABILITY:
@@ -486,16 +531,8 @@ int do_powerup(object *obj)
 			} else {
 				Players[Player_num].invulnerable_time = GameTime64;
 				Players[Player_num].flags |= PLAYER_FLAGS_INVULNERABLE;
-				#ifdef NETWORK
-				if (Game_mode & GM_MULTI)
-					multi_send_invuln();
-				#endif
 				powerup_basic(7, 14, 21, INVULNERABILITY_SCORE, "%s!",TXT_INVULNERABILITY);
 				used = 1;
-
-				if (Game_mode & GM_MULTI)
-					multi_send_ship_status();
-
 				break;
 			}
 	#ifndef RELEASE
@@ -507,21 +544,25 @@ int do_powerup(object *obj)
 
 		default:
 			break;
-		}
+	}
+		
+
+
 
 //always say used, until physics problem (getting stuck on unused powerup)
 //is solved.  Note also the break statements above that are commented out
 //!!	used=1;
 
-	if ((used || special_used) && Powerup_info[id].hit_sound  > -1 ) {
+		if ((used || only_sound) && Powerup_info[obj->id].hit_sound > -1) {
 		#ifdef NETWORK
 		if (Game_mode & GM_MULTI) // Added by Rob, take this out if it turns out to be not good for net games!
-			multi_send_play_sound(Powerup_info[id].hit_sound, F1_0);
+			multi_send_play_sound(Powerup_info[obj->id].hit_sound, F1_0);
 		#endif
-		digi_play_sample( Powerup_info[id].hit_sound, F1_0 );
-	}
+		digi_play_sample( Powerup_info[obj->id].hit_sound, F1_0 );
+		}
 
 	return used;
+
 
 }
 

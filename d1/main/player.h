@@ -58,7 +58,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #define PLAYER_STRUCT_VERSION 	16		//increment this every time player struct changes
 
-// defines for teams
+// defines for teams and CTF (Flags/Keys)
 #define TEAM_BLUE   0
 #define TEAM_RED    1
 

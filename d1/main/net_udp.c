@@ -3025,6 +3025,7 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.PacketLossPrevention;					len++;
 		buf[len] = Netgame.NoFriendlyFire;						len++;
 		buf[len] = Netgame.RetroProtocol;						len++;
+		buf[len] = Netgame.CTF;			 							len++;
 		buf[len] = Netgame.RespawnConcs;						len++;
 		buf[len] = Netgame.AllowColoredLighting; 				len++; 
 		buf[len] = Netgame.FairColors;			 				len++; 		
@@ -3253,6 +3254,7 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 			Netgame.player_flags[i] = data[len];					len++;
 		}
 		Netgame.PacketsPerSec = GET_INTEL_SHORT(&(data[len]));				len += 2;
+		Netgame.CTF = data[len];							len++;
 		Netgame.ShortPackets = data[len];						len++;
 		Netgame.PacketLossPrevention = data[len];					len++;
 		Netgame.NoFriendlyFire = data[len];						len++;
@@ -3782,6 +3784,7 @@ static int opt_spawn_no_invul, opt_spawn_short_invul, opt_spawn_long_invul, opt_
 //static int opt_dark_smarts;
 static int opt_allowprefcolor; 
 static int opt_low_vulcan;
+static int opt_ctf;
 static int opt_homing_update_rate;
 static int opt_remote_hit_spark;
 static int opt_allow_custom_models_textures;
@@ -3819,9 +3822,9 @@ void net_udp_more_game_options ()
 	char PrimDupText[80],SecDupText[80],SecCapText[80]; 
 	char HomingUpdateRateText[80];
 #ifdef USE_TRACKER
-	newmenu_item m[44];
+	newmenu_item m[45];
 #else
-	newmenu_item m[43];
+	newmenu_item m[44];
 #endif
 
 	snprintf(packstring,sizeof(char)*4,"%d",Netgame.PacketsPerSec);
@@ -3902,11 +3905,11 @@ void net_udp_more_game_options ()
 	opt_allowprefcolor = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Allow Players To Choose Their Colors"; m[opt].value = Netgame.AllowPreferredColors; opt++;	
 
-
 	//opt_dark_smarts = opt;
 	//m[opt].type = NM_TYPE_CHECK; m[opt].text = "Dark Smart Blobs"; m[opt].value = Netgame.DarkSmartBlobs; opt++;	
 
-
+	opt_ctf = opt;
+	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Capture The Flag";  m[opt].value = Netgame.CTF; opt++;
 
 	m[opt].type = NM_TYPE_TEXT; m[opt].text = ""; opt++;
 
@@ -4013,6 +4016,7 @@ menu:
 	Netgame.AllowColoredLighting  = m[opt_allowcolor].value;
 	Netgame.FairColors  = m[opt_faircolors].value;
 	Netgame.BlackAndWhitePyros  = m[opt_blackwhite].value;
+	Netgame.CTF = m[opt_ctf].value;
 	//Netgame.DarkSmartBlobs = m[opt_dark_smarts].value;
 	Netgame.LowVulcan = m[opt_low_vulcan].value;
 	Netgame.AllowPreferredColors = m[opt_allowprefcolor].value;
@@ -4118,7 +4122,7 @@ int net_udp_more_options_handler( newmenu *menu, d_event *event, void *userdata 
 typedef struct param_opt
 {
 	int start_game, load_preset, save_preset, name, level, mode, mode_end, moreopts;
-	int closed, refuse, maxnet, maxobs, obsdelay, obsmin, anarchy, team_anarchy, robot_anarchy, coop, bounty;
+	int closed, refuse, maxnet, maxobs, obsdelay, obsmin, anarchy, team_anarchy, robot_anarchy, coop, bounty, ctf;
 } param_opt;
 
 int net_udp_start_game(void);
@@ -4522,6 +4526,7 @@ int net_udp_setup_game()
 		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = TXT_ANARCHY_W_ROBOTS; m[optnum].value=(Netgame.gamemode == NETGAME_ROBOT_ANARCHY); m[optnum].group=0; opt.robot_anarchy=optnum; optnum++;
 		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = TXT_COOPERATIVE; m[optnum].value=(Netgame.gamemode == NETGAME_COOPERATIVE); m[optnum].group=0; opt.coop=optnum; optnum++;
 		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Bounty"; m[optnum].value = ( Netgame.gamemode & NETGAME_BOUNTY ); m[optnum].group = 0; opt.mode_end=opt.bounty=optnum; optnum++;
+		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Capture the Flag"; m[optnum].value=(Netgame.CTF); m[optnum].group=0; opt.team_anarchy=optnum; optnum++;
 
 		m[optnum].type = NM_TYPE_TEXT; m[optnum].text = ""; optnum++;
 
@@ -4609,8 +4614,11 @@ net_udp_set_game_mode(int gamemode, ubyte join_as_obs)
 		Game_mode = GM_NETWORK | GM_MULTI_COOP | GM_MULTI_ROBOTS;
 	else if ( gamemode == NETGAME_TEAM_ANARCHY )
 	{
-		Game_mode = GM_NETWORK | GM_TEAM;
+		Game_mode = GM_NETWORK | GM_TEAM | !Netgame.CTF;
 		Show_kill_list = 3;
+
+		if (Netgame.CTF)
+			Show_kill_list = 1;
 	}
 	else if( gamemode == NETGAME_BOUNTY )
 		Game_mode = GM_NETWORK | GM_BOUNTY;

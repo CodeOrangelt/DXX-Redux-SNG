@@ -113,5 +113,10 @@ extern int may_create_powerup(int powerup);
  */
 extern int powerup_type_info_read_n(powerup_type_info *pti, int n, PHYSFS_file *fp);
 
+extern vms_vector blue_key_pos;
+extern int blue_key_seg;
+extern vms_vector red_key_pos;
+extern int red_key_seg;
+
 #endif /* _POWERUP_H */
 

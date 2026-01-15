@@ -678,51 +678,53 @@ extern char PowerupsInMine[],MaxPowerupsAllowed[];
 //	Drop cloak powerup if in a network game.
 void maybe_drop_net_powerup(int powerup_type)
 {
-	if ((Game_mode & GM_MULTI) && !(Game_mode & GM_MULTI_COOP) ) {
-		int	segnum, objnum;
-		vms_vector	new_pos;
+		if ((Game_mode & GM_MULTI) && !(Game_mode & GM_MULTI_COOP) ) {
+			int	segnum, objnum;
+			vms_vector	new_pos;
 
-		//if (Game_mode & GM_NETWORK)
-		//{
-		//	if(Netgame.PrimaryDupFactor < 2 && Netgame.SecondaryDupFactor < 2 ) {
-		//		if (PowerupsInMine[powerup_type]>=MaxPowerupsAllowed[powerup_type]) 
-		//			return;
-		//	}
-		//}
+			//if (Game_mode & GM_NETWORK)
+			//{
+			//	if(Netgame.PrimaryDupFactor < 2 && Netgame.SecondaryDupFactor < 2 ) {
+			//		if (PowerupsInMine[powerup_type]>=MaxPowerupsAllowed[powerup_type]) 
+			//			return;
+			//	}
+			//}
 
-		if (Control_center_destroyed || Endlevel_sequence)
-			return;
+			if (Control_center_destroyed || Endlevel_sequence)
+				return;
 
-		segnum = choose_drop_segment();
-//--old-- 		segnum = (d_rand() * Highest_segment_index) >> 15;
-//--old-- 		Assert((segnum >= 0) && (segnum <= Highest_segment_index));
-//--old-- 		if (segnum < 0)
-//--old-- 			segnum = -segnum;
-//--old-- 		while (segnum > Highest_segment_index)
-//--old-- 			segnum /= 2;
+			segnum = choose_drop_segment();
+	//--old-- 		segnum = (d_rand() * Highest_segment_index) >> 15;
+	//--old-- 		Assert((segnum >= 0) && (segnum <= Highest_segment_index));
+	//--old-- 		if (segnum < 0)
+	//--old-- 			segnum = -segnum;
+	//--old-- 		while (segnum > Highest_segment_index)
+	//--old-- 			segnum /= 2;
 
-		Net_create_loc = 0;
-		objnum = call_object_create_egg(&Objects[Players[Player_num].objnum], 1, OBJ_POWERUP, powerup_type);
+			Net_create_loc = 0;
+			objnum = call_object_create_egg(&Objects[Players[Player_num].objnum], 1, OBJ_POWERUP, powerup_type);
 
-		if (objnum < 0)
-			return;
+			if (objnum < 0)
+				return;
 
-#ifndef SHAREWARE
-		pick_random_point_in_seg(&new_pos, segnum);
-#else
-		compute_segment_center(&new_pos, &Segments[segnum]);
-#endif
+	#ifndef SHAREWARE
+			pick_random_point_in_seg(&new_pos, segnum);
+	#else
+			compute_segment_center(&new_pos, &Segments[segnum]);
+	#endif
 
-		multi_send_create_powerup(powerup_type, segnum, objnum, &new_pos);
+			multi_send_create_powerup(powerup_type, segnum, objnum, &new_pos);
 
-		Objects[objnum].pos = new_pos;
-		vm_vec_zero(&Objects[objnum].mtype.phys_info.velocity);
-		obj_relink(objnum, segnum);
-
-		object_create_explosion(segnum, &new_pos, i2f(5), VCLIP_POWERUP_DISAPPEARANCE );
-
+			Objects[objnum].pos = new_pos;
+			vm_vec_zero(&Objects[objnum].mtype.phys_info.velocity);
+			obj_relink(objnum, segnum);
+		
+			if (Netgame.CTF)
+				return;
+			else
+				object_create_explosion(segnum, &new_pos, i2f(5), VCLIP_POWERUP_DISAPPEARANCE);
+		}
 	}
-}
 
 //	------------------------------------------------------------------------------------------------------
 //	Return true if current segment contains some object.

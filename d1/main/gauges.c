@@ -830,10 +830,10 @@ void sb_show_score()
 		gr_printf(HUD_SCALE_X(SB_SCORE_LABEL_X),HUD_SCALE_Y(SB_SCORE_Y),"%s:", TXT_SCORE);
 
 	gr_set_curfont( GAME_FONT );
-	if ( (Game_mode & GM_MULTI) && !( (Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) ) )
-		sprintf(score_str, "%5d", Players[pnum].net_kills_total);
+	if ( (Game_mode & GM_MULTI) && !( (Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) || !Netgame.CTF) )
+		sprintf(score_str, "%5d", Players[Player_num].net_kills_total);
 	else
-		sprintf(score_str, "%5d", Players[pnum].score);
+		sprintf(score_str, "%5d", Players[Player_num].score);
 	gr_get_string_size(score_str, &w, &h, &aw );
 
 	x = HUD_SCALE_X(SB_SCORE_RIGHT)-w-FSPACX(1);
@@ -1395,7 +1395,7 @@ void add_points_to_score(int points)
 
 #ifndef SHAREWARE
 #ifdef NETWORK
-	if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS))
+	if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS || Netgame.CTF))
 		multi_send_score();
 #endif
 #endif
@@ -2263,6 +2263,9 @@ void hud_show_kill_list()
 
 	int players = n_players;
 
+	if (!Netgame.CTF & Show_kill_list == 3)
+		n_players = 2;
+
 	if (Show_kill_list == 3)
 		players = 2;
 
@@ -2414,6 +2417,8 @@ void hud_show_kill_list()
 		else if (Show_kill_list == 3) {
 			if (Netgame.PlayTimeAllowed || Netgame.KillGoal)
 				gr_printf(x1,y,"%3d(%d)",team_kills[i],Netgame.TeamKillGoalCount[i]);
+			else if (Netgame.CTF)
+				gr_printf(x1, y, "K:%3d", team_kills[i]);
 			else
 				gr_printf(x1,y,"%3d",team_kills[i]);
 
@@ -2426,7 +2431,9 @@ void hud_show_kill_list()
 
 			if (Netgame.PlayTimeAllowed || Netgame.KillGoal)
 				gr_printf(x1,y,"%3d(%d)",Players[player_num].net_kills_total,Players[player_num].KillGoalCount);
-			else
+			else if (Netgame.CTF)
+				gr_printf(x1, y, "%d", Players[player_num].score);
+			else // this is the default normal multi game mode score count.
 				gr_printf(x1,y,"%3d",Players[player_num].net_kills_total);
 
 		}
@@ -3928,7 +3935,7 @@ void show_HUD_names()
 		show_name_through_walls = (is_observer() || (is_friend && show_friend_name));
 		show_shields = (is_observer() && PlayerCfg.ObsShowShieldText[get_observer_game_mode()]);
 		show_typing = is_friend || !(Players[pnum].flags & PLAYER_FLAGS_CLOAKED);
-		show_indi = ((/*(Game_mode & ( GM_CAPTURE | GM_HOARD ) && Players[pnum].flags & PLAYER_FLAGS_FLAG) || */(Game_mode & GM_BOUNTY &&  pnum == Bounty_target)) && (is_friend || !(Players[pnum].flags & PLAYER_FLAGS_CLOAKED)));
+		show_indi = ((Game_mode & Netgame.CTF && (Players[Player_num].flags & PLAYER_FLAGS_BLUE_KEY | Players[Player_num].flags & PLAYER_FLAGS_RED_KEY) || (Game_mode & GM_BOUNTY &&  pnum == Bounty_target)) && (is_friend || !(Players[pnum].flags & PLAYER_FLAGS_CLOAKED)));
 
 		if (Newdemo_state == ND_STATE_PLAYBACK) {
 			//if this is a demo, the objnum in the player struct is wrong, so we search the object list for the objnum
@@ -3984,6 +3991,13 @@ void show_HUD_names()
 						else
 							strncpy( s, "Typing", 6 );
 					}
+					//if carrying CTF flag add flag - code
+					if (Netgame.CTF && get_team(pnum) == 0 && (Players[pnum].flags & PLAYER_FLAGS_RED_KEY))
+						strncat(s, "\n\x01\xC0[FLAG]", 9);
+						//snprintf(s, sizeof(s), "\x01\x56%s\n\x01\xC0[FLAG]\n", Players[pnum].callsign);
+					else if (Netgame.CTF && get_team(pnum) == 1 && (Players[pnum].flags & PLAYER_FLAGS_BLUE_KEY))
+						 //snprintf(s, sizeof(s), "\x01\xC0%s\n\x01\x22[FLAG]\n", Players[pnum].callsign);
+						strncat(s, "\n\x01\xD7[FLAG]", 9);
 					if (s[0])
 					{
 						gr_get_string_size(s, &w, &h, &aw);
@@ -4179,6 +4193,10 @@ void observer_show_bomb_highlights()
 
 void draw_hud()
 {
+
+	if(Netgame.CTF)
+		hud_show_keys();
+
 	int pnum = get_pnum_for_hud();
 	if (Newdemo_state == ND_STATE_RECORDING)
 		if (Players[pnum].homing_object_dist >= 0)
@@ -4257,6 +4275,15 @@ void draw_hud()
 			gr_printf( x, y, "%s %2d%%", TXT_CRUISE, f2i(Cruise_speed) );
 		}
 	}
+	
+	int	xkeys = FSPACX(1);
+	int	ykeys = grd_curcanv->cv_bitmap.bm_h;
+
+	if (Netgame.CTF && (Players[Player_num].flags & PLAYER_FLAGS_RED_KEY))
+		gr_printf(xkeys * 35, ykeys/13, "You have the \x01\xC0\Red\x01\x99\ flag");
+
+	if (Netgame.CTF && (Players[Player_num].flags & PLAYER_FLAGS_BLUE_KEY))
+		gr_printf(xkeys * 15, ykeys/13, "You have the \x01\xD7\Blue\x01\x99\ flag");
 
 	//	Show score so long as not in rearview
 	if ( !Rear_view && PlayerCfg.CurrentCockpitMode!=CM_REAR_VIEW && PlayerCfg.CurrentCockpitMode!=CM_STATUS_BAR) {
