@@ -218,7 +218,7 @@ int do_powerup(object *obj)
 
 	int used=0;
 	int vulcan_ammo_to_add_with_cannon;
-	int only_sound;
+	int only_sound=0;
 
 
 	if ((Player_is_dead) || (ConsoleObject->type == OBJ_GHOST) || (Players[Player_num].shields < 0))

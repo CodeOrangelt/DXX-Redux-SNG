@@ -33,6 +33,8 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #include <math.h>
 
+extern int Turkey_target;
+
 //Global variables for physics system
 
 #define ROLL_RATE	0x2000
@@ -516,6 +518,13 @@ void do_physics_sim(object *obj)
 			if (obj->mtype.phys_info.flags & PF_USES_THRUST) {
 
 				vm_vec_copy_scale(&accel,&obj->mtype.phys_info.thrust,fixdiv(f1_0,obj->mtype.phys_info.mass));
+				
+				// TURKEY SPEED BOOST - Increase acceleration by 1.3x
+				if ((Game_mode & GM_TURKEY_SHOOT) && obj->type == OBJ_PLAYER && (obj->id == Turkey_target))
+				{
+					vm_vec_scale(&accel, fixmul(F1_0, F1_0 + F1_0/3));
+				}
+				
 				have_accel = (accel.x || accel.y || accel.z);
 
 				while (count--) {

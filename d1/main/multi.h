@@ -114,6 +114,9 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_KILLGOALS            , 11)	\
 	VALUE(MULTI_POWCAP_UPDATE        , MAX_POWERUP_TYPES+1)	\
 	VALUE(MULTI_DO_BOUNTY            , 2)	\
+	VALUE(MULTI_DO_TURKEY            , 2)	\
+	VALUE(MULTI_TURKEY_TARGET        , 10)	\
+	VALUE(MULTI_TURKEY_TIME_SYNC     , 10)	\
 	VALUE(MULTI_TYPING_STATE         , 3)	\
 	VALUE(MULTI_GMODE_UPDATE         , 3)	\
 	VALUE(MULTI_KILL_HOST            , 7)	\
@@ -141,6 +144,7 @@ for_each_multiplayer_command(enum {, define_multiplayer_command, });
 #define NETGAME_COOPERATIVE     3
 #define NETGAME_BOUNTY		7
 #define NETGAME_CTF		8
+#define NETGAME_TURKEY_SHOOT	9
 
 #define NETSTAT_MENU                0
 #define NETSTAT_PLAYING             1
@@ -307,6 +311,32 @@ void multi_send_ship_status_for_frame();
 bool is_observing_player();
 bool object_is_observer(object* obj);
 int get_observer_game_mode();
+
+// SNG: Spawn weapon powerup removal
+void multi_disable_spawn_weapon_powerups(void);
+
+// Turkey Shoot functions
+void multi_send_turkey_target(void);
+void multi_do_turkey_target(const ubyte *buf);
+void multi_send_turkey_time_sync(void);
+void multi_do_turkey_time_sync(const ubyte *buf);
+void multi_turkey_init_game(void);
+void multi_turkey_set_target(int pnum);
+void multi_turkey_update_teams(void);
+void multi_turkey_announce_target(void);
+void multi_turkey_handle_kill(int killer_pnum, int killed_pnum);
+void multi_turkey_handle_cloak(void);
+fix64 multi_turkey_get_current_time(int pnum);
+void multi_new_turkey_target(int pnum);
+
+// Turkey Shoot variables
+extern int Turkey_target;
+extern fix64 Turkey_game_start_time;
+extern fix64 Turkey_assign_time;
+extern fix64 Turkey_time_as_turkey[MAX_PLAYERS];
+extern int Turkey_hunter_kills[MAX_PLAYERS];
+extern fix64 Turkey_start_time;
+extern int Turkey_last_target;
 
 // Exported variables
 
@@ -488,6 +518,7 @@ typedef struct netgame_info
 	short						team_kills[2];
 	short						killed[MAX_PLAYERS];
 	short						player_kills[MAX_PLAYERS];
+	int						ScoreGoal;
 	int						KillGoal;
 	fix						PlayTimeAllowed;
 	fix						level_time;
@@ -503,9 +534,35 @@ typedef struct netgame_info
 	ubyte						Tracker;
 #endif
 	ubyte						RetroProtocol;
-	ubyte   					CTF;
 	ubyte						RespawnConcs; 
 	ubyte						AllowColoredLighting;
+	ubyte						Deathmatch;
+	ubyte						PurpleFlash;
+	ubyte   					CTF;
+	ubyte						SmallerSpawn;
+	ubyte						WeaponStun;
+	ubyte						QuietFan;
+	ubyte						FusionShake;
+	ubyte						VulcanShake;
+	ubyte						StaticPowerups;
+	ubyte						StaticFusion;
+	ubyte						StaticPlasma;
+	ubyte						FusionSpawn; 
+	ubyte						VulcanSpawn;
+	ubyte						LasersSpawn;
+	ubyte						PlasmaSpawn; 
+	ubyte						SpreadSpawn; 
+	ubyte						SmartsSpawn; 
+	ubyte						HomersSpawn; 
+	ubyte						BombsSpawn; 
+	ubyte						MegasSpawn; 
+	ubyte						StaticVulcan;
+	ubyte						StaticSpread;
+	ubyte						StaticLasers;
+	ubyte						StaticMissiles;
+	ubyte						StaticBombs;
+	ubyte						FastDoor;
+	ubyte						PointCapture;
 	ubyte						FairColors;	
 	ubyte						BlackAndWhitePyros;
 	ubyte						PrimaryDupFactor;
@@ -521,6 +578,7 @@ typedef struct netgame_info
 	ubyte						ReducedFlash;
 	ubyte						GaussAmmoStyle;
 	ubyte						team_color[2];
+	ubyte						NewSpawnAlgorithm;
 } __pack__ netgame_info;
 
 extern int Host_is_obs; // Reminder for host only that they are an observer.  Do not set for other players or observers.

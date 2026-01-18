@@ -143,6 +143,8 @@ extern int listbox_get_nitems(listbox *lb);
 extern int listbox_get_citem(listbox *lb);
 struct window *listbox_get_window(listbox *lb);
 extern void listbox_delete_item(listbox *lb, int item);
+extern void listbox_set_items(listbox *lb, int nitems, char **items);
+extern void listbox_set_title(listbox *lb, char *title);
 
 extern listbox *newmenu_listbox(char *title, int nitems, char *items[], int allow_abort_flag, int (*listbox_callback)(listbox *lb, d_event *event, void *userdata), void *userdata);
 extern listbox *newmenu_listbox1(char *title, int nitems, char *items[], int allow_abort_flag, int default_item, int (*listbox_callback)(listbox *lb, d_event *event, void *userdata), void *userdata);

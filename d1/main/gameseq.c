@@ -411,6 +411,85 @@ void init_player_stats_new_ship(ubyte pnum)
 	Players[pnum].invulnerable_time = 0;
 	Players[pnum].homing_object_dist = -F1_0;
 
+	// SNG toggle: Deathmatch mode - high shields, 1 life
+	if (Netgame.Deathmatch && pnum < MAX_PLAYERS)
+	{
+		Players[pnum].shields = i2f(2000);
+		Players[pnum].lives = 1;
+	}
+
+	// SNG toggle: PointCapture mode - extra lives
+	if (Netgame.PointCapture && pnum < MAX_PLAYERS)
+		Players[pnum].lives = 100;
+
+	// SNG spawn weapon toggles
+	if (Game_mode & GM_MULTI)
+	{
+		if (Netgame.FusionSpawn)
+		{
+			Players[pnum].primary_weapon = FUSION_INDEX;
+			Players[pnum].primary_weapon_flags |= HAS_FUSION_FLAG;
+		}
+
+		if (Netgame.VulcanSpawn)
+		{
+			Players[pnum].primary_weapon_flags |= HAS_VULCAN_FLAG;
+			Players[pnum].primary_ammo[VULCAN_INDEX] = VULCAN_AMMO_MAX / 4;
+			Players[pnum].primary_weapon = VULCAN_INDEX;
+		}
+
+		if (Netgame.PlasmaSpawn)
+		{
+			Players[pnum].primary_weapon = PLASMA_INDEX;
+			Players[pnum].primary_weapon_flags |= HAS_PLASMA_FLAG;
+		}
+
+		if (Netgame.LasersSpawn)
+		{
+			Players[pnum].primary_weapon = LASER_INDEX;
+			Players[pnum].primary_weapon_flags |= HAS_LASER_FLAG;
+
+			if (Netgame.LasersSpawn >= 1 && Netgame.LasersSpawn <= 4)
+			{
+				Players[pnum].laser_level = Netgame.LasersSpawn - 1;
+				Players[pnum].flags |= PLAYER_FLAGS_QUAD_LASERS;
+			}
+		}
+
+		if (Netgame.SpreadSpawn)
+		{
+			Players[pnum].primary_weapon = SPREADFIRE_INDEX;
+			Players[pnum].primary_weapon_flags |= HAS_SPREADFIRE_FLAG;
+		}
+
+		if (Netgame.HomersSpawn)
+		{
+			Players[pnum].secondary_weapon = HOMING_INDEX;
+			Players[pnum].secondary_weapon_flags |= HAS_HOMING_FLAG;
+			Players[pnum].secondary_ammo[HOMING_INDEX] = 5;
+		}
+
+		if (Netgame.SmartsSpawn)
+		{
+			Players[pnum].secondary_weapon = SMART_INDEX;
+			Players[pnum].secondary_weapon_flags |= HAS_SMART_FLAG;
+			Players[pnum].secondary_ammo[SMART_INDEX] = 1;
+		}
+
+		if (Netgame.BombsSpawn)
+		{
+			Players[pnum].secondary_weapon_flags |= HAS_PROXIMITY_FLAG;
+			Players[pnum].secondary_ammo[PROXIMITY_INDEX] = 4;
+		}
+
+		if (Netgame.MegasSpawn)
+		{
+			Players[pnum].secondary_weapon = MEGA_INDEX;
+			Players[pnum].secondary_weapon_flags |= HAS_MEGA_FLAG;
+			Players[pnum].secondary_ammo[MEGA_INDEX] = 1;
+		}
+	}
+
 	RespawningConcussions[pnum] = 0; 
 	VulcanAmmoBoxesOnBoard[pnum] = 0;
 	VulcanBoxAmmo[pnum] = 0;
@@ -501,7 +580,11 @@ void set_sound_sources()
 						vms_vector pnt;
 
 						compute_center_point_on_side(&pnt,seg,sidenum);
-						digi_link_sound_to_pos(sn,segnum,sidenum,&pnt,1, F1_0/2);
+						// SNG toggle: QuietFan - reduce ambient fan/effect sounds
+						if(Netgame.QuietFan)
+							digi_link_sound_to_pos(sn,segnum,sidenum,&pnt,1, F1_0/4);
+						else
+							digi_link_sound_to_pos(sn,segnum,sidenum,&pnt,1, F1_0/2);
 
 					}
 		}
@@ -1053,7 +1136,8 @@ void DoPlayerDead()
 #endif
 	{				//Note link to above else!
 		Players[Player_num].lives--;
-		if (Players[Player_num].lives == 0)
+		// Don't end game in PointCapture mode (100 lives) or Deathmatch mode (elimination)
+		if (Players[Player_num].lives == 0 && !Netgame.PointCapture && !Netgame.Deathmatch)
 		{
 			DoGameOver();
 			return;
@@ -1157,6 +1241,11 @@ void StartNewLevelSub(int level_num, int page_in_textures, int secret_flag)
 	gameseq_init_network_players(); // Initialize the Players array for
 											  // this level
 
+	// SNG: Disable powerups that players spawn with
+#ifdef NETWORK
+	if (Game_mode & GM_MULTI)
+		multi_disable_spawn_weapon_powerups();
+#endif
 
 		if (Netgame.CTF)
 	{
@@ -1315,6 +1404,114 @@ void StartNewLevel(int level_num)
 
 }
 
+struct spawn_point_candidate {
+	int start_num;
+	fix closest_distance;
+	fix cumulative_weight;
+};
+
+int spawn_point_sort_func(const void* element1, const void* element2)
+{
+	const struct spawn_point_candidate *candidate1 = (const struct spawn_point_candidate *)element1;
+	const struct spawn_point_candidate *candidate2 = (const struct spawn_point_candidate *)element2;
+	// We want to sort in reverse order (biggest closest distance first)
+	if (candidate1->closest_distance < candidate2->closest_distance) return 1;
+	if (candidate1->closest_distance > candidate2->closest_distance) return -1;
+	return 0;
+}
+
+int choose_multi_spawn_point()
+{
+	struct spawn_point_candidate candidates[MAX_PLAYERS];
+	// Calculate closest distance for each start point
+	for (int start_num = 0; start_num < NumNetPlayerPositions; start_num++) {
+		candidates[start_num].start_num = start_num;
+		candidates[start_num].closest_distance = -1;
+		for (int i = 0; i < N_players; i++) {
+			if ((i != Player_num) && (Objects[Players[i].objnum].type == OBJ_PLAYER)) {
+				fix distance;
+				// If the start point is visible to this player, use the straight line distance.
+				// Also divide it by 2; we want to discourage the selection of spawns within
+				// line-of-sight of other players.
+				fvi_query fq;
+				fq.p0 = &Objects[Players[i].objnum].pos;
+				fq.p1 = &Player_init[start_num].pos;
+				fq.startseg = Objects[Players[i].objnum].segnum;
+				fq.rad = 0x10;
+				fq.thisobjnum = -1;
+				fq.ignore_obj_list = NULL;
+				fq.flags = 0;
+				if (find_vector_intersection(&fq, NULL) == HIT_NONE) {
+					distance = vm_vec_dist_quick(&Objects[Players[i].objnum].pos, &Player_init[start_num].pos) / 2;
+				}
+				else {
+					// Path-find from this player to the start point, and use that distance.
+					distance = find_connected_distance(&Objects[Players[i].objnum].pos, Objects[Players[i].objnum].segnum,
+						&Player_init[start_num].pos, Player_init[start_num].segnum, -1, WID_FLY_FLAG);
+					
+					// find_connected_distance returns -1 if it can't find a path to that location.
+					// We used a max_depth of -1 to reduce the chances of that happening, but just
+					// in case it still does, treat invalid distances as 1000 (since that's what's
+					// written into the FCD cache anyway - we just don't want to call the function
+					// twice).
+					if (distance < 0) distance = i2f(1000);
+				}
+
+				if (distance < candidates[start_num].closest_distance ||
+					candidates[start_num].closest_distance < 0)
+					candidates[start_num].closest_distance = distance;
+			}
+		}
+		// This usually means there are no other players in the map - just weight them equally
+		if (candidates[start_num].closest_distance < 0)
+			candidates[start_num].closest_distance = i2f(1000);
+	}
+
+	// Sort them in order of descending closest distance...
+	qsort(candidates, NumNetPlayerPositions, sizeof(struct spawn_point_candidate), spawn_point_sort_func);
+	// Figure out weights for the best half of the candidates
+	// (uses closest distance but scaled so they sum to 1, for RNG purposes)
+	int num_candidates = NumNetPlayerPositions / 2;
+	fix total_cumulative_weight = 0;
+	fix weight_adjustment = 0;
+	if (num_candidates > 1)
+	{
+		// This is a little fudge to ensure that the most likely candidate is no more than twice as
+        // likely to be chosen as the least likely candidate.
+		fix min_closest_distance = candidates[num_candidates - 1].closest_distance;
+		fix max_closest_distance = candidates[0].closest_distance;
+		if (max_closest_distance > 2 * min_closest_distance) {
+			weight_adjustment = max_closest_distance - 2 * min_closest_distance;
+		}
+	}
+	for (int start_num = 0; start_num < num_candidates; start_num++) {
+		total_cumulative_weight += candidates[start_num].closest_distance - weight_adjustment;
+		candidates[start_num].cumulative_weight = total_cumulative_weight;
+	}
+	for (int start_num = 0; start_num < num_candidates; start_num++) {
+		candidates[start_num].cumulative_weight = fixdiv(candidates[start_num].cumulative_weight, total_cumulative_weight);
+		con_printf(CON_VERBOSE, "Start %d: nearest player %.1f, cumulative weight %.3f\n", candidates[start_num].start_num,
+			f2fl(candidates[start_num].closest_distance), f2fl(candidates[start_num].cumulative_weight));
+	}
+
+	// Now do a weighted random selection from those candidates
+	timer_update();
+	d_srand((fix)timer_query());
+	// F1_0 is 65536; d_rand is 0-32767, so we need to double it
+	int result = d_rand() * 2;
+	// Figure out where we landed...
+	for (int start_num = 0; start_num < num_candidates; start_num++) {
+		if (result <= candidates[start_num].cumulative_weight) {
+			con_printf(CON_VERBOSE, "Chose start %d\n", candidates[start_num].start_num);
+			return candidates[start_num].start_num;
+		}
+	}
+
+	// We shouldn't get here... but just return 0 (first start) if we do
+	Assert(0);
+	return 0;
+}
+
 int previewed_spawn_point = 0; 
 
 //initialize the player object position & orientation (at start of game, or new ship)
@@ -1332,26 +1529,34 @@ void InitPlayerPosition(int random)
 #endif
 	else if (random == 1)
 	{
-		int i, trys=0;
-		fix closest_dist = 0x7ffffff, dist;
+		if (Netgame.NewSpawnAlgorithm) {
+			NewPlayer = choose_multi_spawn_point();
+		}
+		else {
+			int i, trys=0;
+			fix closest_dist = 0x7ffffff, dist;
 
-		timer_update();
-		d_srand((fix)timer_query());
-		do {
-			trys++;
-			NewPlayer = d_rand() % NumNetPlayerPositions;
+			timer_update();
+			d_srand((fix)timer_query());
+			do {
+				trys++;
+				NewPlayer = d_rand() % NumNetPlayerPositions;
 
-			closest_dist = 0x7fffffff;
+				closest_dist = 0x7fffffff;
 
-			for (i=0; i<N_players; i++ )	{
-				if ( (i!=Player_num) && (Objects[Players[i].objnum].type == OBJ_PLAYER) )	{
-					dist = find_connected_distance(&Objects[Players[i].objnum].pos, Objects[Players[i].objnum].segnum, &Player_init[NewPlayer].pos, Player_init[NewPlayer].segnum, 15, WID_FLY_FLAG ); // Used to be 5, search up to 15 segments
-					if ( (dist < closest_dist) && (dist >= 0) )	{
-						closest_dist = dist;
+				for (i=0; i<N_players; i++ )	{
+					if ( (i!=Player_num) && (Objects[Players[i].objnum].type == OBJ_PLAYER) )	{
+						// Use Netgame.SmallerSpawn to determine search distance
+						int search_segments = Netgame.SmallerSpawn ? 5 : 15;
+						
+						dist = find_connected_distance(&Objects[Players[i].objnum].pos, Objects[Players[i].objnum].segnum, &Player_init[NewPlayer].pos, Player_init[NewPlayer].segnum, search_segments, WID_FLY_FLAG );
+						if ( (dist < closest_dist) && (dist >= 0) )	{
+							closest_dist = dist;
+						}
 					}
 				}
-			}
-		} while ( (closest_dist<i2f(15*20)) && (trys<MAX_PLAYERS*2) );
+			} while ( (closest_dist<i2f(15*20)) && (trys<MAX_PLAYERS*2) );
+		}
 	}
 	else
 	{

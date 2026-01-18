@@ -311,8 +311,13 @@ void select_weapon(int weapon_num, int secondary_flag, int print_message, int wa
 		weapon_name = SECONDARY_WEAPON_NAMES(weapon_num);
 	}
 
-	if (print_message)
-		HUD_init_message(HM_DEFAULT, "%s %s", weapon_name, TXT_SELECTED);
+	// Weapon cycle color modifications - each weapon has a distinctive color
+	if (print_message) {
+		static int primary_colors[] = { 0x99/*laser*/, 0xB9/*vulcan*/, 0x53/*spreadfire*/, 0x98/*plasma*/, 0x63/*fusion*/};
+		static int secondary_colors[] = { 0x70/*concussion*/, 0x52/*homing*/, 0xc0/*proximity*/, 0x99/*smart*/, 0xc4/*mega*/};
+		int color = secondary_flag ? secondary_colors[weapon_num] : primary_colors[weapon_num];
+		HUD_init_message(HM_DEFAULT, "\x01%c%s %s", color, weapon_name, TXT_SELECTED);
+	}
 
 	if (Game_mode & GM_MULTI)
 		multi_send_ship_status();

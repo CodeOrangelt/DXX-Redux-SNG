@@ -38,6 +38,8 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "physics.h"
 #include "slew.h"
 #include "wall.h"
+
+extern int Turkey_target;
 #include "vclip.h"
 #include "polyobj.h"
 #include "fireball.h"
@@ -1515,7 +1517,13 @@ void collide_player_and_weapon( object * player, object * weapon, vms_vector *co
 
 	maybe_kill_weapon(weapon,player);
 
-	bump_two_objects(player, weapon, 0);	//no damage from bump
+	// SNG toggle: WeaponStun - when enabled, no weapon bump/stun effect
+	if(Netgame.WeaponStun) {
+		// NO BUMP
+	}
+	else {
+		bump_two_objects(player, weapon, 0);	//no damage from bump
+	}
 
 	if ( !Weapon_info[weapon->id].damage_radius ) {
 		if ( weapon->ctype.laser_info.parent_num > -1 )
@@ -1678,6 +1686,11 @@ extern int Network_got_powerup; // HACK!!!
 
 void collide_player_and_powerup( object * player, object * powerup, vms_vector *collision_point ) {
 	if (object_is_observer(player)) {
+		return;
+	}
+
+	// Turkeys cannot pick up powerups
+	if ((Game_mode & GM_TURKEY_SHOOT) && (player->id == Turkey_target)) {
 		return;
 	}
 

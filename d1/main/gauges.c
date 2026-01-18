@@ -50,6 +50,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "rle.h"
 #include "byteswap.h"
 #include "cntrlcen.h"
+#include "fuelcen.h"
 #ifdef OGL
 #include "ogl_init.h"
 #endif
@@ -343,6 +344,12 @@ int	Color_0_31_0 = -1;
 extern fix ThisLevelTime;
 extern fix Cruise_speed;
 extern int linedotscale;
+
+// Turkey Shoot mode variables
+extern fix64 Turkey_time_as_turkey[MAX_PLAYERS];
+extern int Turkey_hunter_kills[MAX_PLAYERS];
+extern int Turkey_target;
+extern fix64 Turkey_start_time;
 
 int Observer_message_y_start = 0;
 
@@ -729,7 +736,7 @@ void hud_show_score()
 
 	gr_set_curfont( GAME_FONT );
 
-	if ( (Game_mode & GM_MULTI) && !((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS)) ) {
+	if ( (Game_mode & GM_MULTI) && !((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) || Netgame.PointCapture) ) {
 		sprintf(score_str, "%s: %5d", TXT_KILLS, Players[pnum].net_kills_total);
 	} else {
 		sprintf(score_str, "%s: %5d", TXT_SCORE, Players[pnum].score);
@@ -824,7 +831,7 @@ void sb_show_score()
 	gr_set_curfont( GAME_FONT );
 	gr_set_fontcolor(BM_XRGB(0,20,0),-1 );
 
-	if ( (Game_mode & GM_MULTI) && !((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS)) )
+	if ( (Game_mode & GM_MULTI) && !((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) || Netgame.PointCapture) )
 		gr_printf(HUD_SCALE_X(SB_SCORE_LABEL_X),HUD_SCALE_Y(SB_SCORE_Y),"%s:", TXT_KILLS);
 	else
 		gr_printf(HUD_SCALE_X(SB_SCORE_LABEL_X),HUD_SCALE_Y(SB_SCORE_Y),"%s:", TXT_SCORE);
@@ -1246,6 +1253,54 @@ void hud_show_cloak_invuln(void)
 	}
 }
 
+void hud_show_turkey_stats(void)
+{
+	if (!(Game_mode & GM_TURKEY_SHOOT))
+		return;
+
+	char turkey_time_str[40];
+	int w, h, aw;
+	fix64 player_turkey_time;
+	int turkey_mins, turkey_secs;
+
+	gr_set_curfont(GAME_FONT);
+
+	// Turkey team (team 0) = RED - use orange color for turkey times
+	gr_set_fontcolor(BM_XRGB(20, 10, 0), -1);
+	gr_string(FSPACX(2), LINE_SPACING + FSPACY(1), "Turkey Times:");
+
+	int left_y = LINE_SPACING * 2 + FSPACY(1);
+
+	// Display all players' turkey times
+	for (int i = 0; i < N_players; i++)
+	{
+		if (!Players[i].connected)
+			continue;
+
+		// Calculate this player's turkey time
+		player_turkey_time = Turkey_time_as_turkey[i];
+		if (i == Turkey_target)
+		{
+			player_turkey_time += GameTime64 - Turkey_start_time;
+		}
+
+		// Convert to minutes and seconds
+		turkey_secs = f2i(player_turkey_time);
+		turkey_mins = turkey_secs / 60;
+		turkey_secs = turkey_secs % 60;
+
+		// Display turkey time - ORANGE colors for turkey times
+		if (i == Turkey_target)
+			gr_set_fontcolor(BM_XRGB(31, 16, 0), -1); // Bright orange for current turkey
+		else
+			gr_set_fontcolor(BM_XRGB(20, 10, 0), -1); // Darker orange for others
+
+		sprintf(turkey_time_str, "%s: %d:%02d", Players[i].callsign, turkey_mins, turkey_secs);
+		gr_string(FSPACX(4), left_y, turkey_time_str);
+		left_y += LINE_SPACING;
+	}
+}
+
 void hud_show_shield(void)
 {
 	int pnum = get_pnum_for_hud();
@@ -1381,7 +1436,7 @@ void add_points_to_score(int points)
 	if (points == 0 || cheats.enabled)
 		return;
 
-	if ((Game_mode & GM_MULTI) && !( (Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) ))
+	if ((Game_mode & GM_MULTI) && !( (Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) ) && !Netgame.PointCapture)
 		return;
 
 	prev_score=Players[Player_num].score;
@@ -1395,7 +1450,7 @@ void add_points_to_score(int points)
 
 #ifndef SHAREWARE
 #ifdef NETWORK
-	if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS || Netgame.CTF))
+	if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS || Netgame.PointCapture || Netgame.CTF))
 		multi_send_score();
 #endif
 #endif
@@ -2245,6 +2300,10 @@ void fontcolor_good() {
 	gr_set_fontcolor(BM_XRGB(0, 18, 0), -1);
 }
 
+void fontcolor_ehh() {
+	gr_set_fontcolor(BM_XRGB(255, 165, 0), -1);  // Orange "medium" warning color
+}
+
 int n_players,player_list[MAX_PLAYERS];
 
 #ifdef NETWORK
@@ -2387,6 +2446,8 @@ void hud_show_kill_list()
 			strcpy(name, Netgame.team_name[i]);
 		else if (Game_mode & GM_BOUNTY && player_num == Bounty_target && GameTime64&0x10000)
 			strcpy(name,"[TARGET]");
+		else if ((Game_mode & GM_TURKEY_SHOOT) && player_num == Turkey_target)
+			sprintf(name, "[TURKEY] %s", Players[player_num].callsign);
 		else
 			strcpy(name,Players[player_num].callsign);	// Note link to above if!!
 		gr_get_string_size(name,&sw,&sh,&aw);
@@ -2433,6 +2494,8 @@ void hud_show_kill_list()
 				gr_printf(x1,y,"%3d(%d)",Players[player_num].net_kills_total,Players[player_num].KillGoalCount);
 			else if (Netgame.CTF)
 				gr_printf(x1, y, "%d", Players[player_num].score);
+			else if (Netgame.PointCapture)
+				gr_printf(x1,y,"K:%3d",Players[player_num].net_kills_total);
 			else // this is the default normal multi game mode score count.
 				gr_printf(x1,y,"%3d",Players[player_num].net_kills_total);
 
@@ -2457,7 +2520,9 @@ void hud_show_kill_list()
 			if(lag != -1) {
 				if(lag > 100) {
 					fontcolor_bad();
-				} else {
+				} else if(lag > 70) {
+					fontcolor_ehh();
+				} else if(lag > 1) {
 					fontcolor_good();
 				}
 
@@ -3998,6 +4063,8 @@ void show_HUD_names()
 					else if (Netgame.CTF && get_team(pnum) == 1 && (Players[pnum].flags & PLAYER_FLAGS_BLUE_KEY))
 						 //snprintf(s, sizeof(s), "\x01\xC0%s\n\x01\x22[FLAG]\n", Players[pnum].callsign);
 						strncat(s, "\n\x01\xD7[FLAG]", 9);
+					else if ((Game_mode & GM_TURKEY_SHOOT) && pnum == Turkey_target)
+						strncat(s, "\n\x01\xC0[TURKEY]", 11);
 					if (s[0])
 					{
 						gr_get_string_size(s, &w, &h, &aw);
@@ -4247,6 +4314,23 @@ void draw_hud()
 	if (PlayerCfg.HudMode==3) // no hud, "immersion mode"
 		return;
 
+	// Turkey Shoot HUD
+	if (Game_mode & GM_TURKEY_SHOOT)
+	{
+		hud_show_turkey_stats();
+		gr_set_curfont(GAME_FONT);
+		if (Player_num == Turkey_target)
+		{
+			gr_set_fontcolor(BM_XRGB(31, 0, 0), -1); // Red text
+			gr_printf(0x8000, grd_curcanv->cv_bitmap.bm_h - LINE_SPACING * 3, "YOU ARE THE TURKEY!");
+		}
+		else if (Turkey_target >= 0 && Turkey_target < N_players)
+		{
+			gr_set_fontcolor(BM_XRGB(0, 31, 0), -1); // Green text
+			gr_printf(0x8000, grd_curcanv->cv_bitmap.bm_h - LINE_SPACING * 3, "Hunt the turkey: %s", Players[Turkey_target].callsign);
+		}
+	}
+
 	// Cruise speed
 	if ( Player_num > -1 && Viewer->type==OBJ_PLAYER && Viewer->id==Player_num && PlayerCfg.CurrentCockpitMode != CM_REAR_VIEW)	{
 		int	x = FSPACX(1);
@@ -4284,6 +4368,10 @@ void draw_hud()
 
 	if (Netgame.CTF && (Players[Player_num].flags & PLAYER_FLAGS_BLUE_KEY))
 		gr_printf(xkeys * 15, ykeys/13, "You have the \x01\xD7\Blue\x01\x99\ flag");
+
+	// Only show CTF score display in actual CTF mode, not other team modes
+	if (Netgame.CTF && (Game_mode & GM_TEAM))
+		display_score_ctf();
 
 	//	Show score so long as not in rearview
 	if ( !Rear_view && PlayerCfg.CurrentCockpitMode!=CM_REAR_VIEW && PlayerCfg.CurrentCockpitMode!=CM_STATUS_BAR) {

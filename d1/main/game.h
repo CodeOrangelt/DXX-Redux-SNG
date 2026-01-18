@@ -25,8 +25,9 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "window.h"
 #include "vecmat.h"
 
+#define DEFAULT_FPS 200
 #ifdef NDEBUG
-#define MAXIMUM_FPS 200
+#define MAXIMUM_FPS 400
 #else
 #define MAXIMUM_FPS 1000
 #endif
@@ -70,6 +71,7 @@ extern int ft_preference;
 #define GM_NORMAL       0       // You are in normal play mode, no multiplayer stuff
 #define GM_MULTI        38      // You are in some type of multiplayer game
 #define GM_OBSERVER     1024    // You are observing this game
+#define GM_TURKEY_SHOOT 2048    // Turkey shoot game mode
 
 #define NDL 5       // Number of difficulty levels.
 

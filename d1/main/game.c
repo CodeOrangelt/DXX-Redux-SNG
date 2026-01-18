@@ -104,7 +104,11 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 int	Mark_count = 0;                 // number of debugging marks set
 #endif
 
-static fix64 last_timer_value=0;
+#if 1
+static int64_t last_timer_value_usec=0;
+static int last_timer_value_usec_rem=0;
+#endif
+static fix last_timer_value=0;
 fix ThisLevelTime=0;
 
 grs_canvas	Screen_3d_window;							// The rectangle for rendering the mine to
@@ -371,9 +375,90 @@ void calc_d_tick()
 void reset_time()
 {
 	timer_update();
+	#if 1
+	last_timer_value_usec = timer_query_usec();
+	last_timer_value_usec_rem = 0;
+	#endif
 	last_timer_value = timer_query();
 }
 
+void calc_frame_time()
+{
+#if 1
+	fix64 timer_value;
+	int64_t timer_value_usec, next_timer_value_usec;
+	int next_timer_value_usec_rem;
+	int64_t req_time_usec, last_usec, start_usec;
+	int req_time_usec_rem;
+	fix last_frametime = FrameTime;
+	int fps = GameCfg.VSync ? MAXIMUM_FPS : PlayerCfg.maxFps;
+
+	req_time_usec = 1000000 / fps;
+	req_time_usec_rem = 1000000 % fps;
+
+	next_timer_value_usec = last_timer_value_usec + req_time_usec;
+	next_timer_value_usec_rem = last_timer_value_usec_rem + req_time_usec_rem;
+	if (next_timer_value_usec_rem >= fps) {
+		next_timer_value_usec_rem -= fps;
+		next_timer_value_usec++;
+	}
+
+	timer_update();
+	timer_value_usec = timer_query_usec();
+	start_usec = timer_value_usec;
+	last_usec = last_timer_value_usec;
+
+	int tries = 0;
+	int64_t pre_timer = timer_value_usec;
+	if (timer_value_usec < next_timer_value_usec) {
+		// split in coarse and fine delay
+		if (GameArg.SysUseNiceFPS && next_timer_value_usec - timer_value_usec > 1000) {
+			timer_delay_usec(next_timer_value_usec - timer_value_usec - 500);
+			timer_update();
+			timer_value_usec = timer_query_usec();
+		}
+		pre_timer = timer_value_usec;
+		while (timer_value_usec < next_timer_value_usec)
+		{
+			#ifdef __linux__
+			if (GameArg.SysUseNiceFPS && !GameCfg.VSync)
+				timer_delay_usec(next_timer_value_usec - timer_value_usec);
+			#else
+			#if defined(__GNUC__) && defined(__x86_64__)
+			asm("pause");
+			#endif
+			#endif
+			tries++;
+			timer_update();
+			timer_value_usec = timer_query_usec();
+		}
+		if (timer_value_usec < next_timer_value_usec + req_time_usec / 2) { // allow taking half the frametime for extra delay
+			last_timer_value_usec = next_timer_value_usec;
+			last_timer_value_usec_rem = next_timer_value_usec_rem;
+		} else {
+			last_timer_value_usec = timer_value_usec;
+			last_timer_value_usec_rem = 0;
+		}
+	} else {
+		last_timer_value_usec = timer_value_usec;
+		last_timer_value_usec_rem = 0;
+	}
+
+	FrameTime = timer_query() - last_timer_value;
+	last_timer_value = timer_query();
+
+	//con_printf(CON_DEBUG,"ft %x=%f, cur %lld (next %lld abs %lld tries %d) pre %lld\n", FrameTime,
+	//	f2fl(FrameTime), (long long)(timer_value_usec - last_usec),
+	//	(long long)(next_timer_value_usec - last_usec), (long long)(next_timer_value_usec - start_usec), tries,
+	//	(long long)(pre_timer - last_usec));
+
+	if ( cheats.turbo )
+		FrameTime *= 2;
+
+	if (FrameTime < 0)				//if bogus frametime...
+		FrameTime = (last_frametime==0?1:last_frametime);		//...then use time from last frame
+}
+#else
 void calc_frame_time()
 {
 	fix64 timer_value;
@@ -387,6 +472,7 @@ void calc_frame_time()
 	{
 		if (GameArg.SysUseNiceFPS && !GameCfg.VSync)
 			timer_delay(f1_0 / PlayerCfg.maxFps - FrameTime);
+			//timer_delay_usec(1000000 / PlayerCfg.maxFps - (1000000 * (int64_t)FrameTime / 65536));
 		timer_update();
 		timer_value = timer_query();
 		FrameTime = timer_value - last_timer_value;
@@ -400,6 +486,7 @@ void calc_frame_time()
 	if (FrameTime < 0)				//if bogus frametime...
 		FrameTime = (last_frametime==0?1:last_frametime);		//...then use time from last frame
 }
+#endif
 
 void calc_game_time()
 {
@@ -1184,7 +1271,8 @@ void GameProcessFrame(void)
 			else if (GameTime64 + FrameTime/2 >= Auto_fire_fusion_cannon_time) {
 				Auto_fire_fusion_cannon_time = 0;
 				Global_laser_firing_count = 1;
-			} else if (d_tick_step) {
+				// SNG toggle: FusionShake - toggleable fusion shake
+			} else if (!Netgame.FusionShake && d_tick_step) {
 				vms_vector	rand_vec;
 				fix			bump_amount;
 
@@ -1270,12 +1358,17 @@ void FireLaser()
 			} else
 				Auto_fire_fusion_cannon_time = GameTime64 + FrameTime/2 + 1;		//	Fire the fusion cannon at this time in the future.
 
-			flash_val = !(Game_mode & GM_MULTI) || !Netgame.ReducedFlash ? Fusion_charge >> 11 :
-				PaletteRedAdd < 10 ? 10 - PaletteRedAdd : 0;
-			if (Fusion_charge < F1_0*2)
-				PALETTE_FLASH_ADD(flash_val, 0, flash_val);
-			else
-				PALETTE_FLASH_ADD(flash_val, flash_val, 0);
+			// SNG toggle: PurpleFlash - when enabled, disable fusion screen flash
+			if (Netgame.PurpleFlash) {
+				palette_save();
+			} else {
+				flash_val = !(Game_mode & GM_MULTI) || !Netgame.ReducedFlash ? Fusion_charge >> 11 :
+					PaletteRedAdd < 10 ? 10 - PaletteRedAdd : 0;
+				if (Fusion_charge < F1_0*2)
+					PALETTE_FLASH_ADD(flash_val, 0, flash_val);
+				else
+					PALETTE_FLASH_ADD(flash_val, flash_val, 0);
+			}
 
 			if (Fusion_next_sound_time > GameTime64 + F1_0/8 + D_RAND_MAX/4) // GameTime64 is smaller than max delay - player in new level?
 				Fusion_next_sound_time = GameTime64 - 1;

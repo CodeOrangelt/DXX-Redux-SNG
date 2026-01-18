@@ -174,4 +174,22 @@ target_include_directories(d1x-redux PUBLIC ${SDL_INCLUDE_DIR} ${PHYSFS_INCLUDE_
 target_link_libraries(d1x-redux PRIVATE 2d 3d arch_sdl iff maths mem misc texmap)
 target_link_libraries(d1x-redux PUBLIC ${OPENGL_LIBRARY} ${SDL_LIBRARY} ${SDL_MIXER_LIBRARY} ${PHYSFS_LIBRARY} ${PNG_LIBRARY} ${EXTRA_LIBRARIES})
 target_sources(d1x-redux PRIVATE vers_id.c)
+
+# Copy DXMA mission database CSV to output directory
+add_custom_command(TARGET d1x-redux POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/../dxma_missions_complete_with_direct_links.csv"
+        "$<TARGET_FILE_DIR:d1x-redux>/dxma_missions_complete_with_direct_links.csv"
+    COMMENT "Copying DXMA mission database..."
+)
+
+# Copy missions folder if it exists
+add_custom_command(TARGET d1x-redux POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:d1x-redux>/missions"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/missions"
+        "$<TARGET_FILE_DIR:d1x-redux>/missions"
+    COMMENT "Copying missions folder..."
+)
+
 install(TARGETS d1x-redux RUNTIME DESTINATION .)

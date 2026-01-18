@@ -49,8 +49,12 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "laser.h"
 #include "multi.h"
 #include "multibot.h"
+#include "text.h"
 
 #include "gameseq.h"
+
+extern object *obj_find_first_of_type(int type);
+extern void net_destroy_controlcen(object *controlcen);
 
 // The max number of fuel stations per mine.
 
@@ -658,15 +662,168 @@ fix fuelcen_give_fuel(segment* segp, fix MaxAmountCanTake)
 //			return 0;
 //		}
 
-		if (MaxAmountCanTake <= 0 )	{
+		// SNG toggle: PointCapture - King of the Hill mode
+		if (!Netgame.PointCapture & MaxAmountCanTake <= 0) {
 //			//gauge_message( "Fueled up!");
 			return 0;
 		}
 
-		amount = fixmul(FrameTime,Fuelcen_give_amount);
+		amount = fixmul(FrameTime, Fuelcen_give_amount);
 
-		if (amount > MaxAmountCanTake )
+		if (!Netgame.PointCapture && amount > MaxAmountCanTake) //forbid the energy capacity for unlimited point draw on Point Capture, regular energy still works as normal - code.
+			return 0;
+
+		if (amount > MaxAmountCanTake)
 			amount = MaxAmountCanTake;
+
+// PointCapture: add points while standing on energy center (250 points per second)
+	if (Netgame.PointCapture)
+	{
+		static fix64 last_point_time = 0;
+		// Award 250 points per second (25 points every 0.1 seconds)
+		if (GameTime64 - last_point_time >= F1_0/10)
+		{
+			last_point_time = GameTime64;
+			Players[Player_num].score += 25;
+				
+				// Sync score over network
+				#ifdef NETWORK
+				if (Game_mode & GM_MULTI)
+					multi_send_score();
+				#endif
+			}
+		}
+
+		if (Netgame.PointCapture && Game_wind && Netgame.ScoreGoal == 1 && Players[Player_num].score >= 1000)
+		{
+
+			HUD_init_message(HM_MULTI, "\x01\xB0\%s \x01\x99\ has won!", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 0);
+			nm_messagebox(NULL, 1, TXT_OK, "You captured the point!\n Nice, %s", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 1);
+			multi_quit_game = 1;
+			game_leave_menus();
+			multi_reset_stuff();
+		}
+		if (Netgame.PointCapture && Game_wind && Netgame.ScoreGoal == 2 && Players[Player_num].score >= 2000)
+		{
+			HUD_init_message(HM_MULTI, "\x01\xB0\%s \x01\x99\ has won!", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 0);
+			nm_messagebox(NULL, 1, TXT_OK, "You captured the point!\n Nice, %s", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 1);
+			multi_quit_game = 1;
+			game_leave_menus();
+			multi_reset_stuff();
+		}
+
+		if (Netgame.PointCapture && Game_wind && Netgame.ScoreGoal == 3 && Players[Player_num].score >= 3000)
+		{
+			HUD_init_message(HM_MULTI, "\x01\xB0\%s \x01\x99\ has won!", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 0);
+			nm_messagebox(NULL, 1, TXT_OK, "You captured the point!\n Nice, %s", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 1);
+			multi_quit_game = 1;
+			game_leave_menus();
+			multi_reset_stuff();
+		}
+
+		if (Netgame.PointCapture && Game_wind && Netgame.ScoreGoal == 4 && Players[Player_num].score >= 4000)
+		{
+
+			HUD_init_message(HM_MULTI, "\x01\xB0\%s \x01\x99\ has won!", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 0);
+			nm_messagebox(NULL, 1, TXT_OK, "You captured the point!\n Nice, %s", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 1);
+			multi_quit_game = 1;
+			game_leave_menus();
+			multi_reset_stuff();
+		}
+		if (Netgame.PointCapture && Game_wind && Netgame.ScoreGoal == 5 && Players[Player_num].score >= 5000)
+		{
+
+			HUD_init_message(HM_MULTI, "\x01\xB0\%s \x01\x99\ has won!", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 0);
+			nm_messagebox(NULL, 1, TXT_OK, "You captured the point!\n Nice, %s", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 1);
+			multi_quit_game = 1;
+			game_leave_menus();
+			multi_reset_stuff();
+		}
+		if (Netgame.PointCapture && Game_wind && Netgame.ScoreGoal == 6 && Players[Player_num].score >= 6000)
+		{
+
+			HUD_init_message(HM_MULTI, "\x01\xB0\%s \x01\x99\ has won!", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 0);
+			nm_messagebox(NULL, 1, TXT_OK, "You captured the point!\n Nice, %s", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 1);
+			multi_quit_game = 1;
+			game_leave_menus();
+			multi_reset_stuff();
+		}
+		if (Netgame.PointCapture && Game_wind && Netgame.ScoreGoal == 7 && Players[Player_num].score >= 7000)
+		{
+
+			HUD_init_message(HM_MULTI, "\x01\xB0\%s \x01\x99\ has won!", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 0);
+			nm_messagebox(NULL, 1, TXT_OK, "You captured the point!\n Nice, %s", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 1);
+			multi_quit_game = 1;
+			game_leave_menus();
+			multi_reset_stuff();
+		}
+		if (Netgame.PointCapture && Game_wind && Netgame.ScoreGoal == 8 && Players[Player_num].score >= 8000)
+		{
+
+			HUD_init_message(HM_MULTI, "\x01\xB0\%s \x01\x99\ has won!", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 0);
+			nm_messagebox(NULL, 1, TXT_OK, "You captured the point!\n Nice, %s", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 1);
+			multi_quit_game = 1;
+			game_leave_menus();
+			multi_reset_stuff();
+		}
+		if (Netgame.PointCapture && Game_wind && Netgame.ScoreGoal == 9 && Players[Player_num].score >= 9000)
+		{
+
+			HUD_init_message(HM_MULTI, "\x01\xB0\%s \x01\x99\ has won!", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 0);
+			nm_messagebox(NULL, 1, TXT_OK, "You captured the point!\n Nice, %s", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 1);
+			multi_quit_game = 1;
+			game_leave_menus();
+			multi_reset_stuff();
+		}
+		if (Netgame.PointCapture && Game_wind && Netgame.ScoreGoal == 10 && Players[Player_num].score >= 10000)
+		{
+
+			HUD_init_message(HM_MULTI, "\x01\xB0\%s \x01\x99\ has won!", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 0);
+			nm_messagebox(NULL, 1, TXT_OK, "You captured the point!\n Nice, %s", Players[Player_num].callsign);
+			if (Game_wind && Netgame.PointCapture)
+				window_set_visible(Game_wind, 1);
+			multi_quit_game = 1;
+			game_leave_menus();
+			multi_reset_stuff();
+		}
 
 //		if (!(Game_mode & GM_MULTI))
 //			if ( Station[segp->value].Capacity < amount  )	{

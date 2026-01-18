@@ -36,6 +36,8 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "text.h"
 #include "u_mem.h"
 #include "ignorecase.h"
+#include "key.h"
+#include "event.h"
 
 //values that describe where a mission is located
 enum mle_loc
@@ -751,6 +753,228 @@ typedef struct mission_menu
 	int (*when_selected)(void);
 } mission_menu;
 
+// Search filter for mission selection
+static char mission_search_filter[32] = "";
+
+// Helper function to check if mission name matches search filter (case-insensitive)
+// Helper function to convert key code to ASCII for alphanumeric keys
+static int keycode_to_ascii(int key)
+{
+	// Numbers - note KEY_0 is 0x0B, not at the end of sequence
+	if (key == KEY_1) return '1';
+	if (key == KEY_2) return '2';
+	if (key == KEY_3) return '3';
+	if (key == KEY_4) return '4';
+	if (key == KEY_5) return '5';
+	if (key == KEY_6) return '6';
+	if (key == KEY_7) return '7';
+	if (key == KEY_8) return '8';
+	if (key == KEY_9) return '9';
+	if (key == KEY_0) return '0';
+	
+	// Letters - NOT sequential, must map individually
+	if (key == KEY_A) return 'a';
+	if (key == KEY_B) return 'b';
+	if (key == KEY_C) return 'c';
+	if (key == KEY_D) return 'd';
+	if (key == KEY_E) return 'e';
+	if (key == KEY_F) return 'f';
+	if (key == KEY_G) return 'g';
+	if (key == KEY_H) return 'h';
+	if (key == KEY_I) return 'i';
+	if (key == KEY_J) return 'j';
+	if (key == KEY_K) return 'k';
+	if (key == KEY_L) return 'l';
+	if (key == KEY_M) return 'm';
+	if (key == KEY_N) return 'n';
+	if (key == KEY_O) return 'o';
+	if (key == KEY_P) return 'p';
+	if (key == KEY_Q) return 'q';
+	if (key == KEY_R) return 'r';
+	if (key == KEY_S) return 's';
+	if (key == KEY_T) return 't';
+	if (key == KEY_U) return 'u';
+	if (key == KEY_V) return 'v';
+	if (key == KEY_W) return 'w';
+	if (key == KEY_X) return 'x';
+	if (key == KEY_Y) return 'y';
+	if (key == KEY_Z) return 'z';
+	
+	// Space
+	if (key == KEY_SPACEBAR) return ' ';
+	
+	// Punctuation
+	if (key == KEY_MINUS) return '-';
+	if (key == KEY_EQUAL) return '=';
+	if (key == KEY_LBRACKET) return '[';
+	if (key == KEY_RBRACKET) return ']';
+	if (key == KEY_SLASH) return '\\';  // This is backslash
+	if (key == KEY_DIVIDE) return '/';  // This is forward slash
+	if (key == KEY_COMMA) return ',';
+	if (key == KEY_PERIOD) return '.';
+	if (key == KEY_SEMICOL) return ';';
+	if (key == KEY_RAPOSTRO) return '\'';
+	if (key == KEY_LAPOSTRO) return '`';
+	
+	// Numpad
+	if (key == KEY_PAD0) return '0';
+	if (key == KEY_PAD1) return '1';
+	if (key == KEY_PAD2) return '2';
+	if (key == KEY_PAD3) return '3';
+	if (key == KEY_PAD4) return '4';
+	if (key == KEY_PAD5) return '5';
+	if (key == KEY_PAD6) return '6';
+	if (key == KEY_PAD7) return '7';
+	if (key == KEY_PAD8) return '8';
+	if (key == KEY_PAD9) return '9';
+	
+	return 0; // No ASCII equivalent
+}
+
+static int mission_matches_search(const char *mission_name, const char *search)
+{
+	char mission_lower[MISSION_NAME_LEN + 1];
+	char search_lower[32];
+	int i;
+	
+	if (!search || !search[0])
+		return 1; // Empty search matches everything
+	
+	// Convert mission name to lowercase
+	for (i = 0; mission_name[i] && i < MISSION_NAME_LEN; i++)
+		mission_lower[i] = tolower((unsigned char)mission_name[i]);
+	mission_lower[i] = '\0';
+	
+	// Convert search to lowercase
+	for (i = 0; search[i] && i < 31; i++)
+		search_lower[i] = tolower((unsigned char)search[i]);
+	search_lower[i] = '\0';
+	
+	return strstr(mission_lower, search_lower) != NULL;
+}
+
+// Structure for searchable mission menu
+typedef struct searchable_mission_menu
+{
+	mle *mission_list;        // Full mission list
+	int full_count;           // Total mission count
+	mle **filtered_list;      // Pointers to matching missions
+	int filtered_count;       // Number of matching missions
+	char **display_names;     // Array of display name pointers
+	char search_text[32];     // Current search text
+	char title_base[64];      // Base title text
+	char title_buffer[128];   // Dynamic title buffer
+	int (*when_selected)(void);
+	int anarchy_mode;         // For rebuilding the list
+} searchable_mission_menu;
+
+// Forward declaration
+static void rebuild_filtered_list(searchable_mission_menu *smm, listbox *lb);
+
+int searchable_mission_handler(listbox *lb, d_event *event, searchable_mission_menu *smm)
+{
+	int citem = listbox_get_citem(lb);
+
+	switch (event->type)
+	{
+		case EVENT_KEY_COMMAND:
+		{
+			int key = event_key_get(event);
+			int ascii = keycode_to_ascii(key);
+			int len = strlen(smm->search_text);
+			
+			// Handle backspace - clear one character from search
+			if (key == KEY_BACKSP)
+			{
+				if (len > 0)
+				{
+					smm->search_text[len - 1] = '\0';
+					rebuild_filtered_list(smm, lb);
+				}
+				return 1;
+			}
+			// Handle Delete - clear entire search
+			else if (key == KEY_DELETE)
+			{
+				smm->search_text[0] = '\0';
+				rebuild_filtered_list(smm, lb);
+				return 1;
+			}
+			// Handle printable characters - add to search
+			else if (ascii > 0)
+			{
+				if (len < 30)
+				{
+					smm->search_text[len] = ascii;
+					smm->search_text[len + 1] = '\0';
+					rebuild_filtered_list(smm, lb);
+				}
+				return 1;
+			}
+			break;
+		}
+		
+		case EVENT_NEWMENU_SELECTED:
+			if (citem >= 0 && citem < smm->filtered_count)
+			{
+				// Chose a mission from filtered list
+				strcpy(GameCfg.LastMission, smm->filtered_list[citem]->mission_name);
+				
+				if (!load_mission(smm->filtered_list[citem]))
+				{
+					nm_messagebox(NULL, 1, TXT_OK, TXT_MISSION_ERROR);
+					return 1;	// stay in listbox so user can select another one
+				}
+			}
+			return !(*smm->when_selected)();
+
+		case EVENT_WINDOW_CLOSE:
+			// Save search filter for next time
+			strcpy(mission_search_filter, smm->search_text);
+			free_mission_list(smm->mission_list);
+			d_free(smm->filtered_list);
+			d_free(smm->display_names);
+			d_free(smm);
+			break;
+			
+		default:
+			break;
+	}
+	
+	return 0;
+}
+
+static void rebuild_filtered_list(searchable_mission_menu *smm, listbox *lb)
+{
+	int i;
+	
+	// Clear filtered list
+	smm->filtered_count = 0;
+	
+	// Rebuild filtered list based on search text
+	for (i = 0; i < smm->full_count; i++)
+	{
+		if (mission_matches_search(smm->mission_list[i].mission_name, smm->search_text))
+		{
+			smm->filtered_list[smm->filtered_count] = &smm->mission_list[i];
+			smm->display_names[smm->filtered_count] = smm->mission_list[i].mission_name;
+			smm->filtered_count++;
+		}
+	}
+	
+	// Update listbox using accessor functions
+	listbox_set_items(lb, smm->filtered_count, smm->display_names);
+	
+	// Update title to show search status using struct buffer
+	if (smm->search_text[0])
+		snprintf(smm->title_buffer, sizeof(smm->title_buffer), "%s\nSearch: %s (%d/%d)", 
+			smm->title_base, smm->search_text, smm->filtered_count, smm->full_count);
+	else
+		snprintf(smm->title_buffer, sizeof(smm->title_buffer), "%s\n(%d missions, type to search)", 
+			smm->title_base, smm->full_count);
+	listbox_set_title(lb, smm->title_buffer);
+}
+
 int mission_menu_handler(listbox *lb, d_event *event, mission_menu *mm)
 {
 	char **list = listbox_get_items(lb);
@@ -801,36 +1025,71 @@ int select_mission(int anarchy_mode, char *message, int (*when_selected)(void))
     }
 	else
 	{
-		mission_menu *mm;
-        int i, default_mission;
-        char **m;
+		searchable_mission_menu *smm;
+		int i, default_mission;
 		
-		MALLOC(m, char *, num_missions);
-		if (!m)
+		// Allocate the searchable mission menu structure
+		MALLOC(smm, searchable_mission_menu, 1);
+		if (!smm)
 		{
 			free_mission_list(mission_list);
 			return 0;
 		}
 		
-		MALLOC(mm, mission_menu, 1);
-		if (!mm)
+		MALLOC(smm->filtered_list, mle *, num_missions);
+		if (!smm->filtered_list)
 		{
-			d_free(m);
+			d_free(smm);
 			free_mission_list(mission_list);
 			return 0;
 		}
-
-		mm->mission_list = mission_list;
-		mm->when_selected = when_selected;
 		
-        default_mission = 0;
-        for (i = 0; i < num_missions; i++) {
-            m[i] = mission_list[i].mission_name;
-            if ( !d_stricmp( m[i], GameCfg.LastMission ) )
-                default_mission = i;
-        }
-
-        newmenu_listbox1( message, num_missions, m, 1, default_mission, (int (*)(listbox *, d_event *, void *))mission_menu_handler, mm );
+		MALLOC(smm->display_names, char *, num_missions);
+		if (!smm->display_names)
+		{
+			d_free(smm->filtered_list);
+			d_free(smm);
+			free_mission_list(mission_list);
+			return 0;
+		}
+		
+		// Initialize structure
+		smm->mission_list = mission_list;
+		smm->full_count = num_missions;
+		smm->when_selected = when_selected;
+		smm->anarchy_mode = anarchy_mode;
+		strncpy(smm->title_base, message, 63);
+		smm->title_base[63] = '\0';
+		
+		// Restore previous search filter
+		strncpy(smm->search_text, mission_search_filter, 31);
+		smm->search_text[31] = '\0';
+		
+		// Build initial filtered list
+		smm->filtered_count = 0;
+		default_mission = 0;
+		for (i = 0; i < num_missions; i++)
+		{
+			if (mission_matches_search(mission_list[i].mission_name, smm->search_text))
+			{
+				smm->filtered_list[smm->filtered_count] = &mission_list[i];
+				smm->display_names[smm->filtered_count] = mission_list[i].mission_name;
+				if (!d_stricmp(mission_list[i].mission_name, GameCfg.LastMission))
+					default_mission = smm->filtered_count;
+				smm->filtered_count++;
+			}
+		}
+		
+		// Build initial title using struct buffer
+		if (smm->search_text[0])
+			snprintf(smm->title_buffer, sizeof(smm->title_buffer), "%s\nSearch: %s (%d/%d)", 
+				smm->title_base, smm->search_text, smm->filtered_count, smm->full_count);
+		else
+			snprintf(smm->title_buffer, sizeof(smm->title_buffer), "%s\n(%d missions, type to search)", 
+				smm->title_base, smm->full_count);
+		
+		newmenu_listbox1(smm->title_buffer, smm->filtered_count, smm->display_names, 1, default_mission, 
+			(int (*)(listbox *, d_event *, void *))searchable_mission_handler, smm);
     }
 
     return 1;	// presume success

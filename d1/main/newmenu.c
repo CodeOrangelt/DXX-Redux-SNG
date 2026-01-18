@@ -428,6 +428,86 @@ int char_allowed(char c)
 	return 0;
 }
 
+// Helper function to convert key code to ASCII for alphanumeric keys
+// This is needed because EVENT_KEY_COMMAND arrives before SDL_TEXTINPUT,
+// so key_ascii() returns nothing since the unicode buffer is empty.
+static int keycode_to_ascii(int key)
+{
+	// Strip modifier flags to get base key
+	int base_key = key & 0xFF;
+	
+	// Numbers
+	if (base_key == KEY_1) return '1';
+	if (base_key == KEY_2) return '2';
+	if (base_key == KEY_3) return '3';
+	if (base_key == KEY_4) return '4';
+	if (base_key == KEY_5) return '5';
+	if (base_key == KEY_6) return '6';
+	if (base_key == KEY_7) return '7';
+	if (base_key == KEY_8) return '8';
+	if (base_key == KEY_9) return '9';
+	if (base_key == KEY_0) return '0';
+	
+	// Letters
+	if (base_key == KEY_A) return 'a';
+	if (base_key == KEY_B) return 'b';
+	if (base_key == KEY_C) return 'c';
+	if (base_key == KEY_D) return 'd';
+	if (base_key == KEY_E) return 'e';
+	if (base_key == KEY_F) return 'f';
+	if (base_key == KEY_G) return 'g';
+	if (base_key == KEY_H) return 'h';
+	if (base_key == KEY_I) return 'i';
+	if (base_key == KEY_J) return 'j';
+	if (base_key == KEY_K) return 'k';
+	if (base_key == KEY_L) return 'l';
+	if (base_key == KEY_M) return 'm';
+	if (base_key == KEY_N) return 'n';
+	if (base_key == KEY_O) return 'o';
+	if (base_key == KEY_P) return 'p';
+	if (base_key == KEY_Q) return 'q';
+	if (base_key == KEY_R) return 'r';
+	if (base_key == KEY_S) return 's';
+	if (base_key == KEY_T) return 't';
+	if (base_key == KEY_U) return 'u';
+	if (base_key == KEY_V) return 'v';
+	if (base_key == KEY_W) return 'w';
+	if (base_key == KEY_X) return 'x';
+	if (base_key == KEY_Y) return 'y';
+	if (base_key == KEY_Z) return 'z';
+	
+	// Space
+	if (base_key == KEY_SPACEBAR) return ' ';
+	
+	// Punctuation
+	if (base_key == KEY_MINUS) return '-';
+	if (base_key == KEY_EQUAL) return '=';
+	if (base_key == KEY_LBRACKET) return '[';
+	if (base_key == KEY_RBRACKET) return ']';
+	if (base_key == KEY_SLASH) return '\\';
+	if (base_key == KEY_DIVIDE) return '/';
+	if (base_key == KEY_COMMA) return ',';
+	if (base_key == KEY_PERIOD) return '.';
+	if (base_key == KEY_SEMICOL) return ';';
+	if (base_key == KEY_RAPOSTRO) return '\'';
+	if (base_key == KEY_LAPOSTRO) return '`';
+	
+	// Numpad numbers
+	if (base_key == KEY_PAD0) return '0';
+	if (base_key == KEY_PAD1) return '1';
+	if (base_key == KEY_PAD2) return '2';
+	if (base_key == KEY_PAD3) return '3';
+	if (base_key == KEY_PAD4) return '4';
+	if (base_key == KEY_PAD5) return '5';
+	if (base_key == KEY_PAD6) return '6';
+	if (base_key == KEY_PAD7) return '7';
+	if (base_key == KEY_PAD8) return '8';
+	if (base_key == KEY_PAD9) return '9';
+	if (base_key == KEY_PADPERIOD) return '.';
+	
+	return 0; // Not a printable character
+}
+
 void strip_end_whitespace( char * text )
 {
 	int i,l;
@@ -1069,8 +1149,10 @@ int newmenu_key_command(window *wind, d_event *event, newmenu *menu)
 					changed = 1;
 				rval = 1;
 			} else {
-				ascii = key_ascii();
-				if ((ascii < 255 ) && (item->value < item->text_len ))
+				// Use keycode_to_ascii instead of key_ascii() because EVENT_KEY_COMMAND
+				// arrives before SDL_TEXTINPUT, so the unicode buffer is empty
+				ascii = keycode_to_ascii(k);
+				if ((ascii > 0 ) && (item->value < item->text_len ))
 				{
 					int allowed;
 
@@ -1097,8 +1179,9 @@ int newmenu_key_command(window *wind, d_event *event, newmenu *menu)
 		}
 		else if ((item->type!=NM_TYPE_INPUT) && (item->type!=NM_TYPE_INPUT_MENU) )
 		{
-			ascii = key_ascii();
-			if (ascii < 255 ) {
+			// Use keycode_to_ascii for menu item selection by letter as well
+			ascii = keycode_to_ascii(k);
+			if (ascii > 0 ) {
 				int choice1 = menu->citem;
 				ascii = toupper(ascii);
 				do {
@@ -1504,7 +1587,9 @@ int newmenu_handler(window *wind, d_event *event, newmenu *menu)
 	switch (event->type)
 	{
 		case EVENT_WINDOW_ACTIVATED:
-			game_flush_inputs();
+			// Don't flush inputs - this was clearing the unicode buffer
+			// which prevented typing in input fields
+			// game_flush_inputs();
 			event_toggle_focus(0);
 			key_toggle_repeat(1);
 			break;
@@ -1761,6 +1846,22 @@ void update_scroll_position(listbox *lb)
 	if (lb->first_item < 0 ) lb->first_item = 0;
 }
 
+void listbox_set_items(listbox *lb, int nitems, char **items)
+{
+	lb->nitems = nitems;
+	lb->item = items;
+	if (lb->citem >= lb->nitems)
+		lb->citem = lb->nitems > 0 ? lb->nitems - 1 : 0;
+	if (lb->first_item > lb->citem)
+		lb->first_item = lb->citem;
+	update_scroll_position(lb);
+}
+
+void listbox_set_title(listbox *lb, char *title)
+{
+	lb->title = title;
+}
+
 int listbox_mouse(window *wind, d_event *event, listbox *lb, int button)
 {
 	int i, mx, my, mz, x1, x2, y1, y2;
@@ -1915,8 +2016,9 @@ int listbox_key_command(window *wind, d_event *event, listbox *lb)
 
 		default:
 		{
-			int ascii = key_ascii();
-			if (ascii < 255) {
+			// Use keycode_to_ascii for listbox search as well
+			int ascii = keycode_to_ascii(key);
+			if (ascii > 0) {
 				size_t len = strlen(ascii_buffer);
 				if (len < SDL_arraysize(ascii_buffer) - 1) {
 					ascii_buffer[len++] = ascii;

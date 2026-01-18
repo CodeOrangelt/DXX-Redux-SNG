@@ -47,6 +47,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "physics.h"
 #include "hudmsg.h"
 #include "playsave.h"
+#include "collide.h"
 
 #define NEWHOMER
 
@@ -330,7 +331,25 @@ int Laser_create_new( vms_vector * direction, vms_vector * position, int segnum,
 		if (make_sound)	{
 			if ( parent == (Viewer-Objects) )	{
 				if (weapon_type == VULCAN_ID)	// Make your own vulcan gun  1/2 as loud.
+				{
 					volume = F1_0 / 2;
+
+					// SNG toggle: VulcanShake - adds screen shake when firing vulcan
+					if (Netgame.VulcanShake)
+					{
+						vms_vector	rand_vec;
+
+						Global_laser_firing_count = 0;
+
+						ConsoleObject->mtype.phys_info.rotvel.x += (d_rand() - 16384) / 8;
+						ConsoleObject->mtype.phys_info.rotvel.y += (d_rand() - 16384) / 8;
+
+						make_random_vector(&rand_vec);
+
+						bump_one_object(ConsoleObject, &rand_vec, 10);
+						PALETTE_FLASH_ADD(1, 0, 0);
+					}
+				}
 				if(weapon_type == PLASMA_ID && PlayerCfg.QuietPlasma)  // Plasma's a bit loud, too
 					volume = F1_0  * 3 / 4; 
 				digi_play_sample( Weapon_info[obj->id].flash_sound, volume );
@@ -1123,6 +1142,14 @@ void do_laser_firing_player(void)
 	if (Player_is_dead)
 		return;
 
+	// Block turkey from firing ANY primary weapon
+	if ((Game_mode & GM_TURKEY_SHOOT) && (Player_num == Turkey_target))
+	{
+		digi_play_sample(SOUND_HUD_MESSAGE, F1_0);
+		HUD_init_message(HM_DEFAULT, "Turkeys can't fire any weapons!");
+		return;
+	}
+
 	weapon_index = Primary_weapon_to_weapon_info[Players[Player_num].primary_weapon];
 	energy_used = Weapon_info[weapon_index].energy_usage;
 
@@ -1495,6 +1522,13 @@ void do_missile_firing(int drop_bomb)
 	Network_laser_track = -1;
 
 	Assert(weapon < MAX_SECONDARY_WEAPONS);
+
+	// Turkey can't fire missiles or drop bombs
+	if ((Game_mode & GM_TURKEY_SHOOT) && (Player_num == Turkey_target))
+	{
+		HUD_init_message(HM_DEFAULT, "Turkeys can't fire any weapons!");
+		return;
+	}
 
 	if (GameTime64 - Next_missile_fire_time <= FrameTime) // if firing is prolonged by FrameTime overhead, let's try to fix that.
 		fire_frame_overhead = GameTime64 - Next_missile_fire_time;

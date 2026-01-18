@@ -117,7 +117,7 @@ int new_player_config()
 	PlayerCfg.ShowCustomColors = 1; 
 	PlayerCfg.PreferMyTeamColors = 0;
 	PlayerCfg.QuietPlasma = 1; 
-	PlayerCfg.maxFps = GameArg.SysMaxFPS; 
+	PlayerCfg.maxFps = DEFAULT_FPS; 
 	PlayerCfg.ShipColor = 8;
 	PlayerCfg.MissileColor = 8;
 	PlayerCfg.MyTeamColor = 8;
@@ -462,11 +462,9 @@ int read_player_d1x(char *filename)
 					PlayerCfg.OtherTeamColor = atoi(line);
 				//if(!strcmp(word,"QUIETPLASMA"))
 				//	PlayerCfg.QuietPlasma = atoi(line);
-				if(!strcmp(word,"MAXFPS")) {
-					PlayerCfg.maxFps = atoi(line);
-					if(PlayerCfg.maxFps < 25) { PlayerCfg.maxFps = 25; }
-					if(PlayerCfg.maxFps > 200) { PlayerCfg.maxFps = 200; }
-				}
+                if(!strcmp(word,"MAXFPS")) {
+                    PlayerCfg.maxFps = atoi(line);
+                }
 				if(!strcmp(word,"NOCHATSOUND"))
 					PlayerCfg.NoChatSound = atoi(line);
 				if(!strcmp(word,"CLASSICAUTOSELECTWEAPON"))
@@ -1376,6 +1374,12 @@ void read_netgame_profile(netgame_info *ng)
 	if (!PHYSFSX_exists(filename,0))
 		return;
 	read_netgame_settings_file(filename, ng, 0);
+	
+	// Enforce mutual exclusion for spawn algorithms
+	if (ng->NewSpawnAlgorithm && ng->SmallerSpawn) {
+		// If both are enabled, prefer New Spawn Algorithm
+		ng->SmallerSpawn = 0;
+	}
 }
 
 // returns 0 if ok or errno if failed
@@ -1429,7 +1433,11 @@ int read_netgame_settings_file(const char *filename, netgame_info *ng, int no_na
 			else if (!strcmp(token, "BrightPlayers"))
 				ng->BrightPlayers = strtol(value, NULL, 10);
 			else if (!strcmp(token, "SpawnStyle"))
-				ng->SpawnStyle = strtol(value, NULL, 10);		
+				ng->SpawnStyle = strtol(value, NULL, 10);
+			else if (!strcmp(token, "NewSpawnAlgorithm"))
+				ng->NewSpawnAlgorithm = strtol(value, NULL, 10);
+			else if (!strcmp(token, "SmallerSpawn"))
+				ng->SmallerSpawn = strtol(value, NULL, 10);
 			else if (!strcmp(token, "GaussAmmoStyle"))
 				ng->GaussAmmoStyle = strtol(value, NULL, 10);
 			else if (!strcmp(token, "KillGoal"))
@@ -1523,6 +1531,7 @@ int write_netgame_settings_file(const char *filename, netgame_info *ng, int no_n
 	PHYSFSX_printf(file, "ShowEnemyNames=%i\n", ng->ShowEnemyNames);
 	PHYSFSX_printf(file, "BrightPlayers=%i\n", ng->BrightPlayers);
 	PHYSFSX_printf(file, "SpawnStyle=%i\n", ng->SpawnStyle);
+	PHYSFSX_printf(file, "NewSpawnAlgorithm=%i\n", ng->NewSpawnAlgorithm);
 	PHYSFSX_printf(file, "GaussAmmoStyle=%i\n", ng->GaussAmmoStyle);
 	PHYSFSX_printf(file, "KillGoal=%i\n", ng->KillGoal);
 	PHYSFSX_printf(file, "PlayTimeAllowed=%i\n", ng->PlayTimeAllowed);

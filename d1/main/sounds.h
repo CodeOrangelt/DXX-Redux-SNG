@@ -223,6 +223,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #define SOUND_ALREADY_SELECTED                  155 // Adam: New sound number here! MK, 01/30/95
 #define SOUND_CHEATER                   (PCSharePig?156:200) // moved by Victor Rachels
 
+#define SOUND_CLOAK_ON                          160 // USED FOR WALL CLOAK
 #define SOUND_CLOAK_OFF                         161 // sound when cloak goes away
 #define SOUND_INVULNERABILITY_OFF               163 // sound when invulnerability goes away
 

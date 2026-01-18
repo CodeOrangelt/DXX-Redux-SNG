@@ -1221,6 +1221,16 @@ void multi_compute_kill(int killer, int killed)
 			multi_new_bounty_target( new );
 		}
 
+		/* Turkey Shoot mode suicide handling */
+		if (Game_mode & GM_TURKEY_SHOOT && killed_pnum == Turkey_target && multi_i_am_master())
+		{
+			/* Turkey suicided - pick a new random target */
+			int new = d_rand() % MAX_PLAYERS;
+			while (!Players[new].connected || new == killed_pnum)
+				new = d_rand() % MAX_PLAYERS;
+			multi_turkey_set_target(new);
+		}
+
 		add_observatory_stat(killed_pnum, OBSEV_DEATH | OBSEV_SELF);
 	}
 
@@ -1258,6 +1268,24 @@ void multi_compute_kill(int killer, int killed)
 				/* If the target died, the new one is set! */
 				if( killed_pnum == Bounty_target )
 					multi_new_bounty_target( killer_pnum );
+			}
+		}
+		else if( Game_mode & GM_TURKEY_SHOOT )
+		{
+			/* Turkey Shoot scoring: only killing the turkey counts */
+			if( killed_pnum == Turkey_target && killer_pnum != killed_pnum )
+			{
+				/* Increment kill counts */
+				Players[killer_pnum].net_kills_total++;
+				Players[killer_pnum].KillGoalCount++;
+				
+				/* Record the kill in a demo */
+				if( Newdemo_state == ND_STATE_RECORDING )
+					newdemo_record_multi_kill( killer_pnum, 1 );
+				
+				/* Handle turkey kill (sets new target to killer) */
+				if( multi_i_am_master() )
+					multi_turkey_handle_kill( killer_pnum, killed_pnum );
 			}
 		}
 		else
@@ -1331,6 +1359,29 @@ void multi_compute_kill(int killer, int killed)
 		}
 	}
 
+	// Deathmatch mode: Check for last player standing
+	if (Netgame.Deathmatch) {
+		int alive_count = 0;
+		int last_alive = -1;
+		
+		for (int i = 0; i < N_players; i++) {
+			if (Players[i].lives > 0) {
+				alive_count++;
+				last_alive = i;
+			}
+		}
+		
+		if (alive_count == 1 && last_alive >= 0) {
+			if (last_alive == Player_num) {
+				HUD_init_message_literal(HM_MULTI, "You are the last one standing! You win!");
+			} else {
+				HUD_init_message(HM_MULTI, "%s is the last one standing and wins!", Players[last_alive].callsign);
+			}
+			HUD_init_message_literal(HM_MULTI, "The control center has been destroyed!");
+			net_destroy_controlcen (obj_find_first_of_type (OBJ_CNTRLCEN));
+		}
+	}
+
 	multi_sort_kill_list();
 	multi_show_player_list();
 }
@@ -1381,6 +1432,20 @@ void multi_do_frame(void)
 	{
 		multi_send_gmode_update();
 		last_update_time = timer_query();
+	}
+
+	// Turkey Shoot handling
+	if (Game_mode & GM_TURKEY_SHOOT && multi_i_am_master())
+	{
+		static fix64 last_turkey_sync = 0;
+		// Sync turkey times every second
+		if (GameTime64 - last_turkey_sync >= F1_0)
+		{
+			multi_send_turkey_time_sync();
+			last_turkey_sync = GameTime64;
+		}
+		// Handle turkey cloaking
+		multi_turkey_handle_cloak();
 	}
 
 	multi_send_message(); // Send any waiting messages
@@ -2951,6 +3016,455 @@ void multi_do_hostage_door_status(const ubyte *buf)
 		wall_damage(&Segments[Walls[wallnum].segnum], Walls[wallnum].sidenum, Walls[wallnum].hps - hps);
 }
 
+// ================================
+// TURKEY SHOOT MODE IMPLEMENTATION
+// ================================
+
+// ============================================================================
+// SNG: Disable Spawn Weapon Powerups
+// Converts weapon powerups to shields when players spawn with those weapons
+// ============================================================================
+
+void multi_disable_spawn_weapon_powerups(void)
+{
+	int i;
+
+	// Loop through all objects and bash spawn weapons to shields if host wants to spawn with them.
+	for (i = 0; i <= Highest_object_index; i++)
+	{
+		if (Objects[i].type == OBJ_POWERUP)
+		{
+			if (Objects[i].id == POW_FUSION_WEAPON && Netgame.FusionSpawn)
+				bash_to_shield(i, "fusion weapon (spawn enabled)");
+
+			if (Objects[i].id == POW_VULCAN_WEAPON && Netgame.VulcanSpawn)
+				bash_to_shield(i, "vulcan weapon (spawn enabled)");
+
+			if (Objects[i].id == POW_VULCAN_AMMO && Netgame.VulcanSpawn)
+				bash_to_shield(i, "vulcan ammo (spawn enabled)");
+
+			if (Objects[i].id == POW_PLASMA_WEAPON && Netgame.PlasmaSpawn)
+				bash_to_shield(i, "plasma weapon (spawn enabled)");
+
+			if (Objects[i].id == POW_SPREADFIRE_WEAPON && Netgame.SpreadSpawn)
+				bash_to_shield(i, "spreadfire weapon (spawn enabled)");
+
+			if (Objects[i].id == POW_LASER && Netgame.LasersSpawn)
+				bash_to_shield(i, "laser powerup (spawn enabled)");
+
+			if (Objects[i].id == POW_QUAD_FIRE && Netgame.LasersSpawn)
+				bash_to_shield(i, "quad lasers (spawn enabled)");
+
+			if ((Objects[i].id == POW_HOMING_AMMO_1 || Objects[i].id == POW_HOMING_AMMO_4) && Netgame.HomersSpawn)
+				bash_to_shield(i, "homing missiles (spawn enabled)");
+
+			if (Objects[i].id == POW_SMARTBOMB_WEAPON && Netgame.SmartsSpawn)
+				bash_to_shield(i, "smart missiles (spawn enabled)");
+
+			if (Objects[i].id == POW_PROXIMITY_WEAPON && Netgame.BombsSpawn)
+				bash_to_shield(i, "proximity bombs (spawn enabled)");
+
+			if (Objects[i].id == POW_MEGA_WEAPON && Netgame.MegasSpawn)
+				bash_to_shield(i, "mega missiles (spawn enabled)");
+		}
+	}
+}
+
+// ============================================================================
+// Turkey Shoot mode implementation
+// ============================================================================
+
+int Turkey_target = -1;
+fix64 Turkey_game_start_time = 0;
+fix64 Turkey_assign_time = 0;
+fix64 Turkey_time_as_turkey[MAX_PLAYERS] = {0,0,0,0,0,0,0,0};
+int Turkey_hunter_kills[MAX_PLAYERS] = {0,0,0,0,0,0,0,0};
+fix64 Turkey_start_time = 0;
+int Turkey_last_target = -1;
+
+#define TURKEY_GAME_DURATION (F1_0 * 60 * 7)  // 7 minutes
+#define TURKEY_CLOAK_INTERVAL (F1_0 * 30)     // 30 seconds
+#define TURKEY_CLOAK_DURATION (F1_0 * 10)     // 10 seconds of cloak
+
+void multi_turkey_init_game(void)
+{
+    if (!(Game_mode & GM_TURKEY_SHOOT))
+        return;
+
+    // Initialize variables
+    Turkey_target = -1;
+    Turkey_last_target = -1;
+    Turkey_game_start_time = GameTime64;
+    Turkey_assign_time = 0;
+    Turkey_start_time = 0;
+
+    // Clear all turkey times and kills with bounds checking
+    for (int i = 0; i < MAX_PLAYERS; i++)
+    {
+        Turkey_time_as_turkey[i] = 0;
+        Turkey_hunter_kills[i] = 0;
+    }
+
+    // Set team names
+    strcpy(Netgame.team_name[0], "Hunters");  // Blue team
+    strcpy(Netgame.team_name[1], "Turkey");   // Red team
+
+    // Start with first connected player as turkey (HOST ONLY)
+    if (multi_i_am_master())
+    {
+        for (int i = 0; i < N_players && i < MAX_PLAYERS; i++)
+        {
+            if (Players[i].connected == CONNECT_PLAYING)
+            {
+                con_printf(CON_NORMAL, "Setting initial turkey to player %d\n", i);
+                multi_turkey_set_target(i);
+                break;
+            }
+        }
+    }
+
+    con_printf(CON_NORMAL, "Turkey Shoot initialized: %d players\n", N_players);
+}
+
+// Set a specific player as the turkey (MASTER ONLY)
+void multi_turkey_set_target(int pnum)
+{
+    if (!multi_i_am_master())
+        return;
+
+    if (!(Game_mode & GM_TURKEY_SHOOT))
+        return;
+
+    if (pnum < 0 || pnum >= MAX_PLAYERS || !Players[pnum].connected)
+        return;
+
+    // Don't reassign to same turkey
+    if (Turkey_target == pnum)
+        return;
+
+    // Update previous turkey's time if there was one
+    if (Turkey_target >= 0 && Turkey_target != pnum)
+    {
+        fix64 time_as_turkey = GameTime64 - Turkey_start_time;
+        Turkey_time_as_turkey[Turkey_target] += time_as_turkey;
+
+        con_printf(CON_NORMAL, "Turkey %d accumulated %f seconds\n",
+                   Turkey_target, f2fl(time_as_turkey));
+    }
+
+    // Set new turkey
+    Turkey_last_target = Turkey_target;
+    Turkey_target = pnum;
+    Turkey_assign_time = GameTime64;
+    Turkey_start_time = GameTime64;
+
+    // Send turkey target update to all clients
+    multi_send_turkey_target();
+
+    // Update team assignments
+    multi_turkey_update_teams();
+
+    con_printf(CON_NORMAL, "Turkey target set to player %d (%s)\n",
+               pnum, Players[pnum].callsign);
+}
+
+void multi_turkey_update_teams(void)
+{
+    if (!(Game_mode & GM_TURKEY_SHOOT))
+        return;
+
+    // Clear all team assignments first
+    Netgame.team_vector = 0;
+
+    // Validate turkey target
+    if (Turkey_target < 0 || Turkey_target >= MAX_PLAYERS ||
+        !Players[Turkey_target].connected)
+    {
+        // Reset to first connected player if invalid
+        Turkey_target = -1;
+        for (int i = 0; i < N_players; i++)
+        {
+            if (Players[i].connected == CONNECT_PLAYING)
+            {
+                Turkey_target = i;
+                break;
+            }
+        }
+    }
+
+    // Set ONLY the turkey to team 1 (red), everyone else stays team 0 (blue)
+    if (Turkey_target >= 0 && Turkey_target < MAX_PLAYERS)
+    {
+        Netgame.team_vector = (1 << Turkey_target);
+    }
+
+    // Safely update player textures for connected players only
+    for (int i = 0; i < N_players; i++)
+    {
+        if (Players[i].connected == CONNECT_PLAYING &&
+            Players[i].objnum >= 0 && Players[i].objnum < MAX_OBJECTS)
+        {
+            multi_reset_object_texture(&Objects[Players[i].objnum]);
+        }
+    }
+
+    reset_cockpit();
+
+    con_printf(CON_NORMAL, "Turkey teams updated: Turkey=%d, team_vector=0x%x\n",
+               Turkey_target, Netgame.team_vector);
+}
+
+// Send turkey target to all clients
+void multi_send_turkey_target(void)
+{
+    if (!multi_i_am_master())
+        return;
+
+    multibuf[0] = MULTI_TURKEY_TARGET;
+    multibuf[1] = Turkey_target;
+    PUT_INTEL_INT(multibuf+2, Turkey_start_time >> 32);
+    PUT_INTEL_INT(multibuf+6, Turkey_start_time & 0xFFFFFFFF);
+
+    multi_send_data(multibuf, 10, 2);
+
+    // Also announce the change
+    multi_turkey_announce_target();
+}
+
+// Announce new turkey target
+void multi_turkey_announce_target(void)
+{
+    if (Turkey_target < 0)
+        return;
+
+    if (Netgame.FairColors)
+        selected_player_rgb = player_rgb_all_blue; 
+    else if (Netgame.BlackAndWhitePyros)
+        selected_player_rgb = player_rgb_alt;
+    else
+        selected_player_rgb = player_rgb;
+
+    int color = Netgame.players[Turkey_target].color;
+
+    if (Turkey_target == Player_num)
+    {
+        HUD_init_message(HM_MULTI, "%c%cYou are now the TURKEY! Run!",
+            CC_COLOR, BM_XRGB(selected_player_rgb[color].r,
+                              selected_player_rgb[color].g,
+                              selected_player_rgb[color].b));
+    }
+    else
+    {
+        HUD_init_message(HM_MULTI, "%c%c%s is now the TURKEY!",
+            CC_COLOR, BM_XRGB(selected_player_rgb[color].r,
+                              selected_player_rgb[color].g,
+                              selected_player_rgb[color].b),
+            Players[Turkey_target].callsign);
+    }
+
+    digi_play_sample(SOUND_CONTROL_CENTER_WARNING_SIREN, F1_0 * 2);
+}
+
+// Handle received turkey target update
+void multi_do_turkey_target(const ubyte *buf)
+{
+    if (multi_i_am_master())
+        return;
+
+    int new_target = buf[1];
+    fix64 new_start_time = ((fix64)GET_INTEL_INT(buf+2) << 32) |
+                          (fix64)GET_INTEL_INT(buf+6);
+
+    // Update previous turkey's time if needed
+    if (Turkey_target >= 0 && Turkey_target != new_target)
+    {
+        fix64 time_as_turkey = GameTime64 - Turkey_start_time;
+        Turkey_time_as_turkey[Turkey_target] += time_as_turkey;
+    }
+
+    // Set new turkey info
+    Turkey_target = new_target;
+    Turkey_start_time = GameTime64; // Use local time for calculations
+    Turkey_assign_time = GameTime64;
+
+    // Update teams
+    multi_turkey_update_teams();
+
+    // Announce change
+    multi_turkey_announce_target();
+}
+
+// Handle turkey kill and reassignment
+void multi_turkey_handle_kill(int killer_pnum, int killed_pnum)
+{
+    if (!(Game_mode & GM_TURKEY_SHOOT))
+        return;
+
+    if (!multi_i_am_master())
+        return;
+
+    // Only care if the turkey was killed by someone else
+    if (killed_pnum != Turkey_target || killer_pnum == killed_pnum)
+        return;
+
+    if (killer_pnum < 0 || killer_pnum >= MAX_PLAYERS)
+        return;
+
+    // Award points to the killer
+    Players[killer_pnum].score += 5;
+
+    // Track hunter kills
+    Turkey_hunter_kills[killer_pnum]++;
+
+    // Set killer as new turkey
+    multi_turkey_set_target(killer_pnum);
+
+    con_printf(CON_NORMAL, "Turkey kill: %s killed turkey %s, new turkey: %s\n",
+               Players[killer_pnum].callsign, Players[killed_pnum].callsign,
+               Players[Turkey_target].callsign);
+}
+
+// Send time sync to all clients
+void multi_send_turkey_time_sync(void)
+{
+    if (!multi_i_am_master())
+        return;
+
+    if (Turkey_target < 0)
+        return;
+
+    multibuf[0] = MULTI_TURKEY_TIME_SYNC;
+    multibuf[1] = Turkey_target;
+
+    // Calculate current accumulated time
+    fix64 current_time = Turkey_time_as_turkey[Turkey_target];
+    if (Turkey_target >= 0)
+        current_time += GameTime64 - Turkey_start_time;
+
+    PUT_INTEL_INT(multibuf+2, current_time >> 32);
+    PUT_INTEL_INT(multibuf+6, current_time & 0xFFFFFFFF);
+
+    multi_send_data(multibuf, 10, 1);
+}
+
+// Handle received time sync
+void multi_do_turkey_time_sync(const ubyte *buf)
+{
+    if (multi_i_am_master())
+        return;
+
+    int target = buf[1];
+    fix64 sync_time = ((fix64)GET_INTEL_INT(buf+2) << 32) |
+                     (fix64)GET_INTEL_INT(buf+6);
+    
+    if (target >= 0 && target < MAX_PLAYERS)
+    {
+        Turkey_time_as_turkey[target] = sync_time;
+        if (target == Turkey_target)
+            Turkey_start_time = GameTime64;
+    }
+}
+
+// Handle turkey cloaking logic
+void multi_turkey_handle_cloak(void)
+{
+    if (!(Game_mode & GM_TURKEY_SHOOT))
+        return;
+
+    if (!multi_i_am_master())
+        return;
+
+    if (Turkey_target < 0)
+        return;
+
+    // Check cloak timing
+    fix64 time_as_turkey = GameTime64 - Turkey_assign_time;
+
+    // Calculate which 30-second interval we're in
+    int interval = time_as_turkey / TURKEY_CLOAK_INTERVAL;
+    fix64 time_in_interval = time_as_turkey - (interval * TURKEY_CLOAK_INTERVAL);
+
+    // Every 30 seconds, cloak the turkey for 10 seconds
+    bool should_be_cloaked = (time_as_turkey >= TURKEY_CLOAK_INTERVAL &&
+                             time_in_interval < TURKEY_CLOAK_DURATION);
+
+    bool is_cloaked = (Players[Turkey_target].flags & PLAYER_FLAGS_CLOAKED) != 0;
+
+    if (should_be_cloaked && !is_cloaked)
+    {
+        // Start cloak
+        Players[Turkey_target].flags |= PLAYER_FLAGS_CLOAKED;
+        Players[Turkey_target].cloak_time = GameTime64;
+
+        if (Turkey_target == Player_num)
+        {
+            HUD_init_message(HM_MULTI, "You have been cloaked!");
+            digi_play_sample(SOUND_CLOAK_ON, F1_0);
+        }
+        else
+        {
+            HUD_init_message(HM_MULTI, "%s has been cloaked!",
+                           Players[Turkey_target].callsign);
+            digi_play_sample(SOUND_CLOAK_ON, F1_0);
+        }
+
+        // Send cloak status
+        multibuf[0] = MULTI_CLOAK;
+        multibuf[1] = Turkey_target;
+        multi_send_data(multibuf, 2, 2);
+
+        if (Game_mode & GM_MULTI_ROBOTS)
+            multi_strip_robots(Turkey_target);
+    }
+    else if (!should_be_cloaked && is_cloaked)
+    {
+        // End cloak
+        Players[Turkey_target].flags &= ~PLAYER_FLAGS_CLOAKED;
+
+        if (Turkey_target == Player_num)
+        {
+            HUD_init_message(HM_MULTI, "Your cloak has expired!");
+            digi_play_sample(SOUND_CLOAK_OFF, F1_0);
+        }
+        else
+        {
+            HUD_init_message(HM_MULTI, "%s's cloak has expired!",
+                           Players[Turkey_target].callsign);
+            digi_play_sample(SOUND_CLOAK_OFF, F1_0);
+        }
+
+        // Send decloak status
+        multibuf[0] = MULTI_DECLOAK;
+        multibuf[1] = Turkey_target;
+        multi_send_data(multibuf, 2, 2);
+    }
+}
+
+// Get current turkey time for display
+fix64 multi_turkey_get_current_time(int pnum)
+{
+    if (pnum < 0 || pnum >= MAX_PLAYERS)
+        return 0;
+
+    fix64 total_time = Turkey_time_as_turkey[pnum];
+
+    if (pnum == Turkey_target)
+        total_time += GameTime64 - Turkey_start_time;
+
+    return total_time;
+}
+
+// Wrapper for multi_turkey_set_target
+void multi_new_turkey_target(int pnum)
+{
+    if (multi_i_am_master())
+        multi_turkey_set_target(pnum);
+}
+
+// ================================
+// END TURKEY SHOOT IMPLEMENTATION
+// ================================
+
 void
 multi_reset_stuff(void)
 {
@@ -3068,8 +3582,17 @@ void multi_reset_object_texture (object *objp)
 {
 	disable_faircolors_if_3_connected();
 
-	int wid = get_color_for_player(objp->id, 0);
-	int mid = get_color_for_player(objp->id, 1);
+	int wid, mid;
+	
+	// For CTF mode, use team colors instead of individual player colors
+	if (Game_mode & GM_MULTI && Netgame.CTF) {
+		int team = get_team(objp->id);
+		wid = team; // Use team number directly (0=blue, 1=red)
+		mid = team;
+	} else {
+		wid = get_color_for_player(objp->id, 0);
+		mid = get_color_for_player(objp->id, 1);
+	}
 
 	//con_printf(CON_NORMAL, "Custom color for player %d is %d,%d\n", objp->id, wid, mid); 
 
@@ -4009,6 +4532,10 @@ multi_prep_level(void)
 	Assert(NumNetPlayerPositions > 0);
 
 	Bounty_target = 0;
+
+	// Initialize Turkey Shoot mode
+	if (Game_mode & GM_TURKEY_SHOOT)
+		multi_turkey_init_game();
 
 	multi_consistency_error(1);
 
@@ -5308,6 +5835,10 @@ multi_process_data(const ubyte *buf, int len)
 			multi_do_ship_status(buf); break;
 		case MULTI_CREATE_EXPLOSION2:
 			multi_do_create_explosion2(buf); break;
+		case MULTI_TURKEY_TARGET:
+			if (!Endlevel_sequence) multi_do_turkey_target(buf); break;
+		case MULTI_TURKEY_TIME_SYNC:
+			if (!Endlevel_sequence) multi_do_turkey_time_sync(buf); break;
 		default:
 			Int3();
 	}

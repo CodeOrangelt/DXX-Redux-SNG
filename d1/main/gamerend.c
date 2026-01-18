@@ -107,7 +107,8 @@ void show_framerate()
 	{
 		fps_rate = fps_count;
 		fps_count = 0;
-		fps_time = timer_query();
+		fps_time += F1_0;
+		if (timer_query() >= fps_time + F1_0) fps_time = timer_query();
 	}
 	gr_printf(SWIDTH-(GameArg.SysMaxFPS>999?FSPACX(43):FSPACX(37)),y,"FPS: %i",fps_rate);
 }
@@ -225,7 +226,8 @@ void show_netplayerinfo()
 
 	draw_flag("ReduFlas", Netgame.ReducedFlash,                                    base_flags_left + word_spacing*0, y);
 	const char *ammo_style[] = {"AmmoDupl", "AmmoDepl", "AmmoDrop", "AmmoSpaw"};
-	draw_flag(ammo_style[Netgame.GaussAmmoStyle], Netgame.GaussAmmoStyle != 1,    base_flags_left + word_spacing*1, y);
+	draw_flag((char*)ammo_style[Netgame.GaussAmmoStyle], Netgame.GaussAmmoStyle != 1,    base_flags_left + word_spacing*1, y);
+	draw_flag("NewSpawn", Netgame.NewSpawnAlgorithm,                               base_flags_left + word_spacing*2, y);
 
 	set_font_newline(); 
 	y+=LINE_SPACING;

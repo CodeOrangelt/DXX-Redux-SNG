@@ -11,22 +11,102 @@
 #include "config.h"
 
 static fix64 F64_RunTime = 0;
+static int64_t usec_runtime = 0;
+
+#ifdef WIN32
+#include <windows.h>
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 2
+#endif
+
+static DWORD create_timer_flags = 0;
+static LARGE_INTEGER freq, start;
+
+void timer_init(void)
+{
+	HANDLE timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+	                                      TIMER_ALL_ACCESS);
+	if (timer) {
+		create_timer_flags = CREATE_WAITABLE_TIMER_HIGH_RESOLUTION;
+        CloseHandle(timer);
+	} else
+		create_timer_flags = 0;
+	if (!QueryPerformanceCounter(&start) || !QueryPerformanceFrequency(&freq))
+		Error("QueryPerformanceCounter not working");
+}
+
+void timer_delay_usec(int64_t usec)
+{
+	HANDLE timer;
+	LARGE_INTEGER timeout;
+
+	if (usec <= 0)
+		return;
+
+	timer = CreateWaitableTimerExW(NULL, NULL, create_timer_flags, TIMER_ALL_ACCESS);
+	if (!create_timer_flags && (timer = CreateWaitableTimerExW(NULL, NULL, 0, TIMER_ALL_ACCESS)) &&
+		create_timer_flags) {
+		create_timer_flags = 0;
+		timer = CreateWaitableTimerExW(NULL, NULL, create_timer_flags, TIMER_ALL_ACCESS);
+	}
+
+	if (!timer) {
+		Sleep(usec / 1000);
+		return;
+	}
+
+	timeout.QuadPart = -(usec * 10); // negative for relative timeout
+	if (!SetWaitableTimerEx(timer, &timeout, 0, NULL, NULL, NULL, 0)) {
+		CloseHandle(timer);
+		Sleep(usec / 1000);
+		return;
+	}
+
+	WaitForSingleObject(timer, INFINITE);
+	CloseHandle(timer);
+}
+
+int64_t timer_query_usec(void)
+{
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+	return (now.QuadPart - start.QuadPart) * 1000000 / freq.QuadPart;
+}
+#else
+#include <time.h>
+
+static struct timespec start;
+
+void timer_init(void)
+{
+	if (clock_gettime(CLOCK_MONOTONIC, &start))
+		Error("clock_gettime failed");
+}
+
+void timer_delay_usec(int64_t usec)
+{
+	struct timespec ts;
+
+	if (usec <= 0)
+		return;
+
+	ts.tv_sec = usec / 1000000;
+	ts.tv_nsec = (usec % 1000000) * 1000;
+	nanosleep(&ts, NULL);
+}
+
+int64_t timer_query_usec(void)
+{
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (int64_t)(now.tv_sec - start.tv_sec) * 1000000 + (now.tv_nsec - start.tv_nsec) / 1000;
+}
+#endif
 
 void timer_update(void)
 {
-	static ubyte init = 1;
-	static fix64 last_tv = 0;
-	fix64 cur_tv = SDL_GetTicks()*F1_0/1000;
-
-	if (init)
-	{
-		last_tv = cur_tv;
-		init = 0;
-	}
-
-	if (last_tv < cur_tv) // in case SDL_GetTicks wraps, don't update and have a little hickup
-		F64_RunTime += (cur_tv - last_tv); // increment! this value will overflow long after we are all dead... so why bother checking?
-	last_tv = cur_tv;
+	usec_runtime = timer_query_usec();
+	F64_RunTime = usec_runtime * F1_0 / 1000000;
 }
 
 fix64 timer_query(void)
