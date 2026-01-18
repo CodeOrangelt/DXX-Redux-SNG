@@ -67,6 +67,9 @@ add_executable (d1x-redux
     weapon.c
     )
 
+# Set the output executable name
+set_target_properties(d1x-redux PROPERTIES OUTPUT_NAME "d1x-redux-sng")
+
 include_directories(${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/arch/include)
 
 target_compile_definitions(d1x-redux PUBLIC
@@ -102,8 +105,8 @@ if(WIN32)
     target_link_libraries(d1x-redux PUBLIC glu32 winmm ws2_32 dbghelp)
     target_link_libraries(d1x-redux PRIVATE arch_win32)
     target_sources(d1x-redux PRIVATE
-        ${CMAKE_SOURCE_DIR}/arch/win32/d1x-rebirth.ico
-        ${CMAKE_SOURCE_DIR}/arch/win32/d1x-rebirth.rc
+        ${CMAKE_SOURCE_DIR}/arch/win32/d1x-sng.ico
+        ${CMAKE_SOURCE_DIR}/arch/win32/d1x-sng.rc
         )
     if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         # Only apply MSVC-specific flags when using MSVC compiler
@@ -184,12 +187,14 @@ add_custom_command(TARGET d1x-redux POST_BUILD
 )
 
 # Copy missions folder if it exists
-add_custom_command(TARGET d1x-redux POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:d1x-redux>/missions"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/missions"
-        "$<TARGET_FILE_DIR:d1x-redux>/missions"
-    COMMENT "Copying missions folder..."
-)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/missions")
+    add_custom_command(TARGET d1x-redux POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:d1x-redux>/missions"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/missions"
+            "$<TARGET_FILE_DIR:d1x-redux>/missions"
+        COMMENT "Copying missions folder..."
+    )
+endif()
 
 install(TARGETS d1x-redux RUNTIME DESTINATION .)

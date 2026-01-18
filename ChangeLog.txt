@@ -1,3 +1,32 @@
+2026-01-18 D1X-Redux-SNG 1.0
+- Merged SNG fork features into mirrored Redux Build
+- Supoport for direct map downloads from DXMA in-game menu.
+- Added Sirius's "New Spawning Algorithm"
+- "Demo Recording" no longer overlaps Turkey shoot 
+- Sound bug for Powerups fixed (SNG specific)
+- 3 Color indicators for pingtime
+- Re-organized advanced menu items
+- FPS setting is a slider now
+Game Modes:
+- Added Capture the Flag mode
+- Added Turkey Shoot game mode 
+- Added King of the Hill mode
+- Added Last Man Standing mode
+SNG Toggles:
+- No Weapon Stun option
+- No Fusion Flash option
+- No Fusion Shake option
+- Vulcan Overheat option
+- Fast Doors option
+- Dark Smart Blobs option (Revived from Retro)
+- Quiet Fan option
+- Static powerups menu
+- Spawn with Powerups menu
+Misc:
+- Can type-to-search in all mission lists.
+Experimental:
+- Supports Arne's FPS Mod (Cap 400) still WIP  
+
 2025-01-25 Redux 1.1
 General:
 - Automatic demo improvements
