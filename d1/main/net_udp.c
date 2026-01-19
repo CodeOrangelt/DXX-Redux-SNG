@@ -268,6 +268,10 @@ char* msg_name(int type)
 			return "UPID_TRACKER_VERIFY";			
 		case UPID_TRACKER_INCGAME:
 			return "UPID_TRACKER_INCGAME";
+		case UPID_TRACKER_FORWARDED:
+			return "UPID_TRACKER_FORWARDED";
+		case UPID_TRACKER_HOLEPUNCH:
+			return "UPID_TRACKER_HOLEPUNCH";
 
 		case UPID_P2P_PING:
 			return "UPID_P2P_PING"; 		
@@ -626,6 +630,8 @@ int udp_receive_packet(int socknum, ubyte *text, int len, struct _sockaddr *send
 #define TRACKER_PKT_REGISTER		0	/* Register a game */
 #define TRACKER_PKT_UNREGISTER		1	/* Unregister our game */
 #define TRACKER_PKT_GAMELIST		2	/* Request the game list */
+#define TRACKER_PKT_FORWARD_REQ		24	/* Forward join request */
+#define TRACKER_PKT_HOLEPUNCH		25	/* Request hole punch to another player */
 
 /* Tracker initialization */
 int udp_tracker_init()
@@ -778,6 +784,87 @@ int udp_tracker_process_game( ubyte *data, int data_len )
 	net_udp_process_game_info( &data[iPos - 1], data_len - iPos, sAddr, 1 , 0);
 	return 0;
 }
+
+/* Request hole punch to a target player through the tracker */
+int udp_tracker_holepunch_request(struct _sockaddr *target_addr)
+{
+	// Variables
+	int iLen = 24;
+	ubyte pBuf[24];
+
+	if (!Netgame.HolePunch || !Netgame.Tracker)
+		return -1;
+
+	// Put the opcode
+	pBuf[0] = TRACKER_PKT_HOLEPUNCH;
+
+	// Put the game id
+	PUT_INTEL_INT(pBuf + 1, Netgame.protocol.udp.GameID);
+
+	// Put the target address
+#ifdef IPv6
+	pBuf[5] = 6;
+	memcpy(pBuf + 6, &target_addr->sin6_addr.s6_addr, sizeof(struct in6_addr));
+	PUT_INTEL_SHORT(pBuf + 22, ntohs(target_addr->sin6_port));
+#else
+	pBuf[5] = 4;
+	memcpy(pBuf + 6, &target_addr->sin_addr.s_addr, sizeof(struct in_addr));
+	memset(pBuf + 10, 0, 12);
+	PUT_INTEL_SHORT(pBuf + 22, ntohs(target_addr->sin_port));
+#endif
+
+	con_printf(CON_DEBUG, "Sending holepunch request to tracker for target\n");
+
+	// Send it off
+	return dxx_sendto(UDP_Socket[0], pBuf, iLen, 0, (struct sockaddr *)&TrackerSocket, sizeof(TrackerSocket));
+}
+
+/* The tracker wants us to holepunch to another player */
+int udp_tracker_process_holepunch(ubyte *data, int data_len)
+{
+	// All our variables
+	struct _sockaddr sAddr;
+	int iPos = 1;
+	int iPort = 0;
+	int bIPv6 = 0;
+	char *sIP = NULL;
+	ubyte punch_packet[5];
+
+	// Zero it out
+	memset(&sAddr, 0, sizeof(sAddr));
+
+	// Get the IPv6 flag from the tracker
+	bIPv6 = data[iPos++];
+	(void)bIPv6; // currently unused
+
+	// Get the IP
+	sIP = (char *)&data[iPos];
+	iPos += strlen(sIP) + 1;
+
+	// Get the port
+	iPort = GET_INTEL_SHORT(&data[iPos]);
+	iPos += 2;
+
+	// Get the DNS stuff
+	if (udp_dns_filladdr(sIP, iPort, &sAddr) < 0)
+		return -1;
+
+	con_printf(CON_DEBUG, "Received holepunch request from tracker - punching to %s:%d\n", sIP, iPort);
+
+	// Send a punch packet to open the NAT hole
+	// This is a simple packet that opens the hole - the other player should now be able to reach us
+	punch_packet[0] = UPID_P2P_PONG;
+	PUT_INTEL_INT(punch_packet + 1, netgame_token);
+	
+	// Send multiple punch packets to increase chances of success
+	for (int i = 0; i < 3; i++) {
+		dxx_sendto(UDP_Socket[0], punch_packet, sizeof(punch_packet), 0, 
+		           (struct sockaddr *)&sAddr, sizeof(struct _sockaddr));
+	}
+
+	return 0;
+}
+
 #endif /* USE_TRACKER */
 
 typedef struct direct_join
@@ -3595,6 +3682,10 @@ void net_udp_process_packet(ubyte *data, struct _sockaddr sender_addr, int lengt
 		case UPID_TRACKER_INCGAME:
 			udp_tracker_process_game( data, length );
 			break;
+
+		case UPID_TRACKER_HOLEPUNCH:
+			udp_tracker_process_holepunch( data, length );
+			break;
 #endif
 
 		case UPID_P2P_PING:
@@ -3863,6 +3954,7 @@ static int opt_gauss_duplicating, opt_gauss_depleting, opt_gauss_steady_recharge
 
 #ifdef USE_TRACKER
 static int opt_tracker;
+static int opt_holepunch;
 #endif
 
 void net_udp_set_power (void)
@@ -4166,6 +4258,9 @@ void net_udp_more_game_options ()
 #ifdef USE_TRACKER
 	opt_tracker = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Track this game"; m[opt].value = Netgame.Tracker; opt++;
+
+	opt_holepunch = opt;
+	m[opt].type = NM_TYPE_CHECK; m[opt].text = "NAT Hole Punching"; m[opt].value = Netgame.HolePunch; opt++;
 #endif
 
 	opt_retroproto = opt;
@@ -4220,6 +4315,7 @@ menu:
 	Netgame.NoFriendlyFire = m[opt_ffire].value;
 #ifdef USE_TRACKER
 	Netgame.Tracker = m[opt_tracker].value;
+	Netgame.HolePunch = m[opt_holepunch].value;
 #endif
 
 	Netgame.RetroProtocol = m[opt_retroproto].value;
@@ -7476,8 +7572,10 @@ void net_udp_process_proxy(ubyte* data, struct _sockaddr sender_addr, int data_l
 void net_udp_p2p_ping_frame(fix64 time)
 {
 	static fix64 lastPing[8] = {0,0,0,0,0,0,0,0};
+	static fix64 lastHolepunchRequest[8] = {0,0,0,0,0,0,0,0};
 	fix64 pingTimeSetup = F1_0/10;
 	fix64 pingTimeHeartbeat = F1_0;
+	fix64 holepunchRequestInterval = F1_0 * 2; // Request tracker holepunch every 2 seconds
 
 	for(int i = 0; i < MAX_PLAYERS; i++) {
 		if(i == Player_num) continue; 
@@ -7495,6 +7593,17 @@ void net_udp_p2p_ping_frame(fix64 time)
 				sentping = 1; 
 				connection_statuses[i].holepunch_attempts++; 
 			}
+
+#ifdef USE_TRACKER
+			// After some direct attempts, also request tracker-assisted holepunching
+			if (Netgame.HolePunch && Netgame.Tracker && 
+			    connection_statuses[i].holepunch_attempts >= 5 &&
+			    connection_statuses[i].type != CONNT_DIRECT &&
+			    time > lastHolepunchRequest[i] + holepunchRequestInterval) {
+				udp_tracker_holepunch_request(&Netgame.players[i].protocol.udp.addr);
+				lastHolepunchRequest[i] = time;
+			}
+#endif
 		}
 
 		// Connection measurement / heartbeat ping

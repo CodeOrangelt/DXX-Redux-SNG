@@ -1,0 +1,167 @@
+name: Build Linux
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-d1:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          libphysfs-dev \
+          libsdl1.2-dev \
+          libsdl-mixer1.2-dev \
+          libpng-dev \
+          libglew-dev \
+          curl \
+          file
+
+    - name: Configure D1
+      run: |
+        cd d1
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build D1
+      run: |
+        cd d1
+        cmake --build build -j$(nproc)
+
+    - name: Upload D1 binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: d1x-redux-sng-linux
+        path: d1/build/d1x-redux-sng
+
+  build-d2:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          libphysfs-dev \
+          libsdl1.2-dev \
+          libsdl-mixer1.2-dev \
+          libpng-dev \
+          libglew-dev \
+          curl \
+          file
+
+    - name: Configure D2
+      run: |
+        cd d2
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build D2
+      run: |
+        cd d2
+        cmake --build build -j$(nproc)
+
+    - name: Upload D2 binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: d2x-redux-linux
+        path: d2/build/d2x-redux
+
+  build-appimage:
+    runs-on: ubuntu-22.04
+    needs: [build-d1, build-d2]
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download D1 binary
+      uses: actions/download-artifact@v4
+      with:
+        name: d1x-redux-sng-linux
+        path: d1-bin
+
+    - name: Download D2 binary
+      uses: actions/download-artifact@v4
+      with:
+        name: d2x-redux-linux
+        path: d2-bin
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y file curl
+
+    - name: Build AppImages
+      run: |
+        chmod +x contrib/packaging/linux/build_package.sh
+        cd contrib/packaging/linux
+        
+        # Download AppImage tools
+        curl -LO https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+        curl -LO https://github.com/AppImage/AppImageKit/releases/download/continuous/AppRun-x86_64
+        chmod +x appimagetool-x86_64.AppImage AppRun-x86_64
+        
+        # Create D1 AppImage
+        mkdir -p d1x-redux.AppDir/usr/bin
+        cp ../../../d1-bin/d1x-redux-sng d1x-redux.AppDir/usr/bin/
+        chmod +x d1x-redux.AppDir/usr/bin/d1x-redux-sng
+        cp AppRun-x86_64 d1x-redux.AppDir/AppRun
+        
+        # Create desktop file for D1
+        cat > d1x-redux.AppDir/d1x-redux.desktop << 'EOF'
+        [Desktop Entry]
+        Type=Application
+        Name=D1X-Redux-SNG
+        Exec=d1x-redux-sng
+        Icon=d1x-redux
+        Categories=Game;
+        EOF
+        
+        # Create icon placeholder
+        touch d1x-redux.AppDir/d1x-redux.png
+        
+        # Build D1 AppImage
+        ARCH=x86_64 ./appimagetool-x86_64.AppImage --appimage-extract-and-run d1x-redux.AppDir
+        
+        # Create D2 AppImage
+        mkdir -p d2x-redux.AppDir/usr/bin
+        cp ../../../d2-bin/d2x-redux d2x-redux.AppDir/usr/bin/
+        chmod +x d2x-redux.AppDir/usr/bin/d2x-redux
+        cp AppRun-x86_64 d2x-redux.AppDir/AppRun
+        
+        # Create desktop file for D2
+        cat > d2x-redux.AppDir/d2x-redux.desktop << 'EOF'
+        [Desktop Entry]
+        Type=Application
+        Name=D2X-Redux
+        Exec=d2x-redux
+        Icon=d2x-redux
+        Categories=Game;
+        EOF
+        
+        touch d2x-redux.AppDir/d2x-redux.png
+        
+        ARCH=x86_64 ./appimagetool-x86_64.AppImage --appimage-extract-and-run d2x-redux.AppDir
+
+    - name: Upload AppImages
+      uses: actions/upload-artifact@v4
+      with:
+        name: linux-appimages
+        path: |
+          contrib/packaging/linux/*.AppImage

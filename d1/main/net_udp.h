@@ -33,7 +33,7 @@ void net_udp_send_obs_quit();
 #define UDP_PORT_DEFAULT 42424 // Our default port - easy to remember: D = 4, X = 24, X = 24
 #define UDP_MANUAL_ADDR_DEFAULT "localhost"
 #ifdef USE_TRACKER
-#define TRACKER_ADDR_DEFAULT "retro-tracker.game-server.cc"
+#define TRACKER_ADDR_DEFAULT "retro-tracker.2ar.nl"
 #define TRACKER_PORT_DEFAULT 42420
 #endif
 #define UDP_REQ_ID "D1XR" // ID string for a request packet
@@ -80,6 +80,8 @@ void net_udp_send_obs_quit();
 #ifdef USE_TRACKER
 #  define UPID_TRACKER_VERIFY			 21 // The tracker has successfully gotten a hold of us
 #  define UPID_TRACKER_INCGAME			 22 // The tracker is sending us some game info
+#  define UPID_TRACKER_FORWARDED		 23 // The tracker is sending us a forwarded join request
+#  define UPID_TRACKER_HOLEPUNCH		 24 // The tracker wants us to holepunch to another player
 #endif
 
 #define UPID_P2P_PING	25
