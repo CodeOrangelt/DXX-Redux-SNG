@@ -83,7 +83,7 @@ int new_player_config()
 	PlayerCfg.JoystickSens[0] = PlayerCfg.JoystickSens[1] = PlayerCfg.JoystickSens[2] = PlayerCfg.JoystickSens[3] = PlayerCfg.JoystickSens[4] = PlayerCfg.JoystickSens[5] = 8;
 	PlayerCfg.JoystickDead[0] = PlayerCfg.JoystickDead[1] = PlayerCfg.JoystickDead[2] = PlayerCfg.JoystickDead[3] = PlayerCfg.JoystickDead[4] = PlayerCfg.JoystickDead[5] = 0;
 	PlayerCfg.JoystickUndercalibrate[0] = PlayerCfg.JoystickUndercalibrate[1] = PlayerCfg.JoystickUndercalibrate[2] = PlayerCfg.JoystickUndercalibrate[3] = PlayerCfg.JoystickUndercalibrate[4] = PlayerCfg.JoystickUndercalibrate[5] = 0;
-	PlayerCfg.MouseControlStyle = MOUSE_CONTROL_REBIRTH; /* Old School Mouse */
+	PlayerCfg.MouseControlStyle = MOUSE_CONTROL_SNG; /* SNG Mouse - enhanced with smoothing */
 	PlayerCfg.MouseImpulse = 8;
 	PlayerCfg.MouseSens[0] = PlayerCfg.MouseSens[1] = PlayerCfg.MouseSens[2] = PlayerCfg.MouseSens[3] = PlayerCfg.MouseSens[4] = PlayerCfg.MouseSens[5] = 8;
     PlayerCfg.MouseOverrun[0] = PlayerCfg.MouseOverrun[1] = PlayerCfg.MouseOverrun[2] = PlayerCfg.MouseOverrun[3] = PlayerCfg.MouseOverrun[4] = PlayerCfg.MouseOverrun[5] = 0;

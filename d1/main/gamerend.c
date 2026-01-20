@@ -76,6 +76,55 @@ void game_draw_multi_message()
 }
 #endif
 
+void show_mouse_debug()
+{
+	int y = GHEIGHT;
+	const char *mode_name;
+	extern float accum_x, accum_y; // From kconfig.c SNG mouse handler
+	
+	gr_set_curfont(GAME_FONT);
+	gr_set_fontcolor(BM_XRGB(31,31,0),-1); // Yellow text
+	
+	if (PlayerCfg.CurrentCockpitMode == CM_FULL_SCREEN) {
+		if ((Game_mode & GM_MULTI) || (Newdemo_state == ND_STATE_PLAYBACK && Newdemo_game_mode & GM_MULTI))
+			y -= LINE_SPACING * 15;
+		else
+			y -= LINE_SPACING * 9;
+	} else if (PlayerCfg.CurrentCockpitMode == CM_STATUS_BAR) {
+		if ((Game_mode & GM_MULTI) || (Newdemo_state == ND_STATE_PLAYBACK && Newdemo_game_mode & GM_MULTI))
+			y -= LINE_SPACING * 11;
+		else
+			y -= LINE_SPACING * 6;
+	} else {
+		if ((Game_mode & GM_MULTI) || (Newdemo_state == ND_STATE_PLAYBACK && Newdemo_game_mode & GM_MULTI))
+			y -= LINE_SPACING * 12;
+		else
+			y -= LINE_SPACING * 7;
+	}
+	
+	switch(PlayerCfg.MouseControlStyle) {
+		case MOUSE_CONTROL_REBIRTH: mode_name = "Rebirth"; break;
+		case MOUSE_CONTROL_FLIGHT_SIM: mode_name = "FlightSim"; break;
+		case MOUSE_CONTROL_OLDSCHOOL: mode_name = "OldSchool"; break;
+		case MOUSE_CONTROL_SNG: mode_name = "SNG"; break;
+		default: mode_name = "Unknown"; break;
+	}
+	
+	gr_printf(FSPACX(1), y, "Mouse: %s", mode_name);
+	y += LINE_SPACING;
+	gr_printf(FSPACX(1), y, "Raw: %d,%d Proc: %d,%d", 
+		Controls.raw_mouse_axis[0], Controls.raw_mouse_axis[1],
+		Controls.mouse_axis[0], Controls.mouse_axis[1]);
+	y += LINE_SPACING;
+	gr_printf(FSPACX(1), y, "Sens: %d FT: %d", 
+		PlayerCfg.MouseSens[0], FrameTime);
+	
+	if (PlayerCfg.MouseControlStyle == MOUSE_CONTROL_SNG) {
+		y += LINE_SPACING;
+		gr_printf(FSPACX(1), y, "Accum: %.3f,%.3f", accum_x, accum_y);
+	}
+}
+
 void show_framerate()
 {
 	static int fps_count = 0, fps_rate = 0;
@@ -446,6 +495,9 @@ void game_draw_hud_stuff()
 
 	if (!is_observer() && GameCfg.FPSIndicator && PlayerCfg.CurrentCockpitMode != CM_REAR_VIEW)
 		show_framerate();
+	
+	if (!is_observer() && GameCfg.MouseDebugIndicator && PlayerCfg.CurrentCockpitMode != CM_REAR_VIEW)
+		show_mouse_debug();
 
 	if (Newdemo_state == ND_STATE_PLAYBACK)
 		Game_mode = Newdemo_game_mode;

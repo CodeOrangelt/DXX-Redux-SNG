@@ -74,6 +74,11 @@ control_info Controls;
 
 fix Cruise_speed=0;
 
+// Global accumulators for SNG mouse debug display
+float accum_x = 0.0f, accum_y = 0.0f;
+// SNG Mouse smoothing filter for reducing jitter
+static float smooth_x = 0.0f, smooth_y = 0.0f;
+
 #define BT_KEY 			0
 #define BT_MOUSE_BUTTON 	1
 #define BT_MOUSE_AXIS		2
@@ -1396,6 +1401,39 @@ void kconfig_read_controls(d_event *event, int automap_flag)
 				Controls.mouse_axis[1] = (Controls.raw_mouse_axis[1]*FrameTime)/8 * impulse_factor;  // ;// * PlayerCfg.MouseImpulse / 2;
 				Controls.mouse_axis[2] = (Controls.raw_mouse_axis[2]*FrameTime);
 				mouse_delta_time = timer_query() + (F1_0/30);
+			}
+			/* SNG Mouse - smoothing and sub-pixel precision */
+			else if(PlayerCfg.MouseControlStyle == MOUSE_CONTROL_SNG)
+			{
+				int dx, dy, dz;
+				event_mouse_get_delta(event, &dx, &dy, &dz);
+				
+				float sensitivity = PlayerCfg.MouseSens[0] / 8.0f;
+				float raw_x = dx * sensitivity;
+				float raw_y = dy * sensitivity;
+				
+				/* exponential smoothing filter to reduce jitter */
+				const float smoothing = 0.7f;
+				smooth_x = smooth_x * (1.0f - smoothing) + raw_x * smoothing;
+				smooth_y = smooth_y * (1.0f - smoothing) + raw_y * smoothing;
+				
+				/* Accumulate smoothed values for sub-pixel precision */
+				accum_x += smooth_x;
+				accum_y += smooth_y;
+				
+				/* Extract integer values while preserving fractional remainder */
+				Controls.mouse_axis[0] = (int)accum_x;
+				Controls.mouse_axis[1] = (int)accum_y;
+				Controls.mouse_axis[2] = dz;
+				
+				/* Keep fractional part for next frame */
+				accum_x -= (float)Controls.mouse_axis[0];
+				accum_y -= (float)Controls.mouse_axis[1];
+				
+				/* Apply frame-time scaling for consistent response - using /8 like Rebirth for better feel */
+				Controls.mouse_axis[0] = (Controls.mouse_axis[0] * FrameTime) / 8;
+				Controls.mouse_axis[1] = (Controls.mouse_axis[1] * FrameTime) / 8;
+				Controls.mouse_axis[2] = (Controls.mouse_axis[2] * FrameTime);
 			}
 			break;
 		}

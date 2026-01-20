@@ -47,6 +47,7 @@ typedef struct Cfg
 	int VSync;
 	int Multisample;
 	int FPSIndicator;
+	int MouseDebugIndicator;
 	int Grabinput;
 	int ClassicDepth;
 	int BorderlessWindow;
