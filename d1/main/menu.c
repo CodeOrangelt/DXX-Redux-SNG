@@ -68,6 +68,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #ifdef USE_UDP
 #include "net_udp.h"
 #endif
+#include "botplay.h"
 #ifdef EDITOR
 #include "editor/editor.h"
 #include "editor/kdefs.h"
@@ -106,6 +107,7 @@ enum MENUS
     MENU_JOIN_LIST_UDP_NETGAME,
     MENU_DXMA_MISSIONS,
     #endif
+    MENU_ROBO_ANARCHY,
     #ifndef RELEASE
     MENU_SANDBOX
     #endif
@@ -150,6 +152,7 @@ static window *menus[16] = { NULL };
 int do_option(int select);
 int do_new_game_menu(void);
 void do_multi_player_menu();
+void do_robo_anarchy_menu(void);
 #ifndef RELEASE
 void do_sandbox_menu();
 #endif
@@ -1110,6 +1113,9 @@ int do_option ( int select)
 			do_multi_player_menu();
 			break;
 #endif
+		case MENU_ROBO_ANARCHY:
+			do_robo_anarchy_menu();
+			break;
 		case MENU_CONFIG:
 			do_options_menu();
 			break;
@@ -2965,11 +2971,11 @@ void do_multi_player_menu()
 	newmenu_item *m;
 	int num_options = 0;
 
-	MALLOC(menu_choice, int, 4);
+	MALLOC(menu_choice, int, 5);
 	if (!menu_choice)
 		return;
 
-	MALLOC(m, newmenu_item, 4);
+	MALLOC(m, newmenu_item, 5);
 	if (!m)
 	{
 		d_free(menu_choice);
@@ -2986,10 +2992,109 @@ void do_multi_player_menu()
 	m[num_options].type=NM_TYPE_MENU; m[num_options].text="JOIN GAME MANUALLY"; menu_choice[num_options]=MENU_JOIN_MANUAL_UDP_NETGAME; num_options++;
 	m[num_options].type=NM_TYPE_MENU; m[num_options].text="DXMA MISSIONS"; menu_choice[num_options]=MENU_DXMA_MISSIONS; num_options++;
 #endif
+	m[num_options].type=NM_TYPE_MENU; m[num_options].text="ROBO-ANARCHY"; menu_choice[num_options]=MENU_ROBO_ANARCHY; num_options++;
 
 	newmenu_do3( NULL, TXT_MULTIPLAYER, num_options, m, (int (*)(newmenu *, d_event *, void *))multi_player_menu_handler, menu_choice, 0, NULL );
 }
 #endif
+
+/*
+ * Robo-Anarchy menu - bot match mode
+ */
+static int robo_anarchy_num_bots = 3;
+static int robo_anarchy_skill = 1;  // 0=Easy, 1=Medium, 2=Hard, 3=Insane
+
+// Custom start function for Robo-Anarchy that skips difficulty menu
+int do_robo_anarchy_start(void)
+{
+	// Set the protocol to botplay (no networking)
+	multi_protocol = MULTI_PROTO_BOTPLAY;
+	
+	// Map Robo-Anarchy skill to game difficulty:
+	// 0=Easy -> Trainee(0), 1=Medium -> Rookie(1), 2=Hard -> Hotshot(2), 3=Insane -> Ace(3)
+	Difficulty_level = Botplay_pending_skill;
+	
+	// Start the game at level 1
+	StartNewGame(1);
+	
+	return 1;
+}
+
+static int robo_anarchy_menu_handler(newmenu *menu, d_event *event, void *userdata)
+{
+	newmenu_item *items = newmenu_get_items(menu);
+	
+	switch (event->type) {
+		case EVENT_NEWMENU_SELECTED:
+			robo_anarchy_num_bots = items[1].value + 1;  // Slider is 0-6, we want 1-7
+			
+			// Determine skill from radio buttons
+			if (items[4].value) robo_anarchy_skill = 0;       // Easy
+			else if (items[5].value) robo_anarchy_skill = 1;  // Medium
+			else if (items[6].value) robo_anarchy_skill = 2;  // Hard
+			else if (items[7].value) robo_anarchy_skill = 3;  // Insane
+			
+			// Set pending values before mission select (callback is called after selection)
+			Botplay_pending_start = 1;
+			Botplay_pending_num_bots = robo_anarchy_num_bots;
+			Botplay_pending_skill = robo_anarchy_skill;
+			
+			// Select mission, then start game with our custom start function (skips difficulty menu)
+			select_mission(0, "Robo-Anarchy\n\nSelect mission", do_robo_anarchy_start);
+			return 1;
+			
+		default:
+			break;
+	}
+	
+	userdata = userdata;  // suppress warning
+	return 0;
+}
+
+void do_robo_anarchy_menu(void)
+{
+	newmenu_item m[9];
+	
+	m[0].type = NM_TYPE_TEXT;
+	m[0].text = "Robo-Anarchy Settings";
+	
+	m[1].type = NM_TYPE_SLIDER;
+	m[1].text = "Number of Bots";
+	m[1].value = robo_anarchy_num_bots - 1;  // 0-6 for slider
+	m[1].min_value = 0;
+	m[1].max_value = 6;
+	
+	m[2].type = NM_TYPE_TEXT;
+	m[2].text = "";
+	
+	m[3].type = NM_TYPE_TEXT;
+	m[3].text = "Difficulty:";
+	
+	m[4].type = NM_TYPE_RADIO;
+	m[4].text = "Easy";
+	m[4].value = (robo_anarchy_skill == 0);
+	m[4].group = 0;
+	
+	m[5].type = NM_TYPE_RADIO;
+	m[5].text = "Medium";
+	m[5].value = (robo_anarchy_skill == 1);
+	m[5].group = 0;
+	
+	m[6].type = NM_TYPE_RADIO;
+	m[6].text = "Hard";
+	m[6].value = (robo_anarchy_skill == 2);
+	m[6].group = 0;
+	
+	m[7].type = NM_TYPE_RADIO;
+	m[7].text = "Insane";
+	m[7].value = (robo_anarchy_skill == 3);
+	m[7].group = 0;
+	
+	m[8].type = NM_TYPE_TEXT;
+	m[8].text = "";
+	
+	newmenu_do1(NULL, "ROBO-ANARCHY", 9, m, robo_anarchy_menu_handler, NULL, 0);
+}
 
 void do_options_menu()
 {

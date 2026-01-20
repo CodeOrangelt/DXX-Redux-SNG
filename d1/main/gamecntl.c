@@ -88,6 +88,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "rbaudio.h"
 #include "switch.h"
 #include "window.h"
+#include "botplay.h"
 
 #ifdef EDITOR
 #include "editor/editor.h"

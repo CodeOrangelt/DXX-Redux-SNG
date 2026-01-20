@@ -3,6 +3,7 @@ add_executable (d1x-redux
     aipath.c
     automap.c
     bm.c
+    botplay.c
     bmread.c
     cntrlcen.c
     collide.c

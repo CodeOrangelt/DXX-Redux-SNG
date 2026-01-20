@@ -33,6 +33,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "mouse.h"
 #include "kconfig.h"
 #include "playsave.h" // CED -- OSM 2.0
+#include "botplay.h"
 
 //look at keyboard, mouse, joystick, CyberMan, whatever, and set 
 //physics vars rotvel, velocity
@@ -40,6 +41,13 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 void read_flying_controls( object * obj )
 {
 	Assert(FrameTime > 0); 		//Get MATT if hit this!
+
+	// Skip bot players - they control themselves via botplay.c
+	if (Bot_mode && obj->type == OBJ_PLAYER && obj->id != Player_num) {
+		if (botplay_is_bot(obj->id)) {
+			return;
+		}
+	}
 
 	int no_thrust = 0; 
 #ifdef NETWORK

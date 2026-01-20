@@ -89,6 +89,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "vers_id.h"
 #include "event.h"
 #include "window.h"
+#include "botplay.h"
 
 #ifdef OGL
 #include "ogl_init.h"
@@ -1260,6 +1261,9 @@ void GameProcessFrame(void)
 		fuelcen_update_all();
 
 		do_ai_frame_all();
+
+		// Bot match AI processing
+		botplay_frame();
 
 		if (allowed_to_fire_laser())
 			FireLaser();				// Fire Laser!

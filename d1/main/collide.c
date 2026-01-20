@@ -67,6 +67,7 @@ extern int Turkey_target;
 #include "piggy.h"
 #include "text.h"
 #include "maths.h"
+#include "botplay.h"
 #ifdef EDITOR
 #include "editor/editor.h"
 #endif
@@ -1091,6 +1092,28 @@ void collide_player_and_player( object * player1, object * player2, vms_vector *
 		return;
 	}
 
+	// Handle bot collisions - just bounce apart, no damage
+	if (Bot_mode) {
+		int p1_is_bot = (player1->id >= 0 && player1->id < MAX_PLAYERS) ? botplay_is_bot(player1->id) : 0;
+		int p2_is_bot = (player2->id >= 0 && player2->id < MAX_PLAYERS) ? botplay_is_bot(player2->id) : 0;
+		
+		if (p1_is_bot || p2_is_bot) {
+			// Simple separation - push apart
+			vms_vector separation;
+			vm_vec_sub(&separation, &player1->pos, &player2->pos);
+			vm_vec_normalize(&separation);
+			
+			fix push = F1_0 * 5;
+			vm_vec_scale_add2(&player1->mtype.phys_info.velocity, &separation, push);
+			vm_vec_scale_add2(&player2->mtype.phys_info.velocity, &separation, -push);
+			
+			if (check_collision_delayfunc_exec())
+				digi_link_sound_to_pos( SOUND_ROBOT_HIT_PLAYER, player1->segnum, 0, collision_point, 0, F1_0 );
+			
+			return;
+		}
+	}
+
 	static fix64 last_player_bump[MAX_PLAYERS] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 	int damage_flag = 1, otherpl = -1;
 
@@ -1410,6 +1433,20 @@ void apply_damage_to_player(object *player, object *killer, fix damage, ubyte po
 
 
 	}
+	// Handle bot deaths
+	else if (Bot_mode && player->id >= 0 && player->id < MAX_PLAYERS) {
+		Players[player->id].shields -= damage;
+		player->shields = Players[player->id].shields;
+		
+		if (Players[player->id].shields <= 0) {
+			int killer_pnum = -1;
+			if (killer && killer->type == OBJ_PLAYER && killer->id >= 0 && killer->id < MAX_PLAYERS) {
+				killer_pnum = killer->id;
+			}
+			
+			botplay_on_player_death(player->id, killer_pnum);
+		}
+	}
 }
 
 
@@ -1442,6 +1479,25 @@ void collide_player_and_weapon( object * player, object * weapon, vms_vector *co
 	object * killer=NULL;
 
 	if (object_is_observer(player)) {
+		return;
+	}
+
+	// Check if this is a bot - route damage through botplay system
+	if (botplay_is_bot(player - Objects)) {
+		int killer_objnum = -1;
+		if (weapon->ctype.laser_info.parent_num > -1)
+			killer_objnum = weapon->ctype.laser_info.parent_num;
+		
+		damage = fixmul(damage, weapon->ctype.laser_info.multiplier);
+		
+		// Create hit effect
+		object_create_explosion( player->segnum, collision_point, i2f(10)/2, VCLIP_PLAYER_HIT );
+		digi_link_sound_to_pos( SOUND_PLAYER_GOT_HIT, player->segnum, 0, collision_point, 0, F1_0 );
+		
+		// Apply damage to bot
+		botplay_apply_damage(player - Objects, killer_objnum, damage);
+		
+		maybe_kill_weapon(weapon, player);
 		return;
 	}
 

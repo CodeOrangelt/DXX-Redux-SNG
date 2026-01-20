@@ -745,6 +745,8 @@ int multi_objnum_is_past(int objnum)
 			return net_udp_objnum_is_past(objnum);
 			break;
 #endif
+		case MULTI_PROTO_BOTPLAY:
+			return 0; // Bots don't use network object numbering
 		default:
 			Error("Protocol handling missing in multi_objnum_is_past\n");
 			break;
@@ -1395,6 +1397,9 @@ void multi_do_protocol_frame(int force, int listen)
 			net_udp_do_frame(force, listen);
 			break;
 #endif
+		case MULTI_PROTO_BOTPLAY:
+			// Botplay mode - no network protocol needed, bots are local
+			break;
 		default:
 			Error("Protocol handling missing in multi_do_protocol_frame\n");
 			break;
@@ -1491,6 +1496,9 @@ void multi_send_data(unsigned char *buf, int len, int priority)
 				net_udp_send_data(buf, len, priority);
 				break;
 #endif
+			case MULTI_PROTO_BOTPLAY:
+				// Botplay mode - no network sending needed
+				break;
 			default:
 				Error("Protocol handling missing in multi_send_data\n");
 				break;
@@ -1522,6 +1530,9 @@ void multi_send_obs_data(unsigned char *buf, int len)
 				net_udp_send_mdata_direct(buf, len, 0, 0);
 				break;
 #endif
+			case MULTI_PROTO_BOTPLAY:
+				// Botplay mode - no network sending needed
+				break;
 			default:
 				Error("Protocol handling missing in multi_send_obs_data\n");
 				break;
@@ -1545,6 +1556,9 @@ void multi_send_data_direct(const ubyte *buf, int len, int pnum, int priority)
 			net_udp_send_mdata_direct(multibuf, len, pnum, priority);
 			break;
 #endif
+		case MULTI_PROTO_BOTPLAY:
+			// Botplay mode - no network sending needed
+			break;
 		default:
 			Error("Protocol handling missing in multi_send_data_direct\n");
 			break;
@@ -1557,6 +1571,15 @@ multi_leave_game(void)
 
 	if (!(Game_mode & GM_MULTI))
 		return;
+
+	// Clean up botplay mode first
+	if (multi_protocol == MULTI_PROTO_BOTPLAY) {
+		extern void botplay_close(void);
+		botplay_close();
+		Game_mode &= ~GM_MULTI;
+		multi_protocol = 0;
+		return;
+	}
 
 	if (Game_mode & GM_NETWORK)
 	{
@@ -1582,6 +1605,9 @@ multi_leave_game(void)
 				net_udp_leave_game();
 				break;
 #endif
+			case MULTI_PROTO_BOTPLAY:
+				// Botplay mode - no network cleanup needed
+				break;
 			default:
 				Error("Protocol handling missing in multi_leave_game\n");
 				break;
@@ -1616,6 +1642,9 @@ multi_endlevel(int *secret)
 			result = net_udp_endlevel(secret);
 			break;
 #endif
+		case MULTI_PROTO_BOTPLAY:
+			result = 0; // Bots don't need endlevel network processing
+			break;
 		default:
 			Error("Protocol handling missing in multi_endlevel\n");
 			break;
@@ -1633,6 +1662,8 @@ int multi_endlevel_poll1( newmenu *menu, d_event *event, void *userdata )
 			return net_udp_kmatrix_poll1( menu, event, userdata );
 			break;
 #endif
+		case MULTI_PROTO_BOTPLAY:
+			return 0; // Bots don't need network polling
 		default:
 			Error("Protocol handling missing in multi_endlevel_poll1\n");
 			break;
@@ -1650,6 +1681,8 @@ int multi_endlevel_poll2( newmenu *menu, d_event *event, void *userdata )
 			return net_udp_kmatrix_poll2( menu, event, userdata );
 			break;
 #endif
+		case MULTI_PROTO_BOTPLAY:
+			return 0; // Bots don't need network polling
 		default:
 			Error("Protocol handling missing in multi_endlevel_poll2\n");
 			break;
@@ -1667,6 +1700,9 @@ void multi_send_endlevel_packet()
 			net_udp_send_endlevel_packet();
 			break;
 #endif
+		case MULTI_PROTO_BOTPLAY:
+			// Bots don't need network packets
+			break;
 		default:
 			Error("Protocol handling missing in multi_send_endlevel_packet\n");
 			break;
@@ -1965,6 +2001,9 @@ void multi_send_message_end()
 						net_udp_dump_player(Netgame.players[i].protocol.udp.addr, 0, DUMP_KICKED);
 						break;
 #endif
+					case MULTI_PROTO_BOTPLAY:
+						// Can't kick bots in botplay mode
+						break;
 					default:
 						Error("Protocol handling missing in multi_send_message_end\n");
 						break;
@@ -2716,6 +2755,9 @@ void multi_disconnect_player(int pnum)
 			net_udp_disconnect_player(pnum);
 			break;
 #endif
+		case MULTI_PROTO_BOTPLAY:
+			// Bots don't need network disconnect
+			break;
 		default:
 			Error("Protocol handling missing in multi_disconnect_player\n");
 			break;
@@ -3736,6 +3778,9 @@ multi_send_endlevel_start(int secret)
 				net_udp_send_endlevel_packet();
 				break;
 #endif
+			case MULTI_PROTO_BOTPLAY:
+				// Bots don't need network packets
+				break;
 			default:
 				Error("Protocol handling missing in multi_send_endlevel_start\n");
 				break;
@@ -4808,6 +4853,9 @@ int multi_level_sync(void)
 			return net_udp_level_sync();
 			break;
 #endif
+		case MULTI_PROTO_BOTPLAY:
+			return 0; // Bots don't need level sync
+			break;
 		default:
 			Error("Protocol handling missing in multi_level_sync\n");
 			break;
