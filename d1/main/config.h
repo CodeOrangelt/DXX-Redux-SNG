@@ -48,6 +48,7 @@ typedef struct Cfg
 	int Multisample;
 	int FPSIndicator;
 	int MouseDebugIndicator;
+	int FOVZoom;
 	int Grabinput;
 	int ClassicDepth;
 	int BorderlessWindow;

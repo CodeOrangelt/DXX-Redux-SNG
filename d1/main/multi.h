@@ -576,6 +576,7 @@ typedef struct netgame_info
 	ubyte						RemoteHitSpark;
 	ubyte						AllowCustomModelsTextures;
 	ubyte						ReducedFlash;
+	ubyte						DisableFOVChange;
 	ubyte						GaussAmmoStyle;
 	ubyte						team_color[2];
 	ubyte						NewSpawnAlgorithm;

@@ -1744,7 +1744,7 @@ void reticle_config()
 	PlayerCfg.ReticleSize = m[opt_ret_size].value;
 }
 
-int opt_gr_texfilt, opt_gr_brightness, opt_gr_reticlemenu, opt_gr_alphafx, opt_gr_dynlightcolor, opt_gr_vsync, opt_gr_multisample, opt_gr_fpsindi, opt_gr_mousedbg, opt_gr_disablecockpit, opt_gr_framerate, opt_gr_framerate_text;
+int opt_gr_texfilt, opt_gr_brightness, opt_gr_reticlemenu, opt_gr_alphafx, opt_gr_dynlightcolor, opt_gr_vsync, opt_gr_multisample, opt_gr_fpsindi, opt_gr_mousedbg, opt_gr_disablecockpit, opt_gr_framerate, opt_gr_framerate_text, opt_gr_fov;
 int opt_gr_classicdepth;
 int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 {
@@ -1773,6 +1773,17 @@ int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 				snprintf(fps_text, sizeof(fps_text), "(%d FPS)", 25 + items[opt_gr_framerate].value * 25);
 				items[opt_gr_framerate_text].text = fps_text;
 			}
+			if ( citem == opt_gr_fov) {
+				// Only update if not locked by multiplayer
+				if (!((Game_mode & GM_MULTI) && Netgame.DisableFOVChange)) {
+					static char fov_text[32];
+					if (items[opt_gr_fov].value == 0)
+						snprintf(fov_text, sizeof(fov_text), "Field of View (Vanilla)");
+					else
+						snprintf(fov_text, sizeof(fov_text), "Field of View");
+					items[opt_gr_fov].text = fov_text;
+				}
+			}
 			break;
 
 		case EVENT_NEWMENU_SELECTED:
@@ -1791,7 +1802,7 @@ int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 void graphics_config()
 {
 #ifdef OGL
-	newmenu_item m[18];
+	newmenu_item m[19];
 	int i = 0;
 #else
 	newmenu_item m[6];
@@ -1841,6 +1852,20 @@ void graphics_config()
 	snprintf(fps_display, sizeof(fps_display), "(%d FPS)", PlayerCfg.maxFps);
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = fps_display; nitems++;
 
+	opt_gr_fov = nitems;
+	static char fov_display[32];
+	// Check if FOV is locked by multiplayer host
+	if ((Game_mode & GM_MULTI) && Netgame.DisableFOVChange) {
+		snprintf(fov_display, sizeof(fov_display), "FOV: Locked by Host");
+		m[nitems].type = NM_TYPE_TEXT; m[nitems].text = fov_display; nitems++;
+	} else {
+		if (GameCfg.FOVZoom == 0)
+			snprintf(fov_display, sizeof(fov_display), "Field of View (Vanilla)");
+		else
+			snprintf(fov_display, sizeof(fov_display), "Field of View");
+		m[nitems].type = NM_TYPE_SLIDER; m[nitems].text = fov_display; m[nitems].value = GameCfg.FOVZoom; m[nitems].min_value = 0; m[nitems].max_value = 16; nitems++;
+	}
+
 	newmenu_do1( NULL, "Graphics Options", nitems, m, graphics_config_menuset, NULL, 1 );
 
 #ifdef OGL
@@ -1859,6 +1884,9 @@ void graphics_config()
 	GameCfg.GammaLevel = m[opt_gr_brightness].value;
 	GameCfg.FPSIndicator = m[opt_gr_fpsindi].value;
 	GameCfg.MouseDebugIndicator = m[opt_gr_mousedbg].value;
+	// Only save FOV if not locked by multiplayer host
+	if (!((Game_mode & GM_MULTI) && Netgame.DisableFOVChange))
+		GameCfg.FOVZoom = m[opt_gr_fov].value;
 	PlayerCfg.DisableCockpit = m[opt_gr_disablecockpit].value; 
 
 	PlayerCfg.maxFps = 25 + m[opt_gr_framerate].value * 25;

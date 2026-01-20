@@ -90,7 +90,7 @@ vms_vector Viewer_eye;  //valid during render
 
 int	N_render_segs;
 
-fix Render_zoom = 0x9000;					//the player's zoom factor
+fix Render_zoom = 0x9000;					//the player's zoom factor (dynamically set from GameCfg.FOVZoom)
 
 #ifndef NDEBUG
 ubyte object_rendered[MAX_OBJECTS];
@@ -1375,6 +1375,14 @@ void render_frame(fix eye_offset)
 			newdemo_record_viewer_object(Viewer);
 		}
 	}
+
+	// Apply FOV setting: 0x9000 (default) + (GameCfg.FOVZoom * 0x800)
+	// FOVZoom range 0-16: 0=0x9000 (default), 8=0x11000 (wide), 16=0x15000 (ultra-wide)
+	// If multiplayer host has locked FOV, force vanilla (0) regardless of player's setting
+	int fov_zoom = GameCfg.FOVZoom;
+	if ((Game_mode & GM_MULTI) && Netgame.DisableFOVChange)
+		fov_zoom = 0;
+	Render_zoom = 0x9000 + (fov_zoom * 0x800);
 
 	start_lighting_frame(Viewer);		//this is for ugly light-smoothing hack
 

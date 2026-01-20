@@ -115,6 +115,7 @@ int ReadConfigFile()
 	GameCfg.ClassicDepth = 0;
 	GameCfg.FPSIndicator = 0;
 	GameCfg.MouseDebugIndicator = 0;
+	GameCfg.FOVZoom = 0;
 	GameCfg.Grabinput = 1;
 	GameCfg.BorderlessWindow = 0;
 
@@ -228,6 +229,8 @@ int ReadConfigFile()
 				GameCfg.FPSIndicator = strtol(value, NULL, 10);
 			else if (!strcmp(token, "MouseDebugIndicator"))
 				GameCfg.MouseDebugIndicator = strtol(value, NULL, 10);
+			else if (!strcmp(token, "FOVZoom"))
+				GameCfg.FOVZoom = strtol(value, NULL, 10);
 			else if (!strcmp(token, GrabinputStr))
 				GameCfg.Grabinput = strtol(value, NULL, 10);
 			else if (!strcmp(token, BorderlessWindowStr))
@@ -287,6 +290,7 @@ int WriteConfigFile()
 	PHYSFSX_printf(infile, "%s=%i\n", ClassicDepthStr, GameCfg.ClassicDepth);
 	PHYSFSX_printf(infile, "%s=%i\n", FPSIndicatorStr, GameCfg.FPSIndicator);
 	PHYSFSX_printf(infile, "MouseDebugIndicator=%i\n", GameCfg.MouseDebugIndicator);
+	PHYSFSX_printf(infile, "FOVZoom=%i\n", GameCfg.FOVZoom);
 	PHYSFSX_printf(infile, "%s=%i\n", GrabinputStr, GameCfg.Grabinput);
 	PHYSFSX_printf(infile, "%s=%i\n", BorderlessWindowStr, GameCfg.BorderlessWindow);
 
