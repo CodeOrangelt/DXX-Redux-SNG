@@ -31,6 +31,7 @@ curl -s -L -O https://github.com/arbruijn/TimGM6mb/releases/download/v20100822/T
 build_appimage() {
     name="$1"
     prettyname="$2"
+    exename="$3"
     dir="${name:0:2}"
 
     appdir="${name}.appdir"
@@ -45,7 +46,7 @@ build_appimage() {
 
     # Executable
     mkdir -p ${appdir}/usr/bin
-    cp build${dir}/main/${name} ${appdir}/usr/bin
+    cp build${dir}/main/${exename} ${appdir}/usr/bin/${name}
 
     # Icons
     mkdir -p ${appdir}/usr/share/pixmaps
@@ -88,8 +89,8 @@ build_appimage() {
 }
 
 # Build each subunit
-build_appimage "d1x-redux" "d1x-redux"
-build_appimage "d2x-redux" "d2x-redux"
+build_appimage "d1x-redux" "d1x-redux" "d1x-redux-sng"
+build_appimage "d2x-redux" "d2x-redux" "d2x-redux"
 
 # Clean
 rm -f appimagetool* AppRun* linuxdeploy-*
