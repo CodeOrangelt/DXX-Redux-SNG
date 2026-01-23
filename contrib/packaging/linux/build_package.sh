@@ -46,6 +46,12 @@ build_appimage() {
 
     # Executable
     mkdir -p ${appdir}/usr/bin
+    if [ ! -f "build${dir}/main/${exename}" ]; then
+        echo "ERROR: Executable not found: build${dir}/main/${exename}"
+        echo "Contents of build${dir}/main/:"
+        ls -la build${dir}/main/ || true
+        exit 1
+    fi
     cp build${dir}/main/${exename} ${appdir}/usr/bin/${name}
 
     # Icons
@@ -71,10 +77,15 @@ build_appimage() {
     cp AppRun-x86_64 ${appdir}/AppRun
 
     # Dependencies
-    ./linuxdeploy-x86_64.AppImage --appdir "${appdir}"
+    ./linuxdeploy-x86_64.AppImage --appimage-extract-and-run --appdir "${appdir}"
 
     # Package!
-    ./appimagetool-x86_64.AppImage --no-appstream --verbose "${appdir}" "${appimagename}"
+    ./appimagetool-x86_64.AppImage --appimage-extract-and-run --no-appstream --verbose "${appdir}" "${appimagename}"
+    
+    if [ ! -f "${appimagename}" ]; then
+        echo "ERROR: AppImage creation failed: ${appimagename} not found"
+        exit 1
+    fi
 
     rm -rf "${tmpdir}"
     mkdir "${tmpdir}"

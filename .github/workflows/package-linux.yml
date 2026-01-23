@@ -23,7 +23,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install gcc-10 g++-10
-          sudo apt-get install -y cmake libphysfs-dev libsdl1.2-dev libsdl-mixer1.2-dev libpng-dev libglew-dev
+          sudo apt-get install -y cmake libphysfs-dev libsdl1.2-dev libsdl-mixer1.2-dev libpng-dev libglew-dev libfuse2
 
       - name: Configure D1
         run: cmake -S d1 -B buildd1 -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOpenGL_GL_PREFERENCE=LEGACY
