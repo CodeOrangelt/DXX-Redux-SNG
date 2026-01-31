@@ -597,7 +597,6 @@ int HandleSystemKey(int key)
 				multi_sort_kill_list();
 			break;
 
-		KEY_MAC(case KEY_COMMAND+KEY_8:)
 		case KEY_F8:
 			multi_send_message_start();
 			break;
@@ -1507,6 +1506,21 @@ int ReadControls(d_event *event)
 				do_automap();
 				return 1;
 			}
+		}
+
+		// Handle scoreboard toggle/on-press display
+		if ( Controls.scoreboard_count > 0 )
+		{
+			Controls.scoreboard_count = 0;
+			if (Game_mode & GM_MULTI && PlayerCfg.PublicKillLog)
+				show_detailed_kill_stats();
+		}
+		
+		// Handle scoreboard key release for momentary mode
+		if (!PlayerCfg.ScoreboardSticky && Controls.scoreboard_state == 0)
+		{
+			if (Game_mode & GM_MULTI && PlayerCfg.PublicKillLog)
+				hide_scoreboard();
 		}
 
 		do_weapon_n_item_stuff();

@@ -1623,6 +1623,8 @@ int input_config_menuset(newmenu *menu, d_event *event, void *userdata)
 				kconfig(2, "MOUSE");
 			if (citem == opt_ic_confweap)
 				kconfig(3, "WEAPON KEYS");
+			if (citem == opt_ic_confweap+1)
+				kconfig(4, "SNG KEYS");
 			if (citem == opt_ic_joymousesens)
 				input_config_sensitivity();
 			if (citem == opt_ic_help0)
@@ -1659,6 +1661,7 @@ void input_config()
 	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "CUSTOMIZE MOUSE"; nitems++;
 	opt_ic_confweap = nitems;
 	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "CUSTOMIZE WEAPON KEYS"; nitems++;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "CUSTOMIZE SNG KEYS"; nitems++;
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = ""; nitems++;
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "MOUSE CONTROL TYPE:"; nitems++;
 	opt_ic_mouseflightsim = nitems;
@@ -2551,6 +2554,48 @@ void print_other_team_color(char* color_string, int color_string_length, int col
 	snprintf(color_string, color_string_length, "Other Team: %s", color);
 }
 
+void do_public_kill_log_menu()
+{
+	newmenu_item m[6];
+	int i = 0;
+
+	do {
+		m[0].type = NM_TYPE_CHECK;
+		m[0].text = "Enable Multiplayer Kill Log";
+		m[0].value = PlayerCfg.PublicKillLog;
+
+		m[1].type = NM_TYPE_CHECK;
+		m[1].text = "Show Weapon Names";
+		m[1].value = PlayerCfg.KillLogShowWeapon;
+
+		m[2].type = NM_TYPE_CHECK;
+		m[2].text = "Show Before Death Damage Amounts";
+		m[2].value = PlayerCfg.KillLogShowDamage;
+
+		m[3].type = NM_TYPE_SLIDER;
+		m[3].text = "Display Duration (sec): ";
+		m[3].value = PlayerCfg.KillLogDuration > 0 ? PlayerCfg.KillLogDuration : 5;
+		m[3].min_value = 3;
+		m[3].max_value = 15;
+
+		m[4].type = NM_TYPE_CHECK;
+		m[4].text = "Scoreboard Sticky Mode (Toggle)";
+		m[4].value = PlayerCfg.ScoreboardSticky;
+
+		m[5].type = NM_TYPE_TEXT;
+		m[5].text = "";
+
+		i = newmenu_do1(NULL, "Kill Log + Scoreboard (MP) Options", 6, m, NULL, NULL, i);
+
+		PlayerCfg.PublicKillLog = m[0].value;
+		PlayerCfg.KillLogShowWeapon = m[1].value;
+		PlayerCfg.KillLogShowDamage = m[2].value;
+		PlayerCfg.KillLogDuration = m[3].value;
+		PlayerCfg.ScoreboardSticky = m[4].value;
+
+	} while (i > -1);
+}
+
 struct misc_menu_data {
 	char preferred_color[30];
 	char missile_color[30];
@@ -2560,7 +2605,7 @@ struct misc_menu_data {
 
 void do_misc_menu()
 {
-	newmenu_item m[36];
+	newmenu_item m[38];
 	int i = 0;
 	struct misc_menu_data misc_menu_data;
 
@@ -2672,6 +2717,12 @@ void do_misc_menu()
 		}
 		m[35].value = PlayerCfg.PreferMyTeamColors;
 
+		m[36].type = NM_TYPE_TEXT;
+		m[36].text = "";
+
+		m[37].type = NM_TYPE_MENU;
+		m[37].text = "Kill Log + Scoreboard (MP)";
+
 		i = newmenu_do1(NULL, "Misc Options", SDL_arraysize(m), m, menu_misc_options_handler, &misc_menu_data, i);
 
 		PlayerCfg.AutoLeveling			= m[0].value;
@@ -2717,6 +2768,13 @@ int menu_misc_options_handler(newmenu* menu, d_event* event, void* userdata)
 	newmenu_item *menus = newmenu_get_items(menu);
 	int citem = newmenu_get_citem(menu);
 	struct misc_menu_data* menu_data = (struct misc_menu_data*)userdata;
+	
+	if (event->type == EVENT_NEWMENU_SELECTED) {
+		if (citem == 37) {  // Public Kill Log Options
+			do_public_kill_log_menu();
+			return 1;
+		}
+	}
 	
 	if (event->type == EVENT_NEWMENU_CHANGED) {
 		if (citem == 28) {

@@ -1434,6 +1434,7 @@ int choose_multi_spawn_point()
 				// Also divide it by 2; we want to discourage the selection of spawns within
 				// line-of-sight of other players.
 				fvi_query fq;
+				fvi_info hit_data;
 				fq.p0 = &Objects[Players[i].objnum].pos;
 				fq.p1 = &Player_init[start_num].pos;
 				fq.startseg = Objects[Players[i].objnum].segnum;
@@ -1441,7 +1442,7 @@ int choose_multi_spawn_point()
 				fq.thisobjnum = -1;
 				fq.ignore_obj_list = NULL;
 				fq.flags = 0;
-				if (find_vector_intersection(&fq, NULL) == HIT_NONE) {
+				if (find_vector_intersection(&fq, &hit_data) == HIT_NONE) {
 					distance = vm_vec_dist_quick(&Objects[Players[i].objnum].pos, &Player_init[start_num].pos) / 2;
 				}
 				else {

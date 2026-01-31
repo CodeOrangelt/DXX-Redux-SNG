@@ -124,11 +124,12 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_RANK                 , 3)	\
 	VALUE(MULTI_RESPAWN_ROBOT        , 60)	\
 	VALUE(MULTI_OBS_UPDATE           , 4 + 8*MAX_OBSERVERS)	\
-	VALUE(MULTI_DAMAGE               , 14)  \
+	VALUE(MULTI_DAMAGE               , 18)  \
 	VALUE(MULTI_REPAIR               , 11)  \
 	VALUE(MULTI_FLAGS				 , 6)   \
 	VALUE(MULTI_SHIP_STATUS          , 29)  \
 	VALUE(MULTI_CREATE_EXPLOSION2    , 24)  \
+	VALUE(MULTI_KILL_LOG_UPDATE      , 38)  \
 	AFTER
 for_each_multiplayer_command(enum {, define_multiplayer_command, });
 
@@ -729,6 +730,7 @@ typedef struct kill_log_event {
 	ubyte killer_id;
 	ubyte damage_type;
 	ubyte source_id;
+	fix total_damage; 
 	struct kill_log_event* next;
 } __pack__ kill_log_event;
 
@@ -736,9 +738,13 @@ typedef struct kill_log_event {
 extern kill_log_event* Kill_log;
 
 // Adds a damage stat for observatory UI.
-void add_observatory_damage_stat(int player_num, fix shields_delta, fix new_shields, fix old_shields, ubyte killer_type, ubyte killer_id, ubyte damage_type, ubyte source_id);
+void add_observatory_damage_stat(int player_num, fix shields_delta, fix new_shields, fix old_shields, ubyte killer_type, ubyte killer_id, ubyte damage_type, ubyte source_id, bool send_network_event);
 
 void reset_observatory_stats();
+
+// Public kill log network functions
+void multi_send_kill_log_event(ubyte killed_id, ubyte killer_type, ubyte killer_id, ubyte damage_type, ubyte source_id, fix total_damage);
+void multi_do_kill_log_update(const ubyte *buf);
 
 #define NUM_OBS_MODES 4
 extern const char* Obs_mode_names[NUM_OBS_MODES];

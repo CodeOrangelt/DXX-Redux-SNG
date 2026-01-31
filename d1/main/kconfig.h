@@ -39,6 +39,7 @@ typedef struct _control_info {
 	ubyte fire_primary_state, fire_primary_count, fire_secondary_state, fire_secondary_count, fire_flare_count, drop_bomb_count;
 	ubyte automap_state, automap_count;
 	ubyte cycle_primary_count, cycle_secondary_count, select_weapon_count;
+	ubyte scoreboard_state, scoreboard_count;
 	fix joy_axis[JOY_MAX_AXES], raw_joy_axis[JOY_MAX_AXES], mouse_axis[3], raw_mouse_axis[3];
 } control_info;
 
@@ -52,12 +53,16 @@ typedef struct _control_info {
 #define NUM_MOUSE_CONTROLS 29
 #define MAX_CONTROLS 50
 
+// SNG keys - separate from main controls count EACH purple input box
+#define NUM_VIEW_CONTROLS 3
+
 extern control_info Controls;
 extern void kconfig_read_controls(d_event *event, int automap_flag);
 extern void kconfig(int n, char *title);
 
 extern const ubyte DefaultKeySettingsD1X[MAX_D1X_CONTROLS];
 extern const ubyte DefaultKeySettings[3][MAX_CONTROLS];
+extern const ubyte DefaultViewKeySettings[NUM_VIEW_CONTROLS];
 
 extern void kc_set_controls();
 

@@ -3702,7 +3702,665 @@ int observer_maybe_show_streaks(int startY) {
 	return startY - height;
 }
 
+static int Show_scoreboard = 0;
+
+static int get_weapon_color_for_breakdown(int weapon_id) {
+	// Use the same color palette indices as weapon cycle messages
+	// Palette indices from weapon.c: primary_colors[] and secondary_colors[]
+	// Return the palette index directly (0-255) for use with gr_setcolor()
+	static int primary_palette[] = { 0x99/*laser*/, 0xB9/*vulcan*/, 0x53/*spreadfire*/, 0x98/*plasma*/, 0x63/*fusion*/};
+	static int secondary_palette[] = { 0x70/*concussion*/, 0x52/*homing*/, 0xc0/*proximity*/, 0x99/*smart*/, 0xc4/*mega*/};
+	
+	int pal_idx = -1;
+	
+	// Map weapon IDs to palette indices
+	switch (weapon_id) {
+		case LASER_ID_L1:
+		case LASER_ID_L2:
+		case LASER_ID_L3:
+		case LASER_ID_L4:
+			pal_idx = primary_palette[0]; // laser
+			break;
+		case VULCAN_ID:
+			pal_idx = primary_palette[1]; // vulcan
+			break;
+		case XSPREADFIRE_ID:
+		case SPREADFIRE_ID:
+		case SILENT_SPREADFIRE_ID:
+			pal_idx = primary_palette[2]; // spreadfire
+			break;
+		case PLASMA_ID:
+			pal_idx = primary_palette[3]; // plasma
+			break;
+		case FUSION_ID:
+			pal_idx = primary_palette[4]; // fusion
+			break;
+		case CONCUSSION_ID: 
+			pal_idx = secondary_palette[0]; // concussion
+			break;
+		case HOMING_ID:
+		case ROBOT_SMART_HOMING_ID:
+			pal_idx = secondary_palette[1]; // homing
+			break;
+		case PROXIMITY_ID:
+			pal_idx = secondary_palette[2]; // proximity
+			break;
+		case SMART_ID:
+		case PLAYER_SMART_HOMING_ID:
+			pal_idx = secondary_palette[3]; // smart
+			break;
+		case MEGA_ID:
+			pal_idx = secondary_palette[4]; // mega
+			break;
+		case SHIP_EXPLOSION_DAMAGE:
+			pal_idx = primary_palette[2]; // Use spreadfire color (orange) for explosions
+			break;
+		case SHIP_COLLISION_DAMAGE:
+			pal_idx = primary_palette[0]; // Use laser color (red) for ramming
+			break;
+		default:
+			return BM_XRGB(180, 180, 180); // Gray for unknown
+	}
+	
+	// Return palette index directly - gr_setcolor accepts palette indices (0-255)
+	if (pal_idx >= 0 && pal_idx < 256) {
+		return pal_idx;
+	}
+	
+	return BM_XRGB(90, 90, 90); // Fallback gray
+}
+
+// Show detailed kill statistics (hotkey accessible) - Modern Scoreboard
+void show_detailed_kill_stats()
+{
+	if (!(Game_mode & GM_MULTI) || !PlayerCfg.PublicKillLog)
+		return;
+	
+	if (PlayerCfg.ScoreboardSticky)
+	{
+		// Sticky mode: toggle on/off
+		Show_scoreboard = !Show_scoreboard;
+	}
+	else
+	{
+		// Momentary mode: show while key held
+		Show_scoreboard = 1;
+	}
+}
+
+// Hide scoreboard (for momentary mode when key released)
+void hide_scoreboard()
+{
+	if (!(Game_mode & GM_MULTI) || !PlayerCfg.PublicKillLog)
+		return;
+	
+	if (!PlayerCfg.ScoreboardSticky)
+	{
+		// Only hide in momentary mode
+		Show_scoreboard = 0;
+	}
+}
+
+// Render the scoreboard overlay
+static void render_scoreboard()
+{
+	if (!Show_scoreboard)
+		return;
+	
+	// Modern scoreboard with better layout
+	int canvas_w = grd_curcanv->cv_bitmap.bm_w;
+	int canvas_h = grd_curcanv->cv_bitmap.bm_h;
+	
+	// Background panel dimensions
+	int panel_w = canvas_w * 3 / 4;
+	int panel_h = canvas_h * 3 / 4;
+	int panel_x = (canvas_w - panel_w) / 2;
+	int panel_y = (canvas_h - panel_h) / 2;
+	
+	// Draw semi-transparent dark background
+	gr_settransblend(10, GR_BLEND_NORMAL);
+	gr_setcolor(BM_XRGB(0, 0, 0));
+	gr_urect(panel_x, panel_y, panel_x + panel_w, panel_y + panel_h);
+	gr_settransblend(GR_FADE_OFF, GR_BLEND_NORMAL);
+	
+	// Draw border in blue
+	gr_setcolor(BM_XRGB(0, 100, 200));
+	gr_ubox(panel_x, panel_y, panel_x + panel_w, panel_y + panel_h);
+	gr_ubox(panel_x + 1, panel_y + 1, panel_x + panel_w - 1, panel_y + panel_h - 1);
+	
+	// Title
+	gr_set_curfont(HUGE_FONT);
+	gr_set_fontcolor(BM_XRGB(0, 200, 255), -1);
+	int title_y = panel_y + 25;
+	gr_printf(0x8000, title_y, "SCOREBOARD");
+	
+	// Column headers
+	gr_set_curfont(GAME_FONT);
+	int header_y = title_y + 45;
+	int col1_x = panel_x + 30;  // Player name
+	int col2_x = panel_x + panel_w * 3 / 10;  // Kills
+	int col3_x = panel_x + panel_w * 4 / 10;  // Deaths  
+	int col4_x = panel_x + panel_w * 5 / 10;  // K/D Ratio
+	int col5_x = panel_x + panel_w * 6 / 10;  // Suicides
+	int col6_x = panel_x + panel_w * 7 / 10;  // Streak
+	
+	gr_set_fontcolor(BM_XRGB(200, 200, 200), -1);
+	gr_printf(col1_x, header_y, "PLAYER");
+	gr_printf(col2_x, header_y, "K");
+	gr_printf(col3_x, header_y, "D");
+	gr_printf(col4_x, header_y, "K/D");
+	gr_printf(col5_x, header_y, "SUC");
+	gr_printf(col6_x, header_y, "STR");
+	
+	// Player stats - start with more spacing below header
+	int row_y = header_y + 26;
+	int line_spacing = 20;
+	
+	// Sort players by kills (descending)
+	int sorted_indices[MAX_PLAYERS];
+	for (int i = 0; i < N_players; i++) {
+		sorted_indices[i] = i;
+	}
+	
+	// Bubble sort by kills
+	for (int i = 0; i < N_players - 1; i++) {
+		for (int j = 0; j < N_players - i - 1; j++) {
+			if (Players[sorted_indices[j]].net_kills_total < Players[sorted_indices[j + 1]].net_kills_total) {
+				int temp = sorted_indices[j];
+				sorted_indices[j] = sorted_indices[j + 1];
+				sorted_indices[j + 1] = temp;
+			}
+		}
+	}
+	
+	// Display sorted players
+	for (int idx = 0; idx < N_players && idx < 8; idx++) {
+		int i = sorted_indices[idx];
+		int kills = Players[i].net_kills_total;
+		int deaths = Players[i].net_killed_total;
+		int suicides = kill_matrix[i][i];  // Self-kills
+		int streak = Kill_streak[i];
+		float kd_ratio = (deaths > 0) ? (float)kills / deaths : (float)kills;
+		
+		// Player color
+		int color = get_color_for_player(i, 0);
+		int player_color = BM_XRGB(selected_player_rgb[color].r, 
+		                           selected_player_rgb[color].g, 
+		                           selected_player_rgb[color].b);
+		
+		// Player name
+		gr_set_fontcolor(player_color, -1);
+		gr_printf(col1_x, row_y, "%s", Players[i].callsign);
+		
+		// Stats in white
+		gr_set_fontcolor(BM_XRGB(255, 255, 255), -1);
+		gr_printf(col2_x, row_y, "%d", kills);
+		gr_printf(col3_x, row_y, "%d", deaths);
+		
+		// K/D ratio color coded
+		if (kd_ratio >= 2.0f)
+			gr_set_fontcolor(BM_XRGB(0, 255, 0), -1);  // Green
+		else if (kd_ratio >= 1.0f)
+			gr_set_fontcolor(BM_XRGB(255, 255, 0), -1);  // Yellow
+		else
+			gr_set_fontcolor(BM_XRGB(255, 80, 80), -1);  // Red
+		gr_printf(col4_x, row_y, "%.2f", kd_ratio);
+		
+		// Suicides in gray/white
+		gr_set_fontcolor(BM_XRGB(255, 255, 255), -1);
+		gr_printf(col5_x, row_y, "%d", suicides);
+		
+		// Streak color coded
+		if (streak >= 5)
+			gr_set_fontcolor(BM_XRGB(255, 215, 0), -1);  // Gold for hot streaks
+		else if (streak >= 3)
+			gr_set_fontcolor(BM_XRGB(255, 140, 0), -1);  // Orange for good streaks
+		else if (streak > 0)
+			gr_set_fontcolor(BM_XRGB(255, 255, 255), -1);  // White for active
+		else
+			gr_set_fontcolor(BM_XRGB(100, 100, 100), -1);  // Gray for no streak
+		gr_printf(col6_x, row_y, "%d", streak);
+		
+		row_y += line_spacing;
+	}
+	
+	// Add damage breakdown section
+	if (row_y < panel_y + panel_h - 100) {
+		// Separator line
+		row_y += 15;
+		gr_setcolor(BM_XRGB(0, 100, 200));
+		gr_uline(i2f(panel_x + 20), i2f(row_y), i2f(panel_x + panel_w - 20), i2f(row_y));
+		row_y += 20;
+		
+		// Damage breakdown title
+		gr_set_fontcolor(BM_XRGB(200, 200, 200), -1);
+		gr_printf(panel_x + 30, row_y, "LAST 2 DEATHS BREAKDOWN:");
+		row_y += 25;
+		
+		// Show damage breakdown for most recent 2 death events only (to fit in panel)
+		kill_log_event* kle = Kill_log;
+		int events_shown = 0;
+		int max_events = 2;  // Limit to last 2 deaths to avoid overflow with many players
+		ubyte players_shown[MAX_PLAYERS] = {0};  // Track which players we've shown
+		
+		while (kle != NULL && events_shown < max_events && row_y < panel_y + panel_h - 100) {
+			if (kle->killed_id >= MAX_PLAYERS || kle->killed_id >= N_players) {
+				kle = kle->next;
+				continue;
+			}
+			
+			// Skip if we've already shown this player's death
+			if (players_shown[kle->killed_id]) {
+				kle = kle->next;
+				continue;
+			}
+			
+			damage_taken_totals* dtt = First_damage_taken_previous_totals[kle->killed_id];
+			if (dtt == NULL) {
+				kle = kle->next;
+				continue;
+			}
+			
+			// Mark this player as shown
+			players_shown[kle->killed_id] = 1;
+			events_shown++;
+			
+			// Player name with more breathing room
+			int color = get_color_for_player(kle->killed_id, 0);
+			gr_set_fontcolor(BM_XRGB(selected_player_rgb[color].r, selected_player_rgb[color].g, selected_player_rgb[color].b), -1);
+			gr_printf(panel_x + 40, row_y, "%s:", Players[kle->killed_id].callsign);
+			row_y += line_spacing + 4;
+			
+			// Show top 3 damage sources with better spacing and color coding
+			int source_count = 0;
+			while (dtt != NULL && source_count < 3 && row_y < panel_y + panel_h - 100) {
+				char killer_name[32];
+				char weapon_name[32];
+				char damage_text[16];
+				int weapon_color;
+				
+				switch (dtt->killer_type) {
+					case OBJ_WALL:
+						if (dtt->damage_type == DAMAGE_LAVA) {
+							gr_set_fontcolor(BM_XRGB(255, 80, 0), -1); // Orange for lava
+							gr_printf(panel_x + 50, row_y, "  Lava: %d", f2i(dtt->total_damage));
+						} else {
+							gr_set_fontcolor(BM_XRGB(160, 160, 160), -1);
+							gr_printf(panel_x + 50, row_y, "  Wall: %d", f2i(dtt->total_damage));
+						}
+						break;
+					case OBJ_ROBOT:
+						gr_set_fontcolor(BM_XRGB(200, 100, 100), -1); // Light red for robots
+						gr_printf(panel_x + 50, row_y, "  Robot: %d", f2i(dtt->total_damage));
+						break;
+					case OBJ_PLAYER:
+						if (dtt->killer_id < MAX_PLAYERS && dtt->killer_id < N_players) {
+							strncpy(killer_name, Players[dtt->killer_id].callsign, sizeof(killer_name) - 1);
+							killer_name[sizeof(killer_name) - 1] = '\0';
+						} else {
+							strncpy(killer_name, "Player", sizeof(killer_name));
+						}
+						
+						// Get weapon color
+						weapon_color = get_weapon_color_for_breakdown(dtt->source_id);
+						
+						if (dtt->source_id == SHIP_EXPLOSION_DAMAGE) {
+							strncpy(weapon_name, "Explosion", sizeof(weapon_name));
+						} else {
+							strncpy(weapon_name, weapon_id_to_name(dtt->source_id), sizeof(weapon_name) - 1);
+							weapon_name[sizeof(weapon_name) - 1] = '\0';
+						}
+						
+						// Draw player name in their color
+						int killer_color = get_color_for_player(dtt->killer_id, 0);
+						int player_color = BM_XRGB(selected_player_rgb[killer_color].r, 
+						                            selected_player_rgb[killer_color].g, 
+						                            selected_player_rgb[killer_color].b);
+						gr_set_fontcolor(player_color, -1);
+						gr_printf(panel_x + 50, row_y, "  %s", killer_name);
+						
+						// Calculate position for weapon name
+						char player_prefix[64];
+						snprintf(player_prefix, sizeof(player_prefix), "  %s ", killer_name);
+						int sw, sh, aw;
+						gr_get_string_size(player_prefix, &sw, &sh, &aw);
+						int x_pos = panel_x + 50 + sw;
+						
+						// Draw opening parenthesis in white
+						gr_set_fontcolor(BM_XRGB(255, 255, 255), -1);
+						gr_printf(x_pos, row_y, "(");
+						gr_get_string_size("(", &sw, &sh, &aw);
+						x_pos += sw;
+						
+						// Draw weapon name in weapon color
+						gr_set_fontcolor(weapon_color, -1);
+						gr_printf(x_pos, row_y, "%s", weapon_name);
+						gr_get_string_size(weapon_name, &sw, &sh, &aw);
+						x_pos += sw;
+						
+						// Draw closing parenthesis in white
+						gr_set_fontcolor(BM_XRGB(255, 255, 255), -1);
+						gr_printf(x_pos, row_y, ")");
+						gr_get_string_size(")", &sw, &sh, &aw);
+						x_pos += sw;
+						
+						// Draw colon in white
+						gr_set_fontcolor(BM_XRGB(255, 255, 255), -1);
+						gr_printf(x_pos, row_y, ":");
+						gr_get_string_size(":", &sw, &sh, &aw);
+						x_pos += sw;
+						
+						// Draw damage number in red
+						gr_set_fontcolor(BM_XRGB(255, 64, 64), -1);
+						snprintf(damage_text, sizeof(damage_text), " %d", f2i(dtt->total_damage));
+						gr_printf(x_pos, row_y, "%s", damage_text);
+						break;
+					case OBJ_CNTRLCEN:
+						gr_set_fontcolor(BM_XRGB(255, 255, 100), -1); // Yellow for reactor
+						gr_printf(panel_x + 50, row_y, "  Reactor: %d", f2i(dtt->total_damage));
+						break;
+					default:
+						gr_set_fontcolor(BM_XRGB(150, 150, 150), -1);
+						gr_printf(panel_x + 50, row_y, "  Unknown: %d", f2i(dtt->total_damage));
+						break;
+				}
+				row_y += line_spacing;
+				
+				dtt = dtt->next;
+				source_count++;
+			}
+			
+			// Extra spacing between different players' damage breakdowns
+			row_y += 8;
+			kle = kle->next;
+		}
+	}
+	
+	// Add kills over time graph section
+	if (row_y < panel_y + panel_h - 100) {
+		// Separator line
+		row_y += 15;
+		gr_setcolor(BM_XRGB(0, 100, 200));
+		gr_uline(i2f(panel_x + 20), i2f(row_y), i2f(panel_x + panel_w - 20), i2f(row_y));
+		row_y += 20;
+		
+		// Kill graph title
+		gr_set_fontcolor(BM_XRGB(200, 200, 200), -1);
+		gr_printf(panel_x + 30, row_y, "KILLS OVER TIME:");
+		row_y += 20;
+		
+		// Draw kill graph - copied from OBS mode
+		int pnum;
+		kill_event *ev;
+		int minscore = 0;
+		int maxscore = 0;
+		int x, y;
+		int scorescale = 0;
+		int timescale = 0;
+		int gridminy, gridmaxy;
+		char score[10];
+		int sw, sh, aw;
+		int gridminx, gridminx2, gridmaxx;
+		char time[10];
+		int color;
+		kill_event *last_ev;
+		int old_x, old_y;
+
+#ifdef OGL
+		glLineWidth(1);
+#endif
+
+		// Find min and max scores across all players
+		for (int i = 0; i < N_players; i++) {
+			if ((ev = First_event[i]) != NULL) {
+				while(ev != NULL) {
+					if (ev->score < minscore)
+						minscore = ev->score;
+					if (ev->score > maxscore)
+						maxscore = ev->score;
+					ev = ev->next;
+				}
+			}
+		}
+
+		if (minscore != maxscore) {
+			gr_set_curfont( GAME_FONT );
+			gr_set_fontcolor(BM_XRGB(31, 31, 31), -1);
+
+			// Determine the numbers to use on the axis.  We want a maximum of 6 vertically (including 0) and 12 horizontally (not including 0).
+			scorescale = 1;
+			while (trunc((float)maxscore / (float)scorescale) - trunc((float)minscore / (float)scorescale) > 5) {
+				switch (scorescale) {
+					case 1:
+						scorescale = 2;
+						break;
+					case 2:
+						scorescale = 5;
+						break;
+					case 5:
+						scorescale = 10;
+						break;
+					case 10:
+						scorescale = 20;
+						break;
+					case 20:
+						scorescale = 25;
+						break;
+					case 25:
+						scorescale = 50;
+						break;
+					case 50:
+						scorescale = 100;
+						break;
+					case 100:
+						scorescale = 200;
+						break;
+					case 200:
+						scorescale = 250;
+						break;
+					case 250:
+						scorescale = 500;
+						break;
+					case 500:
+						scorescale = 1000;
+						break;
+					case 1000:
+						scorescale = 2000;
+						break;
+					case 2000:
+						scorescale = 2500;
+						break;
+					case 2500:
+						scorescale = 5000;
+						break;
+					case 5000:
+						scorescale = 10000;
+						break;
+					case 10000:
+						scorescale = 20000;
+						break;
+					case 20000:
+						scorescale = 25000;
+						break;
+					case 25000:
+						scorescale = 50000;
+						break;
+					case 50000:
+						scorescale = 100000;
+						break;
+					case 100000:
+						scorescale = 200000;
+						break;
+					case 200000:
+						scorescale = 250000;
+						break;
+					case 250000:
+						scorescale = 500000;
+						break;
+					case 500000:
+						scorescale = 1000000;
+						break;
+					case 1000000:
+						scorescale = 2000000;
+						break;
+					case 2000000:
+						scorescale = 2500000;
+						break;
+					case 2500000:
+						scorescale = 5000000;
+						break;
+					case 5000000:
+						scorescale = 10000000;
+						break;
+					case 10000000:
+						scorescale = 20000000;
+						break;
+					case 20000000:
+						scorescale = 25000000;
+						break;
+					case 25000000:
+						scorescale = 50000000;
+						break;
+					case 50000000:
+						scorescale = 100000000;
+						break;
+				}
+			}
+
+			timescale = 1;
+			while ((GameTime64 / 60) / i2f(timescale) > 12) {
+				switch (timescale) {
+					case 1:
+						timescale = 2;
+						break;
+					case 2:
+						timescale = 5;
+						break;
+					case 5:
+						timescale = 10;
+						break;
+					case 10:
+						timescale = 15;
+						break;
+					case 15:
+						timescale = 20;
+						break;
+					case 20:
+						timescale = 30;
+						break;
+					case 30:
+						timescale = 60;
+						break;
+					case 60:
+						timescale = 120;
+						break;
+					case 120:
+						timescale = 240;
+						break;
+				}
+			}
+			
+			// Adapt positioning to fit in scoreboard panel
+			int graph_height = 100;
+			int space_left = (panel_y + panel_h - 60) - row_y;
+			if (space_left < graph_height) {
+				graph_height = space_left;
+			}
+			
+			gridminy = row_y + graph_height;
+			gridmaxy = row_y + 5;
+
+			snprintf(score, sizeof(score) / sizeof(score[0]), "%i", minscore);
+			gr_get_string_size(score, &sw, &sh, &aw);
+			gridminx = panel_x + 40 + sw;
+
+			snprintf(score, sizeof(score) / sizeof(score[0]), "%i", maxscore);
+			gr_get_string_size(score, &sw, &sh, &aw);
+			gridminx2 = panel_x + 40 + sw;
+
+			if (gridminx2 > gridminx) {
+				gridminx = gridminx2;
+			}
+
+			gridmaxx = panel_x + panel_w - 40;
+
+			// Use smaller font for graph numbers
+			gr_set_curfont(GAME_FONT); // Replace SMALL_FONT with GAME_FONT or define SMALL_FONT appropriately
+			gr_set_fontcolor(BM_XRGB(180, 180, 180), -1);
+
+			for (int i = trunc((float)minscore / (float)scorescale); i <= maxscore; i += scorescale) {
+				y = gridminy - (int)((float)(gridminy - gridmaxy) * (((float)(i - minscore)) / (float)(maxscore - minscore)));
+				snprintf(score, sizeof(score) / sizeof(score[0]), "%i", i);
+				gr_get_string_size(score, &sw, &sh, &aw);
+				gr_printf(gridminx - sw, y - sh / 2, "%s", score);
+				gr_setcolor(BM_XRGB(12, 12, 12));
+				gr_line(i2f(gridminx), i2f(y), i2f(gridmaxx), i2f(y));
+			}
+
+			for (int i = 0; i2f(i) < GameTime64; i += timescale * 60) {
+				x = gridminx + (int)((float)(gridmaxx - gridminx) * (((float)i2f(i)) / (float)(GameTime64)));
+				if (i > 0) {
+					snprintf(time, sizeof(time) / sizeof(time[0]), "%i", i / 60);
+					gr_get_string_size(time, &sw, &sh, &aw);
+					gr_printf(x - sw / 2, gridminy + 1, "%s", time);
+				}
+				gr_setcolor(BM_XRGB(12, 12, 12));
+				gr_line(i2f(x), i2f(gridminy), i2f(x), i2f(gridmaxy));
+			}
+
+			for (int i = 0; i < N_players; i++) {
+				if ((ev = First_event[i]) != NULL) {
+					if (Game_mode & GM_TEAM) {
+						color = get_color_for_team(i);
+						gr_setcolor(BM_XRGB(selected_player_rgb[color].r,selected_player_rgb[color].g,selected_player_rgb[color].b));
+					} else {
+						color = get_color_for_player(i, 0);
+						gr_setcolor(BM_XRGB(selected_player_rgb[color].r,selected_player_rgb[color].g,selected_player_rgb[color].b));
+					}
+
+					last_ev = ev;
+					while (ev->next != NULL) {
+						ev = ev->next;
+						if (ev->score != last_ev->score) {
+							old_x = gridminx + (int)((float)(gridmaxx - gridminx) * (((float)last_ev->timestamp) / (float)GameTime64));
+							old_y = gridminy - (int)((float)(gridminy - gridmaxy) * (((float)(last_ev->score - minscore)) / (float)(maxscore - minscore)));
+							x = gridminx + (int)((float)(gridmaxx - gridminx) * (((float)ev->timestamp) / (float)GameTime64));
+							y = gridminy - (int)((float)(gridminy - gridmaxy) * (((float)(ev->score - minscore)) / (float)(maxscore - minscore)));
+
+							gr_line(i2f(old_x), i2f(old_y), i2f(x), i2f(old_y));
+							gr_line(i2f(x), i2f(old_y), i2f(x), i2f(y));
+
+							last_ev = ev;
+						}
+					}
+
+					old_x = gridminx + (int)((float)(gridmaxx - gridminx) * (((float)last_ev->timestamp) / (float)GameTime64));
+					old_y = gridminy - (int)((float)(gridminy - gridmaxy) * (((float)(last_ev->score - minscore)) / (float)(maxscore - minscore)));
+
+					gr_line(i2f(old_x), i2f(old_y), i2f(gridmaxx), i2f(old_y));
+				}
+			}
+
+#ifdef OGL
+			glLineWidth(linedotscale);
+#endif
+			// Reset font for footer
+			gr_set_curfont(GAME_FONT);
+		}
+	}
+	
+	// Footer text with proper spacing from bottom
+	gr_set_curfont(GAME_FONT);
+	gr_set_fontcolor(BM_XRGB(150, 150, 150), -1);
+	int footer_y = panel_y + panel_h - 25;
+	gr_printf(0x8000, footer_y, "Made with <3 for the Descent community");
+}
+
 void observer_maybe_show_death_log(int y) {
+	// Skip kill log display during death/respawn sequence for non-observers to prevent crash
+	if (!is_observer() && (Player_is_dead || Player_exploded))
+		return;
+	
 	kill_log_event* kle = Kill_log;
 
 	int color;
@@ -3720,7 +4378,20 @@ void observer_maybe_show_death_log(int y) {
 
 	gr_set_curfont( GAME_FONT );
 
-	while (kle != NULL && GameTime64 - kle->timestamp < i2f(5)) {
+	// Use configured duration for public kill log, or default 5 seconds for observers
+	int duration = (!is_observer() && PlayerCfg.PublicKillLog) ? PlayerCfg.KillLogDuration : 5;
+	
+	// Only show the last kill event for public kill log, multiple for observers
+	int events_shown = 0;
+	int max_events = (is_observer() ? 10 : 1);  // Only 1 event for public kill log
+	
+	while (kle != NULL && GameTime64 - kle->timestamp < i2f(duration) && events_shown < max_events) {
+		// Validate killed_id before accessing Players array to prevent crash on respawn
+		if (kle->killed_id >= MAX_PLAYERS || kle->killed_id >= N_players) {
+			kle = kle->next;
+			continue;
+		}
+		
 		snprintf(killed, sizeof(killed) / sizeof(killed[0]), "%s", Players[kle->killed_id].callsign);
 
 		color = get_color_for_player(kle->killed_id, 0);
@@ -3739,7 +4410,11 @@ void observer_maybe_show_death_log(int y) {
 				reason[0] = '\0';
 				break;
 			case OBJ_PLAYER:
-				if (kle->killer_id == kle->killed_id) {
+				// Validate killer_id before accessing Players array
+				if (kle->killer_id >= MAX_PLAYERS || kle->killer_id >= N_players) {
+					snprintf(killer, sizeof(killer) / sizeof(killer[0]), "Player");
+					killer_color = BM_XRGB(12, 12, 12);
+				} else if (kle->killer_id == kle->killed_id) {
 					killer[0] = '\0';
 				} else {
 					snprintf(killer, sizeof(killer) / sizeof(killer[0]), "%s",
@@ -3803,115 +4478,34 @@ void observer_maybe_show_death_log(int y) {
 
 		// Draw reason
 		if (reason[0] != '\0') {
-			gr_get_string_size(reason, &sw, &sh, &aw);
+			// For public kill log, respect the "Show Weapon Names" setting
+			// For observers, always show the weapon
+			int show_weapon = is_observer() || !PlayerCfg.PublicKillLog || PlayerCfg.KillLogShowWeapon;
+			
+			if (show_weapon) {
+				gr_get_string_size(reason, &sw, &sh, &aw);
+				x -= sw;
+				gr_set_fontcolor(reason_color, -1);
+				gr_printf(x, y, reason);
+				x -= 8;
+			}
+		}
+		
+		// Draw damage amount if enabled
+		if ((!is_observer() && PlayerCfg.PublicKillLog && PlayerCfg.KillLogShowDamage) || 
+		    (is_observer() && PlayerCfg.ObsShowDamage[get_observer_game_mode()])) {
+			char damage_str[16];
+			snprintf(damage_str, sizeof(damage_str), "-%d", f2i(kle->total_damage));
+			gr_get_string_size(damage_str, &sw, &sh, &aw);
 			x -= sw;
-			gr_set_fontcolor(reason_color, -1);
-			gr_printf(x, y, reason);
+			gr_set_fontcolor(BM_XRGB(255, 64, 64), -1);  // Red color for damage
+			gr_printf(x, y, "%s", damage_str);
 			x -= 8;
 		}
 
 		kle = kle->next;
+		events_shown++;
 		y += LINE_SPACING;
-	}
-	
-	if (PlayerCfg.ObsShowDeathSummary[get_observer_game_mode()]) {
-		kle = Kill_log;
-
-		damage_taken_totals* dtt;
-		char damage_for[32];
-		bool player_shown[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-		while (kle != NULL && GameTime64 - kle->timestamp < i2f(15)) {
-			if (player_shown[kle->killed_id] == 1) {
-				kle = kle->next;
-				continue;
-			}
-			player_shown[kle->killed_id] = 1;
-
-			y += 10;
-		
-			color = get_color_for_player(kle->killed_id, 0);
-			gr_set_fontcolor(BM_XRGB(selected_player_rgb[color].r,selected_player_rgb[color].g,selected_player_rgb[color].b), -1);
-
-			snprintf(damage_for, sizeof(damage_for) / sizeof(damage_for[0]), "Top damage for %s:",
-				Players[kle->killed_id].callsign);
-
-			x = grd_curcanv->cv_bitmap.bm_w - 5;
-			gr_get_string_size(damage_for, &sw, &sh, &aw);
-			x -= sw;
-			gr_printf(x, y, damage_for);
-			y += LINE_SPACING;
-
-			dtt = First_damage_taken_previous_totals[kle->killed_id];
-			int i = 0;
-
-			while (dtt != NULL && i < 3) {
-				switch (dtt->killer_type) {
-					case OBJ_WALL:
-						if (dtt->damage_type == DAMAGE_LAVA) {
-							snprintf(killer, sizeof(killer) / sizeof(killer[0]), "Lava");
-						} else {
-							snprintf(killer, sizeof(killer) / sizeof(killer[0]), "Wall");
-						}
-						reason[0] = '\0';
-						break;
-					case OBJ_ROBOT:
-						snprintf(killer, sizeof(killer) / sizeof(killer[0]), "Robot");
-						reason[0] = '\0';
-						break;
-					case OBJ_PLAYER:
-						snprintf(killer, sizeof(killer) / sizeof(killer[0]), "%s",
-							Players[dtt->killer_id].callsign);
-
-						switch (dtt->damage_type) {
-							case DAMAGE_WEAPON:
-							case DAMAGE_BLAST:
-								if (dtt->source_id == SHIP_EXPLOSION_DAMAGE) {
-									snprintf(reason, sizeof(reason) / sizeof(reason[0]), "Explosion");
-								} else {
-									snprintf(reason, sizeof(reason) / sizeof(reason[0]), "%s",
-										weapon_id_to_name(dtt->source_id));
-								}
-								break;
-							case DAMAGE_COLLISION:
-								snprintf(reason, sizeof(reason) / sizeof(reason[0]), "Ramming");
-								break;
-							case DAMAGE_LAVA:
-								snprintf(reason, sizeof(reason) / sizeof(reason[0]), "Lava");
-								break;
-							case DAMAGE_OVERCHARGE:
-								snprintf(reason, sizeof(reason) / sizeof(reason[0]), "Overcharge");
-								break;
-						}
-						break;
-					case OBJ_CNTRLCEN:
-						snprintf(killer, sizeof(killer) / sizeof(killer[0]), "Reactor");
-						reason[0] = '\0';
-						break;
-				}
-
-				if (killer[0] == '\0') {
-					snprintf(damage_for, sizeof(damage_for) / sizeof(damage_for[0]), "%s %0.1f",
-						reason, f2fl(dtt->total_damage));
-				} else if (reason[0] == '\0') {
-					snprintf(damage_for, sizeof(damage_for) / sizeof(damage_for[0]), "%s %0.1f",
-						killer, f2fl(dtt->total_damage));
-				} else {
-					snprintf(damage_for, sizeof(damage_for) / sizeof(damage_for[0]), "%s's %s %0.1f",
-						killer, reason, f2fl(dtt->total_damage));
-				}
-
-				x = grd_curcanv->cv_bitmap.bm_w - 5;
-				gr_get_string_size(damage_for, &sw, &sh, &aw);
-				x -= sw;
-				gr_printf(x, y, damage_for);
-				y += LINE_SPACING;
-
-				dtt = dtt->next;
-				i++;
-			}
-
-			kle = kle->next;
-		}
 	}
 }
 
@@ -4410,6 +5004,12 @@ void draw_hud()
 			show_time();
 #endif
 		HUD_render_message_frame();
+		
+		// Show kill feed for non-observer multiplayer (using observatory kill log)
+		if (Game_mode & GM_MULTI && !is_observer() && PlayerCfg.PublicKillLog) {
+			int kill_log_y = 10;  // Top of screen
+			observer_maybe_show_death_log(kill_log_y);
+		}
 
 		if (PlayerCfg.CurrentCockpitMode!=CM_STATUS_BAR)
 			hud_show_lives();
@@ -4419,6 +5019,10 @@ void draw_hud()
 			show_reticle(PlayerCfg.ReticleType, 1);
 		if (PlayerCfg.CurrentCockpitMode != CM_LETTERBOX && Newdemo_state != ND_STATE_PLAYBACK && (PlayerCfg.MouseControlStyle == MOUSE_CONTROL_FLIGHT_SIM) && PlayerCfg.MouseFSIndicator) /* Old School Mouse */
 			show_mousefs_indicator(Controls.raw_mouse_axis[0], Controls.raw_mouse_axis[1], Controls.raw_mouse_axis[2], GWIDTH/2, GHEIGHT/2, GHEIGHT/4);
+		
+		// Render scoreboard overlay on top of everything
+		render_scoreboard();
+		
 		if (Game_mode & GM_MULTI && PlayerCfg.ObsShowObs[get_observer_game_mode()])
 		{
 			int startY = GHEIGHT;

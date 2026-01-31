@@ -72,6 +72,7 @@ int new_player_config()
 	PlayerCfg.ControlType=0; // Assume keyboard
 	memcpy(PlayerCfg.KeySettings, DefaultKeySettings, sizeof(DefaultKeySettings));
 	memcpy(PlayerCfg.KeySettingsD1X, DefaultKeySettingsD1X, sizeof(DefaultKeySettingsD1X));
+	memcpy(PlayerCfg.KeySettingsView, DefaultViewKeySettings, sizeof(DefaultViewKeySettings));
 	kc_set_controls();
 
 	PlayerCfg.DefaultDifficulty = 1;
@@ -148,8 +149,15 @@ int new_player_config()
 		PlayerCfg.ObsIncreaseThirdPersonDist[obs_mode] = 0;
 		PlayerCfg.ObsHideEnergyWeaponMuzzle[obs_mode] = 0;
 	}
+	
+	// Public kill log defaults
+	PlayerCfg.PublicKillLog = 0;
+	PlayerCfg.KillLogShowWeapon = 1;
+	PlayerCfg.KillLogShowDamage = 0;
+	PlayerCfg.KillLogDuration = 5;
 	PlayerCfg.NoChatSound = 0;
 	PlayerCfg.ClassicAutoselectWeapon = 0;
+	PlayerCfg.ScoreboardSticky = 0;
 
 	// Default taunt macros
 	#ifdef NETWORK
@@ -363,13 +371,20 @@ int read_player_d1x(char *filename)
 				unsigned int kc1=0,kc2=0,kc3=0;
 				int i=atoi(word);
 				
-				if(i==0) i=10;
+				// Handle scoreboard key (single key, not 3-key group)
+				if(strcmp(word, "S") == 0) {
+					sscanf(line,"0x%x",&kc1);
+					PlayerCfg.KeySettingsD1X[30] = kc1;
+				}
+				else {
+					if(i==0) i=10;
 					i=(i-1)*3;
-		
-				sscanf(line,"0x%x,0x%x,0x%x",&kc1,&kc2,&kc3);
-				PlayerCfg.KeySettingsD1X[i]   = kc1;
-				PlayerCfg.KeySettingsD1X[i+1] = kc2;
-				PlayerCfg.KeySettingsD1X[i+2] = kc3;
+			
+					sscanf(line,"0x%x,0x%x,0x%x",&kc1,&kc2,&kc3);
+					PlayerCfg.KeySettingsD1X[i]   = kc1;
+					PlayerCfg.KeySettingsD1X[i+1] = kc2;
+					PlayerCfg.KeySettingsD1X[i+2] = kc3;
+				}
 				d_free(word);
 				PHYSFSX_fgets(line,50,f);
 				word=splitword(line,'=');
@@ -469,6 +484,16 @@ int read_player_d1x(char *filename)
 					PlayerCfg.NoChatSound = atoi(line);
 				if(!strcmp(word,"CLASSICAUTOSELECTWEAPON"))
 					PlayerCfg.ClassicAutoselectWeapon = atoi(line);
+				if(!strcmp(word,"SCOREBOARDSTICKY"))
+					PlayerCfg.ScoreboardSticky = atoi(line);
+				if(!strcmp(word,"PUBLICKILLOG"))
+					PlayerCfg.PublicKillLog = atoi(line);
+				if(!strcmp(word,"KILLLOGSHOWWEAPON"))
+					PlayerCfg.KillLogShowWeapon = atoi(line);
+				if(!strcmp(word,"KILLLOGSHOWDAMAGE"))
+					PlayerCfg.KillLogShowDamage = atoi(line);
+				if(!strcmp(word,"KILLLOGDURATION"))
+					PlayerCfg.KillLogDuration = atoi(line);
 
 				// Observer settings - migrate from old version
 				// If migrating from an older version, set all observer modes to the same value
@@ -887,6 +912,7 @@ int write_player_d1x(char *filename)
 		PHYSFSX_printf(fout,"8=0x%x,0x%x,0x%x\n",PlayerCfg.KeySettingsD1X[21],PlayerCfg.KeySettingsD1X[22],PlayerCfg.KeySettingsD1X[23]);
 		PHYSFSX_printf(fout,"9=0x%x,0x%x,0x%x\n",PlayerCfg.KeySettingsD1X[24],PlayerCfg.KeySettingsD1X[25],PlayerCfg.KeySettingsD1X[26]);
 		PHYSFSX_printf(fout,"0=0x%x,0x%x,0x%x\n",PlayerCfg.KeySettingsD1X[27],PlayerCfg.KeySettingsD1X[28],PlayerCfg.KeySettingsD1X[29]);
+		PHYSFSX_printf(fout,"s=0x%x\n",PlayerCfg.KeySettingsD1X[30]);
 		PHYSFSX_printf(fout,"[end]\n");
 		PHYSFSX_printf(fout,"[cockpit]\n");
 		PHYSFSX_printf(fout,"mode=%i\n",PlayerCfg.PreferredCockpitMode);
@@ -924,6 +950,11 @@ int write_player_d1x(char *filename)
 		PHYSFSX_printf(fout,"maxfps=%i\n",PlayerCfg.maxFps);	
 		PHYSFSX_printf(fout,"nochatsound=%i\n",PlayerCfg.NoChatSound);
 		PHYSFSX_printf(fout,"classicautoselectweapon=%i\n",PlayerCfg.ClassicAutoselectWeapon);
+		PHYSFSX_printf(fout,"scoreboardsticky=%i\n",PlayerCfg.ScoreboardSticky);
+		PHYSFSX_printf(fout,"publickillog=%i\n",PlayerCfg.PublicKillLog);
+		PHYSFSX_printf(fout,"killlogshowweapon=%i\n",PlayerCfg.KillLogShowWeapon);
+		PHYSFSX_printf(fout,"killlogshowdamage=%i\n",PlayerCfg.KillLogShowDamage);
+		PHYSFSX_printf(fout,"killlogduration=%i\n",PlayerCfg.KillLogDuration);
 		PHYSFSX_printf(fout,"[end]\n");
 		PHYSFSX_printf(fout, "[observer]\n");
 		PHYSFSX_printf(fout, "obssharesettings=%i\n", PlayerCfg.ObsShareSettings);

@@ -262,8 +262,16 @@ void add_observatory_stat(int player_num, ubyte event_type) {
 	}
 }
 
-void add_observatory_damage_stat(int player_num, fix shields_delta, fix new_shields, fix old_shields, ubyte killer_type, ubyte killer_id, ubyte damage_type, ubyte source_id) {
+void add_observatory_damage_stat(int player_num, fix shields_delta, fix new_shields, fix old_shields, ubyte killer_type, ubyte killer_id, ubyte damage_type, ubyte source_id, bool send_network_event) {
 	bool death = 0;
+
+	// Validate player_num to prevent array out of bounds access
+	if (player_num < 0 || player_num >= MAX_PLAYERS)
+		return;
+	
+	// Validate killer_id when killer is a player to prevent array out of bounds access
+	if (killer_type == OBJ_PLAYER && killer_id >= MAX_PLAYERS)
+		return;
 
 	// Set shields delta to old_shields if there was a kill.
 	if (new_shields <= 0 && shields_delta > old_shields) {
@@ -470,7 +478,7 @@ void add_observatory_damage_stat(int player_num, fix shields_delta, fix new_shie
 			dtt = next_dtt;
 		}
 
-		// Add to the kill log.
+		// Add to the kill log locally (includes all the damage breakdown data)
 		kill_log_event* kle = (kill_log_event*)d_malloc(sizeof(kill_log_event));
 		kle->timestamp = GameTime64;
 		kle->killed_id = player_num;
@@ -478,8 +486,14 @@ void add_observatory_damage_stat(int player_num, fix shields_delta, fix new_shie
 		kle->killer_id = killer_id;
 		kle->damage_type = damage_type;
 		kle->source_id = source_id;
+		kle->total_damage = shields_delta;
 		kle->next = Kill_log;
 		Kill_log = kle;
+
+		// Send kill log event to all players for public kill log (only if requested)
+		if (send_network_event) {
+			multi_send_kill_log_event(player_num, killer_type, killer_id, damage_type, source_id, shields_delta);
+		}
 
 		// Show the player's most recent death until the time listed.
 		Show_death_until[player_num] = GameTime64 + i2f(15);
@@ -2421,6 +2435,163 @@ void multi_obs_check_all_escaped()
 	}
 
 	PlayerFinishedLevel(0);
+}
+
+// Send kill log event to all players for public kill log feature
+void multi_send_kill_log_event(ubyte killed_id, ubyte killer_type, ubyte killer_id, 
+                                ubyte damage_type, ubyte source_id, fix total_damage)
+{
+	// Observers don't send kill events
+	if (is_observer())
+		return;
+	
+	// Validate player IDs to prevent sending invalid data
+	if (killed_id >= MAX_PLAYERS || killed_id >= N_players)
+		return;
+	if (killer_type == OBJ_PLAYER && (killer_id >= MAX_PLAYERS || killer_id >= N_players))
+		return;
+	
+	int count = 0;
+	multibuf[count++] = MULTI_KILL_LOG_UPDATE;
+	multibuf[count++] = killed_id;
+	multibuf[count++] = killer_type;
+	multibuf[count++] = killer_id;
+	multibuf[count++] = damage_type;
+	multibuf[count++] = source_id;
+	PUT_INTEL_INT(multibuf + count, GameTime64); count += 4;
+	PUT_INTEL_INT(multibuf + count, total_damage); count += 4;  // Add damage amount
+	
+	// Pack top 3 damage sources for scoreboard display
+	damage_taken_totals* dtt = First_damage_taken_previous_totals[killed_id];
+	int sources_sent = 0;
+	while (dtt != NULL && sources_sent < 3) {
+		multibuf[count++] = dtt->killer_type;
+		multibuf[count++] = dtt->killer_id;
+		multibuf[count++] = dtt->damage_type;
+		multibuf[count++] = dtt->source_id;
+		PUT_INTEL_INT(multibuf + count, dtt->total_damage); count += 4;
+		dtt = dtt->next;
+		sources_sent++;
+	}
+	// Pad remaining slots with zeros
+	while (sources_sent < 3) {
+		multibuf[count++] = 0;  // killer_type = 0 means empty
+		multibuf[count++] = 0;
+		multibuf[count++] = 0;
+		multibuf[count++] = 0;
+		PUT_INTEL_INT(multibuf + count, 0); count += 4;
+		sources_sent++;
+	}
+	
+	if (multi_i_am_master())
+	{
+		// Master broadcasts to all other players
+		for (int i = 0; i < N_players; i++)
+		{
+			if (i != Player_num && Players[i].connected != CONNECT_DISCONNECTED)
+			{
+				multi_send_data_direct(multibuf, count, i, 1);
+			}
+		}
+	}
+	else
+	{
+		// Non-master sends to master who will broadcast
+		multi_send_data_direct(multibuf, count, 0, 1);
+	}
+}
+
+// Receive and add kill log event for public display
+void multi_do_kill_log_update(const ubyte *buf)
+{
+	if (!PlayerCfg.PublicKillLog)
+		return;
+		
+	ubyte killed_id = buf[1];
+	ubyte killer_type = buf[2];
+	ubyte killer_id = buf[3];
+	ubyte damage_type = buf[4];
+	ubyte source_id = buf[5];
+	fix64 timestamp = GET_INTEL_INT(buf + 6);
+	fix total_damage = GET_INTEL_INT(buf + 10);  // Read damage amount
+	
+	// Validate player IDs to prevent crashes
+	if (killed_id >= MAX_PLAYERS || killed_id >= N_players)
+		return;
+	if (killer_type == OBJ_PLAYER && (killer_id >= MAX_PLAYERS || killer_id >= N_players))
+		return;
+	
+	// Don't add kill log entries for disconnected players
+	if (Players[killed_id].connected != CONNECT_PLAYING && 
+	    Players[killed_id].connected != CONNECT_DIED_IN_MINE)
+		return;
+	
+	// If master receives from client, broadcast to all players (including sender)
+	// Determine actual packet size
+	int packet_size = 14 + (3 * 8);  // Base + 3 damage sources * 8 bytes each
+	
+	if (multi_i_am_master())
+	{
+		for (int i = 0; i < N_players; i++)
+		{
+			if (i != Player_num && Players[i].connected != CONNECT_DISCONNECTED)
+			{
+				multi_send_data_direct((ubyte*)buf, packet_size, i, 1);
+			}
+		}
+	}
+	
+	// Clear existing damage breakdown to prevent duplicates/inconsistencies
+	damage_taken_totals* dtt_clear = First_damage_taken_previous_totals[killed_id];
+	while (dtt_clear != NULL) {
+		damage_taken_totals* next = dtt_clear->next;
+		d_free(dtt_clear);
+		dtt_clear = next;
+	}
+	First_damage_taken_previous_totals[killed_id] = NULL;
+	
+	// Rebuild damage breakdown from packet (top 3 sources) - ensures everyone has identical data
+	int offset = 14;
+	for (int i = 0; i < 3; i++) {
+		ubyte src_killer_type = buf[offset++];
+		ubyte src_killer_id = buf[offset++];
+		ubyte src_damage_type = buf[offset++];
+		ubyte src_source_id = buf[offset++];
+		fix src_damage = GET_INTEL_INT(buf + offset); offset += 4;
+		
+		if (src_killer_type != 0 && src_damage > 0) {
+			// Add this damage source to the player's previous totals
+			damage_taken_totals* dtt = (damage_taken_totals*)d_malloc(sizeof(damage_taken_totals));
+			if (dtt != NULL) {
+				dtt->total_damage = src_damage;
+				dtt->killer_type = src_killer_type;
+				dtt->killer_id = src_killer_id;
+				dtt->damage_type = src_damage_type;
+				dtt->source_id = src_source_id;
+				dtt->next = First_damage_taken_previous_totals[killed_id];
+				dtt->prev = NULL;
+				if (First_damage_taken_previous_totals[killed_id] != NULL) {
+					First_damage_taken_previous_totals[killed_id]->prev = dtt;
+				}
+				First_damage_taken_previous_totals[killed_id] = dtt;
+			}
+		}
+	}
+	
+	// Add to local kill log (everyone including sender)
+	kill_log_event* kle = (kill_log_event*)d_malloc(sizeof(kill_log_event));
+	if (kle == NULL)
+		return;  // Memory allocation failed
+	
+	kle->timestamp = timestamp;
+	kle->killed_id = killed_id;
+	kle->killer_type = killer_type;
+	kle->killer_id = killer_id;
+	kle->damage_type = damage_type;
+	kle->source_id = source_id;
+	kle->total_damage = total_damage;  // Store damage amount
+	kle->next = Kill_log;
+	Kill_log = kle;
 }
 
 /*
@@ -5152,16 +5323,31 @@ void multi_send_damage(fix damage, fix shields, ubyte killer_type, ubyte killer_
 {
 	if (is_observer()) { return; }
 
-	// Sending damage to the host isn't interesting if there cannot be any observers.
-	if (Netgame.max_numobservers == 0 && !Netgame.host_is_obs) { return; }
+	// Send damage to host if observers exist OR if public kill log is enabled
+	if ((Netgame.max_numobservers == 0 && !Netgame.host_is_obs) && !PlayerCfg.PublicKillLog) { return; }
 
 	if (Player_is_dead || ConsoleObject->flags & OF_SHOULD_BE_DEAD) { return; }
 
-	// Calculate new shields amount.
+
+	// Calculate old and new shields amount.
+	fix old_shields = shields;
 	if (shields < damage)
 		shields = 0;
 	else
 		shields -= damage;
+
+	ubyte source_id = 0;
+	if (source != NULL && source->type == OBJ_WEAPON)
+	{
+		source_id = source->id;
+	}
+
+	// Track damage locally for public kill log (before sending to host)
+	if (PlayerCfg.PublicKillLog)
+	{
+		add_observatory_damage_stat(Player_num, damage, shields, old_shields, 
+									 killer_type, killer_id, damage_type, source_id, 1);
+	}
 
 	// Setup damage packet.
 	multibuf[0] = MULTI_DAMAGE;
@@ -5171,44 +5357,50 @@ void multi_send_damage(fix damage, fix shields, ubyte killer_type, ubyte killer_
 	multibuf[10] = killer_type;
 	multibuf[11] = killer_id;
 	multibuf[12] = damage_type;
-	if (source == NULL)
-	{
-		multibuf[13] = 0;
-	}
-	else if (source->type == OBJ_WEAPON)
-	{
-		multibuf[13] = source->id;
-	}
-	else
-	{
-		multibuf[13] = 0;
-	}
+	multibuf[13] = source_id;
+	PUT_INTEL_INT(multibuf + 14, old_shields);
 
-	multi_send_data_direct( multibuf, 14, multi_who_is_master(), 2 );
+	multi_send_data_direct( multibuf, 18, multi_who_is_master(), 2 );
 }
 
 void multi_do_damage( const ubyte *buf )
 {
-	if (is_observer())
+	// Don't process damage during death/respawn sequence for non-observers
+	if (!is_observer() && (Player_is_dead || Player_exploded))
+		return;
+	
+	// Process damage if we're an observer OR if public kill log is enabled on the host
+	if (is_observer() || PlayerCfg.PublicKillLog)
 	{
-		fix old_shields = Players[buf[1]].shields;
-		fix new_shields = GET_INTEL_INT(buf + 6);
+		// Validate player ID before accessing Players array
+		ubyte target_player = buf[1];
+		if (target_player >= MAX_PLAYERS || target_player >= N_players)
+			return;
+		
 		fix shields_delta = GET_INTEL_INT(buf + 2);
-		Players[buf[1]].shields_certain = (new_shields <= 0 || Players[buf[1]].shields - shields_delta == new_shields) ? 1 : 0;
-		Players[buf[1]].shields = (new_shields > 0) ? new_shields : 0;
-		if (Players[Player_num].hours_total - Players[buf[1]].shields_time_hours > 1 || Players[Player_num].hours_total - Players[buf[1]].shields_time_hours == 1 && i2f(3600) + Players[Player_num].time_total - Players[buf[1]].shields_time > i2f(2) || Players[Player_num].time_total - Players[buf[1]].shields_time > i2f(2)) {
-			Players[buf[1]].shields_delta = 0;
-			Players[buf[1]].shields_certain = 1;
-		}
-		Players[buf[1]].shields_delta -= shields_delta;
+		fix new_shields = GET_INTEL_INT(buf + 6);
+		fix old_shields = GET_INTEL_INT(buf + 14);
+		
+		// Only update shield tracking for observers
+		if (is_observer()) {
+			Players[target_player].shields_certain = (new_shields <= 0 || Players[target_player].shields - shields_delta == new_shields) ? 1 : 0;
+			Players[target_player].shields = (new_shields > 0) ? new_shields : 0;
+			if (Players[Player_num].hours_total - Players[target_player].shields_time_hours > 1 || Players[Player_num].hours_total - Players[target_player].shields_time_hours == 1 && i2f(3600) + Players[Player_num].time_total - Players[target_player].shields_time > i2f(2) || Players[Player_num].time_total - Players[target_player].shields_time > i2f(2)) {
+				Players[target_player].shields_delta = 0;
+				Players[target_player].shields_certain = 1;
+			}
+			Players[target_player].shields_delta -= shields_delta;
 
-		if (GET_INTEL_INT(buf + 2) != 0) {
-			Players[buf[1]].shields_time = Players[Player_num].time_total;
-			Players[buf[1]].shields_time_hours = Players[Player_num].hours_total;
+			if (GET_INTEL_INT(buf + 2) != 0) {
+				Players[target_player].shields_time = Players[Player_num].time_total;
+				Players[target_player].shields_time_hours = Players[Player_num].hours_total;
+			}
 		}
 
+		// Add to observatory damage stats (for kill log)
+		// Don't send network event here - victim already sent it via multi_send_damage
 		if (shields_delta != 0) {
-			add_observatory_damage_stat(buf[1], shields_delta, new_shields, old_shields, buf[10], buf[11], buf[12], buf[13]);
+			add_observatory_damage_stat(target_player, shields_delta, new_shields, old_shields, buf[10], buf[11], buf[12], buf[13], 0);
 		}
 	}
 }
@@ -5259,7 +5451,7 @@ void multi_do_repair( const ubyte *buf )
 		}
 
 		if (shields_delta != 0) {
-			add_observatory_damage_stat(buf[1], shields_delta, new_shields, old_shields, 0, 0, DAMAGE_SHIELD, 0);
+			add_observatory_damage_stat(buf[1], shields_delta, new_shields, old_shields, 0, 0, DAMAGE_SHIELD, 0, 0);
 		}
 	}
 }
@@ -5835,6 +6027,8 @@ multi_process_data(const ubyte *buf, int len)
 			multi_do_ship_status(buf); break;
 		case MULTI_CREATE_EXPLOSION2:
 			multi_do_create_explosion2(buf); break;
+		case MULTI_KILL_LOG_UPDATE:
+			multi_do_kill_log_update(buf); break;
 		case MULTI_TURKEY_TARGET:
 			if (!Endlevel_sequence) multi_do_turkey_target(buf); break;
 		case MULTI_TURKEY_TIME_SYNC:

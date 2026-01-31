@@ -52,6 +52,8 @@ extern void player_dead_message(void);
 
 extern void update_laser_weapon_info(void);
 extern void play_homing_warning(void);
+extern void show_detailed_kill_stats(void);
+extern void hide_scoreboard(void);
 
 typedef struct {
 	ubyte r,g,b;

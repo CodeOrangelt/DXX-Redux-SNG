@@ -130,6 +130,9 @@ const ubyte DefaultKeySettings[3][MAX_CONTROLS] = {
 {0x0,0x1,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x1,0x0,0x0,0x0,0xff,0x0,0xff,0x0,0xff,0x0,0xff,0x0,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x0,0x0},
 {0x0,0x1,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x1,0x0,0x0,0x0,0xff,0x0,0xff,0x0,0xff,0x0,0xff,0x0,0xff,0xff,0xff,0xff,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0},
 };
+
+// SNG keys - separate config
+const ubyte DefaultViewKeySettings[NUM_VIEW_CONTROLS] = { 0x41, 0xff, 0xff }; // F7/none/none
 const ubyte DefaultKeySettingsD1X[MAX_D1X_CONTROLS] = { 0x2,0xff,0xff,0x3,0xff,0xff,0x4,0xff,0xff,0x5,0xff,0xff,0x6,0xff,0xff,0x7,0xff,0xff,0x8,0xff,0xff,0x9,0xff,0xff,0xa,0xff,0xff,0xb,0xff,0xff };
 
 //	  id,  x,  y, w1, w2,  u,  d,   l, r,     text,   type, value
@@ -182,8 +185,8 @@ kc_item kc_keyboard[NUM_KEY_CONTROLS] = {
 	{ 45,158, 93,112, 26, 37, 31, 44, 12,"Automap", BT_KEY, 255, &Controls.automap_state, STATE_BIT2, &Controls.automap_count },
 	{ 46, 15,157, 71, 26, 22, 48, 23, 47,"Cycle Primary", BT_KEY, 255, NULL, 0, &Controls.cycle_primary_count },
 	{ 47, 15,157,100, 26, 23, 49, 46, 48,"Cycle Primary", BT_KEY, 255, NULL, 0, &Controls.cycle_primary_count },
-	{ 48, 15,165, 71, 26, 46,  1, 47, 49,"Cycle Second.", BT_KEY, 255, NULL, 0, &Controls.cycle_secondary_count },
-	{ 49, 15,165,100, 26, 47, 24, 48,  0,"Cycle Second.", BT_KEY, 255, NULL, 0, &Controls.cycle_secondary_count },
+	{ 48, 15,165, 71, 26, 46, 24, 47, 49,"Cycle Second.", BT_KEY, 255, NULL, 0, &Controls.cycle_secondary_count },
+	{ 49, 15,165,100, 26, 47,  1, 48,  0,"Cycle Second.", BT_KEY, 255, NULL, 0, &Controls.cycle_secondary_count },
 };
 kc_item kc_joystick[NUM_JOYSTICK_CONTROLS] = {
 	{  0, 22, 46, 82, 26, 15,  1, 24, 29,"Fire primary", BT_JOY_BUTTON, 255, &Controls.fire_primary_state, STATE_BIT3, &Controls.fire_primary_count },
@@ -263,13 +266,13 @@ kc_item kc_mouse[NUM_MOUSE_CONTROLS] = {
 	{ 24,180,162,106,  8, 22, 13, 23, 17,"Throttle", BT_INVERT, 255, NULL, 0, NULL },
 	{ 25, 25, 94, 85, 26,  3, 27, 10, 11,"Rear view", BT_MOUSE_BUTTON, 255, &Controls.rear_view_state, STATE_BIT5, &Controls.rear_view_count },
 	{ 26, 25, 70, 85, 26,  4,  2,  7,  8,"Drop bomb", BT_MOUSE_BUTTON, 255, NULL, 0, &Controls.drop_bomb_count },
-	{ 27, 25,102, 85, 26, 25, 28, 11, 12,"Cycle Primary", BT_MOUSE_BUTTON, 255, NULL, 0, &Controls.cycle_primary_count },
+	{ 27, 25,102, 85, 26, 25, 13, 11, 12,"Cycle Primary", BT_MOUSE_BUTTON, 255, NULL, 0, &Controls.cycle_primary_count },
 	{ 28, 25,110, 85, 26, 27, 14, 12, 13,"Cycle Secondary", BT_MOUSE_BUTTON, 255, NULL, 0, &Controls.cycle_secondary_count },
 };
 kc_item kc_d1x[NUM_D1X_CONTROLS] = {
-	{  0, 15, 69,142, 26, 29,  3, 29,  1,"LASER CANNON", BT_KEY, 255, NULL, 0, &Controls.select_weapon_count },
+	{  0, 15, 69,142, 26, 29,  3, 30,  1,"LASER CANNON", BT_KEY, 255, NULL, 0, &Controls.select_weapon_count },
 	{  1, 15, 69,200, 26, 27,  4,  0,  2,"LASER CANNON", BT_JOY_BUTTON, 255, NULL, 0, &Controls.select_weapon_count },
-	{  2, 15, 69,258, 26, 28,  5,  1,  3,"LASER CANNON", BT_MOUSE_BUTTON, 255, NULL, 0, &Controls.select_weapon_count },
+	{  2, 15, 69,258, 26, 28,  5,  1, 30,"LASER CANNON", BT_MOUSE_BUTTON, 255, NULL, 0, &Controls.select_weapon_count },
 	{  3, 15, 77,142, 26,  0,  6,  2,  4,"VULCAN CANNON", BT_KEY, 255, NULL, 0, &Controls.select_weapon_count },
 	{  4, 15, 77,200, 26,  1,  7,  3,  5,"VULCAN CANNON", BT_JOY_BUTTON, 255, NULL, 0, &Controls.select_weapon_count },
 	{  5, 15, 77,258, 26,  2,  8,  4,  6,"VULCAN CANNON", BT_MOUSE_BUTTON, 255, NULL, 0, &Controls.select_weapon_count },
@@ -294,9 +297,16 @@ kc_item kc_d1x[NUM_D1X_CONTROLS] = {
 	{ 24, 15,133,142, 26, 21, 27, 23, 25,"SMART MISSILE", BT_KEY, 255, NULL, 0, &Controls.select_weapon_count },
 	{ 25, 15,133,200, 26, 22, 28, 24, 26,"SMART MISSILE", BT_JOY_BUTTON, 255, NULL, 0, &Controls.select_weapon_count },
 	{ 26, 15,133,258, 26, 23, 29, 25, 27,"SMART MISSILE", BT_MOUSE_BUTTON, 255, NULL, 0, &Controls.select_weapon_count },
-	{ 27, 15,141,142, 26, 24,  1, 26, 28,"MEGA MISSILE", BT_KEY, 255, NULL, 0, &Controls.select_weapon_count },
-	{ 28, 15,141,200, 26, 25,  2, 27, 29,"MEGA MISSILE", BT_JOY_BUTTON, 255, NULL, 0, &Controls.select_weapon_count },
-	{ 29, 15,141,258, 26, 26,  0, 28,  0,"MEGA MISSILE", BT_MOUSE_BUTTON, 255, NULL, 0, &Controls.select_weapon_count },
+	{ 27, 15,141,142, 26, 24,  0, 26, 28,"MEGA MISSILE", BT_KEY, 255, NULL, 0, &Controls.select_weapon_count },
+	{ 28, 15,141,200, 26, 25,  1, 27, 29,"MEGA MISSILE", BT_JOY_BUTTON, 255, NULL, 0, &Controls.select_weapon_count },
+	{ 29, 15,141,258, 26, 26,  2, 28,  0,"MEGA MISSILE", BT_MOUSE_BUTTON, 255, NULL, 0, &Controls.select_weapon_count },
+};
+
+// SNG keys - separate configuration
+kc_item kc_view[NUM_VIEW_CONTROLS] = {
+	{  0, 15, 46,142, 26,  2,  2,  2,  1,"Scoreboard", BT_KEY, 255, &Controls.scoreboard_state, STATE_BIT1, &Controls.scoreboard_count },
+	{  1, 15, 46,200, 26,  0,  0,  0,  2,"Scoreboard", BT_JOY_BUTTON, 255, &Controls.scoreboard_state, STATE_BIT3, &Controls.scoreboard_count },
+	{  2, 15, 46,258, 26,  1,  1,  1,  0,"Scoreboard", BT_MOUSE_BUTTON, 255, &Controls.scoreboard_state, STATE_BIT5, &Controls.scoreboard_count },
 };
 
 void kc_drawitem( kc_item *item, int is_current );
@@ -539,6 +549,15 @@ void kconfig_draw(kc_menu *menu)
 		gr_string(FSPACX(152), FSPACY(60), "KEYBOARD");
 		gr_string(FSPACX(210), FSPACY(60), "JOYSTICK");
 		gr_string(FSPACX(273), FSPACY(60), "MOUSE");
+	}
+	else if ( menu->items == kc_view )
+	{
+		gr_set_fontcolor( BM_XRGB(31,27,6), -1 );
+		gr_setcolor( BM_XRGB(31,27,6) );
+
+		gr_string(FSPACX(152), FSPACY(37), "KEYBOARD");
+		gr_string(FSPACX(210), FSPACY(37), "JOYSTICK");
+		gr_string(FSPACX(273), FSPACY(37), "MOUSE");
 	}
 	
 	for (i=0; i<menu->nitems; i++ )	{
@@ -887,6 +906,9 @@ int kconfig_handler(window *wind, d_event *event, kc_menu *menu)
 			
 			for (i=0; i<NUM_D1X_CONTROLS; i++)
 				PlayerCfg.KeySettingsD1X[i] = kc_d1x[i].value;
+			
+			for (i=0; i<NUM_VIEW_CONTROLS; i++)
+				PlayerCfg.KeySettingsView[i] = kc_view[i].value;
 			return 0;	// continue closing
 			break;
 			
@@ -1129,6 +1151,7 @@ void kconfig(int n, char * title)
 		case 1:kconfig_sub( kc_joystick,NUM_JOYSTICK_CONTROLS,title); break;
 		case 2:kconfig_sub( kc_mouse,   NUM_MOUSE_CONTROLS,    title); break;
 		case 3:kconfig_sub( kc_d1x, NUM_D1X_CONTROLS, title ); break;
+		case 4:kconfig_sub( kc_view, NUM_VIEW_CONTROLS, title ); break;
 		default:
 			Int3();
 			return;
@@ -1267,14 +1290,36 @@ void kconfig_read_controls(d_event *event, int automap_flag)
 						*kc_keyboard[i].ci_count_ptr += 1;
 				}
 			}
+			// Handle view keys (scoreboard, rear view, etc.)
+			if (!automap_flag)
+			{
+				for (i = 0; i < NUM_VIEW_CONTROLS; i++)
+				{
+					if (kc_view[i].value < 255 && kc_view[i].value == event_key_get_raw(event))
+					{
+						if (kc_view[i].ci_state_ptr != NULL)
+						{
+							if (event->type==EVENT_KEY_COMMAND)
+								*kc_view[i].ci_state_ptr |= kc_view[i].state_bit;
+							else if (event->type==EVENT_KEY_RELEASE)
+								*kc_view[i].ci_state_ptr &= ~kc_view[i].state_bit;
+						}
+						if (kc_view[i].ci_count_ptr != NULL && event->type==EVENT_KEY_COMMAND)
+							*kc_view[i].ci_count_ptr += 1;
+					}
+				}
+			}
 		
 			if (!automap_flag && event->type == EVENT_KEY_COMMAND)
-				for (i = 0, j = 0; i < 28; i += 3, j++)
+			{
+				// Handle weapon selection keys (all 30 entries for 10 weapons)
+				for (i = 0, j = 0; i < 30; i += 3, j++)
 					if (kc_d1x[i].value < 255 && kc_d1x[i].value == event_key_get_raw(event))
 					{
 						Controls.select_weapon_count = j+1;
 						break;
 					}
+			}
 			break;
 		case EVENT_JOYSTICK_BUTTON_DOWN:
 		case EVENT_JOYSTICK_BUTTON_UP:
@@ -1295,13 +1340,35 @@ void kconfig_read_controls(d_event *event, int automap_flag)
 						*kc_joystick[i].ci_count_ptr += 1;
 				}
 			}
+			// Handle SNG keys (joystick)
+			if (!automap_flag)
+			{
+				for (i = 0; i < NUM_VIEW_CONTROLS; i++)
+				{
+					if (kc_view[i].value < 255 && kc_view[i].type == BT_JOY_BUTTON && kc_view[i].value == event_joystick_get_button(event))
+					{
+						if (kc_view[i].ci_state_ptr != NULL)
+						{
+							if (event->type==EVENT_JOYSTICK_BUTTON_DOWN)
+								*kc_view[i].ci_state_ptr |= kc_view[i].state_bit;
+							else
+								*kc_view[i].ci_state_ptr &= ~kc_view[i].state_bit;
+						}
+						if (kc_view[i].ci_count_ptr != NULL && event->type==EVENT_JOYSTICK_BUTTON_DOWN)
+							*kc_view[i].ci_count_ptr += 1;
+					}
+				}
+			}
 			if (!automap_flag && event->type == EVENT_JOYSTICK_BUTTON_DOWN)
+			{
+				// Handle weapon selection buttons
 				for (i = 1, j = 0; i < 29; i += 3, j++)
 					if (kc_d1x[i].value < 255 && kc_d1x[i].value == event_joystick_get_button(event))
 					{
 						Controls.select_weapon_count = j+1;
 						break;
 					}
+			}
 			break;
 		case EVENT_MOUSE_BUTTON_DOWN:
 		case EVENT_MOUSE_BUTTON_UP:
@@ -1322,13 +1389,35 @@ void kconfig_read_controls(d_event *event, int automap_flag)
 						*kc_mouse[i].ci_count_ptr += 1;
 				}
 			}
+			// Handle SNG keys (mouse)
+			if (!automap_flag)
+			{
+				for (i = 0; i < NUM_VIEW_CONTROLS; i++)
+				{
+					if (kc_view[i].value < 255 && kc_view[i].type == BT_MOUSE_BUTTON && kc_view[i].value == event_mouse_get_button(event))
+					{
+						if (kc_view[i].ci_state_ptr != NULL)
+						{
+							if (event->type==EVENT_MOUSE_BUTTON_DOWN)
+								*kc_view[i].ci_state_ptr |= kc_view[i].state_bit;
+							else
+								*kc_view[i].ci_state_ptr &= ~kc_view[i].state_bit;
+						}
+						if (kc_view[i].ci_count_ptr != NULL && event->type==EVENT_MOUSE_BUTTON_DOWN)
+							*kc_view[i].ci_count_ptr += 1;
+					}
+				}
+			}
 			if (!automap_flag && event->type == EVENT_MOUSE_BUTTON_DOWN)
+			{
+				// Handle weapon selection mouse buttons
 				for (i = 2, j = 0; i < 30; i += 3, j++)
 					if (kc_d1x[i].value < 255 && kc_d1x[i].value == event_mouse_get_button(event))
 					{
 						Controls.select_weapon_count = j+1;
 						break;
 					}
+			}
 			break;
 		case EVENT_JOYSTICK_MOVED:
 		{
@@ -1913,4 +2002,8 @@ void kc_set_controls()
 
 	for (i=0; i<NUM_D1X_CONTROLS; i++ )
 		kc_d1x[i].value = PlayerCfg.KeySettingsD1X[i];
+
+	// SNG keys
+	for (i=0; i<NUM_VIEW_CONTROLS; i++ )
+		kc_view[i].value = PlayerCfg.KeySettingsView[i];
 }

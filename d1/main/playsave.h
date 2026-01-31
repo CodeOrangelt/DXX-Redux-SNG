@@ -60,6 +60,7 @@ typedef struct player_config
 	ubyte SecondaryOrder[MAX_SECONDARY_WEAPONS+1];
 	ubyte KeySettings[3][MAX_CONTROLS];
 	ubyte KeySettingsD1X[MAX_D1X_CONTROLS];
+	ubyte KeySettingsView[NUM_VIEW_CONTROLS];
 	int DefaultDifficulty;
 	int AutoLeveling;
 	short NHighestLevels;
@@ -133,10 +134,17 @@ typedef struct player_config
 	ubyte ObsPlayerChat[NUM_OBS_MODES];
 	ubyte ObsShowBombTimes[NUM_OBS_MODES];
 	ubyte ObsTransparentThirdPerson[NUM_OBS_MODES];
+	
+	// Public kill log settings (non-observer multiplayer)
+	ubyte PublicKillLog;              // Enable kill log for all players
+	ubyte KillLogShowWeapon;          // Show weapon used in kill log
+	ubyte KillLogShowDamage;          // Show damage dealt in kill log
+	ubyte KillLogDuration;            // How long to show entries (in seconds)
 	ubyte ObsIncreaseThirdPersonDist[NUM_OBS_MODES];
 	ubyte ObsHideEnergyWeaponMuzzle[NUM_OBS_MODES];
 	ubyte NoChatSound;
 	ubyte ClassicAutoselectWeapon;
+	ubyte ScoreboardSticky;           // 0 = hold key to show, 1 = toggle on/off
 } __pack__ player_config;
 
 extern struct player_config PlayerCfg;
