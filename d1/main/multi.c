@@ -1384,6 +1384,14 @@ void multi_compute_kill(int killer, int killed)
 
 	multi_sort_kill_list();
 	multi_show_player_list();
+	
+	// Send gamelog kill event to all players for synchronization
+	if (Game_mode & GM_NETWORK)
+	{
+		// TODO: Extract actual weapon type and ID from killer object
+		// For now, pass 0 as placeholders
+		net_udp_send_gamelog_kill(killer_pnum, killed_pnum, 0, 0);
+	}
 }
 
 void multi_do_protocol_frame(int force, int listen)
@@ -3989,6 +3997,13 @@ multi_send_message(void)
 		strncpy((char*)multibuf+loc, Network_message, MAX_MESSAGE_LEN); loc += MAX_MESSAGE_LEN;
 		multibuf[loc-1] = '\0';
 		multi_send_data(multibuf, loc, 0);
+		
+		// Send gamelog chat event to all players for synchronization
+		if (Game_mode & GM_NETWORK)
+		{
+			net_udp_send_gamelog_chat(Player_num, Network_message);
+		}
+		
 		Network_message_reciever = -1;
 	}
 }
