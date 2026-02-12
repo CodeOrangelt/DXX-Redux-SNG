@@ -2022,6 +2022,22 @@ void multi_send_message_end()
 	Network_message_reciever = 100;
 	HUD_init_message(HM_MULTI, "%s '%s'", TXT_SENDING, Network_message);
 	multi_send_message();
+	
+	// Relay chat to tracker for logging
+	if (Game_mode & GM_NETWORK)
+	{
+		switch (multi_protocol)
+		{
+#ifdef USE_UDP
+			case MULTI_PROTO_UDP:
+				net_udp_send_gamelog_chat(Player_num, Network_message);
+				break;
+#endif
+			default:
+				break;
+		}
+	}
+	
 	multi_message_feedback();
 	game_flush_inputs();
 }
