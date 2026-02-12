@@ -7708,6 +7708,14 @@ void net_udp_send_gamelog_kill(int killer_id, int killed_id, int weapon_type, in
 	buf[len] = (ubyte)weapon_type; len++;
 	buf[len] = (ubyte)weapon_id; len++;
 	
+	// Send to tracker
+#ifdef USE_TRACKER
+	if (GameArg.MplTrackerAddr && GameArg.MplTrackerAddr[0])
+	{
+		dxx_sendto(UDP_Socket[2], buf, len, 0, (struct sockaddr *)&TrackerSocket, sizeof(TrackerSocket));
+	}
+#endif
+	
 	// Send to all players
 	for (int i = 1; i < N_players; i++)
 	{
@@ -7746,6 +7754,14 @@ void net_udp_send_gamelog_chat(int player_id, const char *message)
 	memcpy(&buf[len], message, msg_len);
 	len += msg_len;
 	buf[len] = '\0'; len++;
+	
+	// Send to tracker
+#ifdef USE_TRACKER
+	if (GameArg.MplTrackerAddr && GameArg.MplTrackerAddr[0])
+	{
+		dxx_sendto(UDP_Socket[2], buf, len, 0, (struct sockaddr *)&TrackerSocket, sizeof(TrackerSocket));
+	}
+#endif
 	
 	// Send to all players
 	for (int i = 1; i < N_players; i++)
