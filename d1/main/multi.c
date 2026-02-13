@@ -28,6 +28,10 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "fuelcen.h"
 #include "scores.h"
 #include "gauges.h"
+
+// Track the weapon that caused each player's death for accurate gamelog reporting
+static int player_killer_weapon_type[MAX_PLAYERS];
+static int player_killer_weapon_id[MAX_PLAYERS];
 #include "collide.h"
 #include "dxxerror.h"
 #include "fireball.h"
@@ -153,6 +157,16 @@ const char GMNamesShrt[MULTI_GAME_TYPE_COUNT][8]={
 	"UNKNOWN",
 	"BOUNTY"
 };
+
+// Record the weapon that killed a player (called from collision detection)
+void multi_record_killer_weapon(int player_num, int weapon_type, int weapon_id)
+{
+	if (player_num >= 0 && player_num < MAX_PLAYERS)
+	{
+		player_killer_weapon_type[player_num] = weapon_type;
+		player_killer_weapon_id[player_num] = weapon_id;
+	}
+}
 
 int Current_obs_player = OBSERVER_PLAYER_ID; // Current player being observed. Defaults to the observer player ID.
 bool Obs_at_distance = 0; // True if you're viewing the player from a cube back.
@@ -1388,9 +1402,15 @@ void multi_compute_kill(int killer, int killed)
 	// Send gamelog kill event to all players for synchronization
 	if (Game_mode & GM_NETWORK)
 	{
-		// TODO: Extract actual weapon type and ID from killer object
-		// For now, pass 0 as placeholders
-		net_udp_send_gamelog_kill(killer_pnum, killed_pnum, 0, 0);
+		// Use the tracked weapon info set at the point of impact
+		int weapon_type = player_killer_weapon_type[killed_pnum];
+		int weapon_id = player_killer_weapon_id[killed_pnum];
+		
+		// Clear the tracking after use
+		player_killer_weapon_type[killed_pnum] = 3;  // Default to environment
+		player_killer_weapon_id[killed_pnum] = 0;
+		
+		net_udp_send_gamelog_kill(killer_pnum, killed_pnum, weapon_type, weapon_id);
 	}
 }
 
@@ -2022,21 +2042,6 @@ void multi_send_message_end()
 	Network_message_reciever = 100;
 	HUD_init_message(HM_MULTI, "%s '%s'", TXT_SENDING, Network_message);
 	multi_send_message();
-	
-	// Relay chat to tracker for logging
-	if (Game_mode & GM_NETWORK)
-	{
-		switch (multi_protocol)
-		{
-#ifdef USE_UDP
-			case MULTI_PROTO_UDP:
-				net_udp_send_gamelog_chat(Player_num, Network_message);
-				break;
-#endif
-			default:
-				break;
-		}
-	}
 	
 	multi_message_feedback();
 	game_flush_inputs();
