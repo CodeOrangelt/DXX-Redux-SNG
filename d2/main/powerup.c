@@ -234,6 +234,26 @@ int blue_key_seg;
 vms_vector red_key_pos;
 int red_key_seg;
 
+// SNG: Static Powerups - tracks which static weapon types the local player has
+// already collected this life. Static pickups are never removed from the level
+// (so they're always there for anyone), but each player only benefits - and
+// hears the pickup sound - once per life.
+#define STATIC_COLLECTED_VULCAN  (1<<0)
+#define STATIC_COLLECTED_SPREAD  (1<<1)
+#define STATIC_COLLECTED_PLASMA  (1<<2)
+#define STATIC_COLLECTED_FUSION  (1<<3)
+#define STATIC_COLLECTED_LASER   (1<<4)
+#define STATIC_COLLECTED_GAUSS   (1<<5)
+#define STATIC_COLLECTED_HELIX   (1<<6)
+#define STATIC_COLLECTED_PHOENIX (1<<7)
+#define STATIC_COLLECTED_OMEGA   (1<<8)
+static unsigned int StaticPowerupsCollected = 0;
+
+void reset_static_powerups_collected(void)
+{
+	StaticPowerupsCollected = 0;
+}
+
 //	returns true if powerup consumed
 int do_powerup(object *obj)
 {
@@ -301,6 +321,11 @@ int do_powerup(object *obj)
 				HUD_init_message(HM_DEFAULT|HM_REDUNDANT|HM_MAYDUPL, TXT_MAXED_OUT,TXT_SHIELD);
 			break;
 		case POW_LASER:
+			// SNG: Static Powerups - already collected this life, no-op (no sound, never destroyed)
+			if ((Netgame.StaticPowerups || Netgame.StaticLasers) && (StaticPowerupsCollected & STATIC_COLLECTED_LASER)) {
+				used = 0;
+				break;
+			}
 			if (Players[Player_num].laser_level >= MAX_LASER_LEVEL) {
 				//Players[Player_num].laser_level = MAX_LASER_LEVEL;
 				HUD_init_message(HM_DEFAULT|HM_REDUNDANT|HM_MAYDUPL, TXT_MAXED_OUT,TXT_LASER);
@@ -319,6 +344,15 @@ int do_powerup(object *obj)
 			}
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
+
+			// SNG: Static Powerups - mark collected, play sound once, never destroy the object
+			if ((Netgame.StaticPowerups || Netgame.StaticLasers) && used) {
+				StaticPowerupsCollected |= STATIC_COLLECTED_LASER;
+				special_used = 1;
+				used = 0;
+				if (Game_mode & GM_MULTI)
+					multi_send_ship_status();
+			}
 			break;
 		case POW_MISSILE_1:
 			used=pick_up_secondary(CONCUSSION_INDEX,1);
@@ -437,6 +471,30 @@ int do_powerup(object *obj)
 		case	POW_GAUSS_WEAPON: {
 			int ammo = obj->ctype.powerup_info.count;
 
+			// SNG: Static Powerups - guaranteed fixed full grant to every player, independent
+			// of any other player's pickup or this specific object's remaining ammo count.
+			// Never touches obj->ctype.powerup_info.count, so there's nothing for packet loss
+			// or pickup order to desync - every player who hasn't collected it yet gets the
+			// same full amount, every time.
+			{
+				int static_field = (obj->id == POW_VULCAN_WEAPON) ? Netgame.StaticVulcan : Netgame.StaticGauss;
+				int static_bit = (obj->id == POW_VULCAN_WEAPON) ? STATIC_COLLECTED_VULCAN : STATIC_COLLECTED_GAUSS;
+				if (Netgame.StaticPowerups || static_field) {
+					if (StaticPowerupsCollected & static_bit) {
+						used = 0;
+						break;
+					}
+					used = pick_up_primary((obj->id==POW_VULCAN_WEAPON)?VULCAN_INDEX:GAUSS_INDEX);
+					pick_up_ammo(CLASS_PRIMARY, VULCAN_INDEX, VULCAN_WEAPON_AMMO_AMOUNT);
+					StaticPowerupsCollected |= static_bit;
+					special_used = 1;
+					used = 0;
+					if (Game_mode & GM_MULTI)
+						multi_send_ship_status();
+					break;
+				}
+			}
+
 			used = pick_up_primary((obj->id==POW_VULCAN_WEAPON)?VULCAN_INDEX:GAUSS_INDEX);
 
 			//didn't get the weapon (because we already have it), but
@@ -468,39 +526,123 @@ int do_powerup(object *obj)
 		}
 
 		case	POW_SPREADFIRE_WEAPON:
+			// SNG: Static Powerups - already collected this life, no-op (no sound, never destroyed)
+			if ((Netgame.StaticPowerups || Netgame.StaticSpread) && (StaticPowerupsCollected & STATIC_COLLECTED_SPREAD)) {
+				used = 0;
+				break;
+			}
 			used = pick_up_primary(SPREADFIRE_INDEX);
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
+			// SNG: Static Powerups - mark collected, play sound once, never destroy the object
+			if ((Netgame.StaticPowerups || Netgame.StaticSpread) && used) {
+				StaticPowerupsCollected |= STATIC_COLLECTED_SPREAD;
+				special_used = 1;
+				used = 0;
+				if (Game_mode & GM_MULTI)
+					multi_send_ship_status();
+			}
 			break;
 		case	POW_PLASMA_WEAPON:
+			// SNG: Static Powerups - already collected this life, no-op (no sound, never destroyed)
+			if ((Netgame.StaticPowerups || Netgame.StaticPlasma) && (StaticPowerupsCollected & STATIC_COLLECTED_PLASMA)) {
+				used = 0;
+				break;
+			}
 			used = pick_up_primary(PLASMA_INDEX);
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
+			// SNG: Static Powerups - mark collected, play sound once, never destroy the object
+			if ((Netgame.StaticPowerups || Netgame.StaticPlasma) && used) {
+				StaticPowerupsCollected |= STATIC_COLLECTED_PLASMA;
+				special_used = 1;
+				used = 0;
+				if (Game_mode & GM_MULTI)
+					multi_send_ship_status();
+			}
 			break;
 		case	POW_FUSION_WEAPON:
+			// SNG: Static Powerups - already collected this life, no-op (no sound, never destroyed)
+			if ((Netgame.StaticPowerups || Netgame.StaticFusion) && (StaticPowerupsCollected & STATIC_COLLECTED_FUSION)) {
+				used = 0;
+				break;
+			}
 			used = pick_up_primary(FUSION_INDEX);
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
+			// SNG: Static Powerups - mark collected, play sound once, never destroy the object
+			if ((Netgame.StaticPowerups || Netgame.StaticFusion) && used) {
+				StaticPowerupsCollected |= STATIC_COLLECTED_FUSION;
+				special_used = 1;
+				used = 0;
+				if (Game_mode & GM_MULTI)
+					multi_send_ship_status();
+			}
 			break;
 
 		case	POW_HELIX_WEAPON:
+			// SNG: Static Powerups - already collected this life, no-op (no sound, never destroyed)
+			if ((Netgame.StaticPowerups || Netgame.StaticHelix) && (StaticPowerupsCollected & STATIC_COLLECTED_HELIX)) {
+				used = 0;
+				break;
+			}
 			used = pick_up_primary(HELIX_INDEX);
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
+			// SNG: Static Powerups - mark collected, play sound once, never destroy the object
+			if ((Netgame.StaticPowerups || Netgame.StaticHelix) && used) {
+				StaticPowerupsCollected |= STATIC_COLLECTED_HELIX;
+				special_used = 1;
+				used = 0;
+				if (Game_mode & GM_MULTI)
+					multi_send_ship_status();
+			}
 			break;
 
 		case	POW_PHOENIX_WEAPON:
+			// SNG: Static Powerups - already collected this life, no-op (no sound, never destroyed)
+			if ((Netgame.StaticPowerups || Netgame.StaticPhoenix) && (StaticPowerupsCollected & STATIC_COLLECTED_PHOENIX)) {
+				used = 0;
+				break;
+			}
 			used = pick_up_primary(PHOENIX_INDEX);
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
+			// SNG: Static Powerups - mark collected, play sound once, never destroy the object
+			if ((Netgame.StaticPowerups || Netgame.StaticPhoenix) && used) {
+				StaticPowerupsCollected |= STATIC_COLLECTED_PHOENIX;
+				special_used = 1;
+				used = 0;
+				if (Game_mode & GM_MULTI)
+					multi_send_ship_status();
+			}
 			break;
 
 		case	POW_OMEGA_WEAPON:
+			// SNG: Static Powerups - already collected this life, no-op (no sound, never destroyed)
+			if ((Netgame.StaticPowerups || Netgame.StaticOmega) && (StaticPowerupsCollected & STATIC_COLLECTED_OMEGA)) {
+				used = 0;
+				break;
+			}
 			used = pick_up_primary(OMEGA_INDEX);
-			if (used)
-				Omega_charge = obj->ctype.powerup_info.count;
+			if (used) {
+				// Guaranteed full charge - never read the object's mutable count, so
+				// there's nothing for pickup order or packet loss to desync.
+				if (Netgame.StaticPowerups || Netgame.StaticOmega)
+					Omega_charge = MAX_OMEGA_CHARGE;
+				else
+					Omega_charge = obj->ctype.powerup_info.count;
+			}
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
+			// SNG: Static Powerups - mark collected, play sound once, never destroy the object
+			if ((Netgame.StaticPowerups || Netgame.StaticOmega) && used) {
+				StaticPowerupsCollected |= STATIC_COLLECTED_OMEGA;
+				special_used = 1;
+				used = 0;
+				if (Game_mode & GM_MULTI)
+					multi_send_ship_status();
+			}
 			break;
 
 		case	POW_PROXIMITY_WEAPON:

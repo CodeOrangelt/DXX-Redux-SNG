@@ -433,6 +433,9 @@ void init_player_stats_new_ship(ubyte pnum)
 		if(delete_camera)
 			Dead_player_camera = 0;
 
+		// SNG: Static Powerups - each new life can collect static weapons again
+		reset_static_powerups_collected();
+
 		Global_laser_firing_count=0;
 		Controls.afterburner_state = 0;
 		Last_afterburner_state = 0;

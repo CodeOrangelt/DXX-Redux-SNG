@@ -3099,6 +3099,16 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.SmartMineSpawn; len++;
 		buf[len] = Netgame.MercurySpawn; len++;
 		buf[len] = Netgame.EarthshakerSpawn; len++;
+		buf[len] = Netgame.StaticPowerups; len++;
+		buf[len] = Netgame.StaticFusion; len++;
+		buf[len] = Netgame.StaticSpread; len++;
+		buf[len] = Netgame.StaticVulcan; len++;
+		buf[len] = Netgame.StaticPlasma; len++;
+		buf[len] = Netgame.StaticLasers; len++;
+		buf[len] = Netgame.StaticGauss; len++;
+		buf[len] = Netgame.StaticHelix; len++;
+		buf[len] = Netgame.StaticPhoenix; len++;
+		buf[len] = Netgame.StaticOmega; len++;
 		buf[len] = Netgame.team_color[0];						len++;
 		buf[len] = Netgame.team_color[1];						len++;
 
@@ -3376,6 +3386,16 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		Netgame.SmartMineSpawn = data[len]; len++;
 		Netgame.MercurySpawn = data[len]; len++;
 		Netgame.EarthshakerSpawn = data[len]; len++;
+		Netgame.StaticPowerups = data[len]; len++;
+		Netgame.StaticFusion = data[len]; len++;
+		Netgame.StaticSpread = data[len]; len++;
+		Netgame.StaticVulcan = data[len]; len++;
+		Netgame.StaticPlasma = data[len]; len++;
+		Netgame.StaticLasers = data[len]; len++;
+		Netgame.StaticGauss = data[len]; len++;
+		Netgame.StaticHelix = data[len]; len++;
+		Netgame.StaticPhoenix = data[len]; len++;
+		Netgame.StaticOmega = data[len]; len++;
 		Netgame.team_color[0] = data[len];						len++;
 		Netgame.team_color[1] = data[len];						len++;
 
@@ -3882,6 +3902,7 @@ static int opt_burner_spawn;
 static int opt_allowprefcolor, opt_ow;
 static int opt_sngtoggles;
 static int opt_spawnwithmenu;
+static int opt_staticpowerupsmenu;
 static int opt_low_vulcan;
 static int opt_gauss_duplicating, opt_gauss_depleting, opt_gauss_steady_recharge, opt_gauss_steady_respawn; 
 static int opt_homing_update_rate;
@@ -4013,6 +4034,46 @@ void net_udp_sng_toggles_menu(void)
 	Netgame.QuietFan = m[opt_quietfan].value;
 }
 
+static int menu_static_powerups_handler( newmenu *menu, d_event *event, void *userdata )
+{
+	menu = menu; event = event; userdata = userdata;
+	return 0;
+}
+
+// SNG Static Powerups: pickups are never removed from the level, but each player
+// only benefits (and hears the sound) once per life. Missiles intentionally excluded.
+void net_udp_staticpowerupsmenu(void)
+{
+	int opt=0;
+	int opt_all, opt_fusion, opt_spread, opt_vulcan, opt_plasma, opt_lasers;
+	int opt_gauss, opt_helix, opt_phoenix, opt_omega;
+	newmenu_item m[10];
+
+	opt_all = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "All Weapons"; m[opt].value = Netgame.StaticPowerups; opt++;
+	opt_fusion = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Fusion";  m[opt].value = Netgame.StaticFusion; opt++;
+	opt_spread = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Spreadfire"; m[opt].value = Netgame.StaticSpread; opt++;
+	opt_vulcan = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Vulcan"; m[opt].value = Netgame.StaticVulcan; opt++;
+	opt_plasma = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Plasma"; m[opt].value = Netgame.StaticPlasma; opt++;
+	opt_lasers = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Lasers"; m[opt].value = Netgame.StaticLasers; opt++;
+	opt_gauss = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Gauss"; m[opt].value = Netgame.StaticGauss; opt++;
+	opt_helix = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Helix"; m[opt].value = Netgame.StaticHelix; opt++;
+	opt_phoenix = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Phoenix"; m[opt].value = Netgame.StaticPhoenix; opt++;
+	opt_omega = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Omega"; m[opt].value = Netgame.StaticOmega; opt++;
+
+	newmenu_do1( NULL, "These Weapons will always be there for anyone to pick up once", opt, m, menu_static_powerups_handler, NULL, 0 );
+
+	Netgame.StaticPowerups = m[opt_all].value;
+	Netgame.StaticFusion = m[opt_fusion].value;
+	Netgame.StaticSpread = m[opt_spread].value;
+	Netgame.StaticVulcan = m[opt_vulcan].value;
+	Netgame.StaticPlasma = m[opt_plasma].value;
+	Netgame.StaticLasers = m[opt_lasers].value;
+	Netgame.StaticGauss = m[opt_gauss].value;
+	Netgame.StaticHelix = m[opt_helix].value;
+	Netgame.StaticPhoenix = m[opt_phoenix].value;
+	Netgame.StaticOmega = m[opt_omega].value;
+}
+
 int net_udp_more_options_handler( newmenu *menu, d_event *event, void *userdata );
 
 void net_udp_more_game_options ()
@@ -4023,9 +4084,9 @@ void net_udp_more_game_options ()
 	char HomingUpdateRateText[80];
 	
 #ifdef USE_TRACKER
-	newmenu_item m[54];
+	newmenu_item m[55];
 #else
-	newmenu_item m[53];
+	newmenu_item m[54];
 #endif
 
 	snprintf(packstring,sizeof(char)*4,"%d",Netgame.PacketsPerSec);
@@ -4065,6 +4126,9 @@ void net_udp_more_game_options ()
 
 	opt_spawnwithmenu = opt;
 	m[opt].type = NM_TYPE_MENU;  m[opt].text = "Start Mission With..."; opt++;
+
+	opt_staticpowerupsmenu = opt;
+	m[opt].type = NM_TYPE_MENU;  m[opt].text = "Select Static Weapons..."; opt++;
 
 	m[opt].type = NM_TYPE_TEXT; m[opt].text = ""; opt++;
 
@@ -4205,6 +4269,12 @@ menu:
 	if (i==opt_spawnwithmenu)
 	{
 		net_udp_spawn_with_weapons_menu();
+		goto menu;
+	}
+
+	if (i==opt_staticpowerupsmenu)
+	{
+		net_udp_staticpowerupsmenu();
 		goto menu;
 	}
 
@@ -4610,6 +4680,16 @@ void netgame_set_defaults()
 	Netgame.SmartMineSpawn = 0;
 	Netgame.MercurySpawn = 0;
 	Netgame.EarthshakerSpawn = 0;
+	Netgame.StaticPowerups = 0;
+	Netgame.StaticFusion = 0;
+	Netgame.StaticSpread = 0;
+	Netgame.StaticVulcan = 0;
+	Netgame.StaticPlasma = 0;
+	Netgame.StaticLasers = 0;
+	Netgame.StaticGauss = 0;
+	Netgame.StaticHelix = 0;
+	Netgame.StaticPhoenix = 0;
+	Netgame.StaticOmega = 0;
 
 #ifdef USE_TRACKER
 	Netgame.Tracker = 1;

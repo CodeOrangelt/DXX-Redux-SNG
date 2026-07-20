@@ -60,7 +60,7 @@ extern int multi_protocol; // set and determinate used protocol
 #define MULTI_PROTO_UDP 1 // UDP protocol
 
 // What version of the multiplayer protocol is this? Increment each time something drastic changes in Multiplayer without the version number changes. Can be reset to 0 each time the version of the game changes
-#define MULTI_PROTO_VERSION 30008 // Redux 1.1 + SNG CTF variant + SNG toggles + D2 weapon spawn toggles
+#define MULTI_PROTO_VERSION 30010 // Redux 1.1 + SNG CTF variant + SNG toggles + D2 weapon spawn toggles + Static Powerups (incl. D2 supers)
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -613,6 +613,19 @@ typedef struct netgame_info
 	ubyte						SmartMineSpawn;
 	ubyte						MercurySpawn;
 	ubyte						EarthshakerSpawn;
+	// SNG Static Powerups: level pickup is never removed, but each player only
+	// benefits (and hears the sound) once per life. Missiles intentionally excluded.
+	ubyte						StaticPowerups;
+	ubyte						StaticFusion;
+	ubyte						StaticSpread;
+	ubyte						StaticVulcan;
+	ubyte						StaticPlasma;
+	ubyte						StaticLasers;
+	// D2-exclusive weapons, not present in the original D1 SNG Static Powerups list
+	ubyte						StaticGauss;
+	ubyte						StaticHelix;
+	ubyte						StaticPhoenix;
+	ubyte						StaticOmega;
 	ubyte						team_color[2];
 } __pack__ netgame_info;
 

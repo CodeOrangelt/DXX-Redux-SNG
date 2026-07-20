@@ -131,4 +131,7 @@ extern int blue_key_seg;
 extern vms_vector red_key_pos;
 extern int red_key_seg;
 
+// SNG: Static Powerups - resets the local player's per-life "already collected" tracker
+extern void reset_static_powerups_collected(void);
+
 #endif /* _POWERUP_H */
