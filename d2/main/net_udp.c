@@ -3072,6 +3072,7 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.RemoteHitSpark; len++;
 		buf[len] = Netgame.AllowCustomModelsTextures; len++;
 		buf[len] = Netgame.ReducedFlash; len++;
+		buf[len] = Netgame.DisableFOVChange; len++;
 		buf[len] = Netgame.DisableGaussSplash; len++;
 		buf[len] = Netgame.team_color[0];						len++;
 		buf[len] = Netgame.team_color[1];						len++;
@@ -3323,6 +3324,7 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		Netgame.RemoteHitSpark = data[len]; len++;
 		Netgame.AllowCustomModelsTextures = data[len]; len++;
 		Netgame.ReducedFlash = data[len]; len++;
+		Netgame.DisableFOVChange = data[len]; len++;
 		Netgame.DisableGaussSplash = data[len]; len++;
 		Netgame.team_color[0] = data[len];						len++;
 		Netgame.team_color[1] = data[len];						len++;
@@ -3835,6 +3837,7 @@ static int opt_homing_update_rate;
 static int opt_remote_hit_spark;
 static int opt_allow_custom_models_textures;
 static int opt_reduced_flash;
+static int opt_disable_fov;
 static int opt_disable_gauss_splash;
 
 #ifdef USE_TRACKER
@@ -4026,6 +4029,9 @@ void net_udp_more_game_options ()
 	opt_reduced_flash=opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Reduced flash effects"; m[opt].value = Netgame.ReducedFlash; opt++;
 
+	opt_disable_fov=opt;
+	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Lock FOV to Vanilla"; m[opt].value = Netgame.DisableFOVChange; opt++;
+
 	opt_disable_gauss_splash=opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Disable Gauss Splash"; m[opt].value = Netgame.DisableGaussSplash; opt++;
 
@@ -4092,6 +4098,7 @@ menu:
 	Netgame.RemoteHitSpark = m[opt_remote_hit_spark].value;
 	Netgame.AllowCustomModelsTextures = m[opt_allow_custom_models_textures].value;
 	Netgame.ReducedFlash = m[opt_reduced_flash].value;
+	Netgame.DisableFOVChange = m[opt_disable_fov].value;
 	Netgame.DisableGaussSplash = m[opt_disable_gauss_splash].value;
 }
 
@@ -4407,6 +4414,7 @@ void netgame_set_defaults()
 	Netgame.RemoteHitSpark = 0;
 	Netgame.AllowCustomModelsTextures = 0;
 	Netgame.ReducedFlash = 0;
+	Netgame.DisableFOVChange = 0;
 	Netgame.DisableGaussSplash = 0;
 
 #ifdef USE_TRACKER

@@ -578,6 +578,7 @@ typedef struct netgame_info
 	ubyte						RemoteHitSpark;
 	ubyte						AllowCustomModelsTextures;
 	ubyte						ReducedFlash;
+	ubyte						DisableFOVChange;
 	ubyte						DisableGaussSplash;
 	ubyte						team_color[2];
 } __pack__ netgame_info;

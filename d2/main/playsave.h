@@ -33,6 +33,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #define MOUSE_CONTROL_FLIGHT_SIM 1   /* Old School Mouse */
 #define MOUSE_CONTROL_REBIRTH 0
 #define MOUSE_CONTROL_OLDSCHOOL 2
+#define MOUSE_CONTROL_SNG 3   /* SNG Mouse - Enhanced mouse with smoothing and sub-pixel precision */
 
 typedef struct hli {
 	char	Shortname[9];

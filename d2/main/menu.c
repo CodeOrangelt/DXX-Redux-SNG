@@ -1112,7 +1112,9 @@ int input_config_menuset(newmenu *menu, d_event *event, void *userdata)
 			if (citem == opt_ic_mouseflightsim+1)
 				PlayerCfg.MouseControlStyle = MOUSE_CONTROL_FLIGHT_SIM;
 			if (citem == opt_ic_mouseflightsim+2)
-				PlayerCfg.MouseControlStyle = MOUSE_CONTROL_OLDSCHOOL;	
+				PlayerCfg.MouseControlStyle = MOUSE_CONTROL_OLDSCHOOL;
+			if (citem == opt_ic_mouseflightsim+3)
+				PlayerCfg.MouseControlStyle = MOUSE_CONTROL_SNG;
 			if (citem == opt_ic_grabinput)
 				GameCfg.Grabinput = items[citem].value;
 			if (citem == opt_ic_mousefsgauge)
@@ -1173,6 +1175,7 @@ void input_config()
 	m[nitems].type = NM_TYPE_RADIO; m[nitems].text = "Rebirth"; m[nitems].value = PlayerCfg.MouseControlStyle == MOUSE_CONTROL_REBIRTH; m[nitems].group = 0; nitems++;
 	m[nitems].type = NM_TYPE_RADIO; m[nitems].text = "FlightSim"; m[nitems].value = PlayerCfg.MouseControlStyle == MOUSE_CONTROL_FLIGHT_SIM; m[nitems].group = 0; nitems++;
 	m[nitems].type = NM_TYPE_RADIO; m[nitems].text = "Old school"; m[nitems].value = PlayerCfg.MouseControlStyle == MOUSE_CONTROL_OLDSCHOOL; m[nitems].group = 0; nitems++;
+	m[nitems].type = NM_TYPE_RADIO; m[nitems].text = "SNG Mouse"; m[nitems].value = PlayerCfg.MouseControlStyle == MOUSE_CONTROL_SNG; m[nitems].group = 0; nitems++;
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = ""; nitems++;opt_ic_joymousesens = nitems;
 	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "SENSITIVITY & DEADZONE"; nitems++;
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = ""; nitems++;
@@ -1249,7 +1252,7 @@ void reticle_config()
 	PlayerCfg.ReticleSize = m[opt_ret_size].value;
 }
 
-int opt_gr_texfilt, opt_gr_movietexfilt, opt_gr_brightness, opt_gr_reticlemenu, opt_gr_alphafx, opt_gr_dynlightcolor, opt_gr_vsync, opt_gr_multisample, opt_gr_fpsindi, opt_gr_disablecockpit;
+int opt_gr_texfilt, opt_gr_movietexfilt, opt_gr_brightness, opt_gr_reticlemenu, opt_gr_alphafx, opt_gr_dynlightcolor, opt_gr_vsync, opt_gr_multisample, opt_gr_fpsindi, opt_gr_mousedbg, opt_gr_fov, opt_gr_disablecockpit;
 int opt_gr_classicdepth;
 int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 {
@@ -1273,6 +1276,17 @@ int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 			}
 			if ( citem == opt_gr_brightness)
 				gr_palette_set_gamma(items[citem].value);
+			if ( citem == opt_gr_fov) {
+				// Only update if not locked by multiplayer
+				if (!((Game_mode & GM_MULTI) && Netgame.DisableFOVChange)) {
+					static char fov_text[32];
+					if (items[opt_gr_fov].value == 0)
+						snprintf(fov_text, sizeof(fov_text), "Field of View (Vanilla)");
+					else
+						snprintf(fov_text, sizeof(fov_text), "Field of View");
+					items[opt_gr_fov].text = fov_text;
+				}
+			}
 			break;
 
 		case EVENT_NEWMENU_SELECTED:
@@ -1291,7 +1305,7 @@ int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 void graphics_config()
 {
 #ifdef OGL
-	newmenu_item m[19];
+	newmenu_item m[21];
 	int i = 0;
 #else
 	newmenu_item m[6];
@@ -1327,6 +1341,22 @@ void graphics_config()
 #endif
 	opt_gr_fpsindi = nitems;
 	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="FPS Counter"; m[nitems].value = GameCfg.FPSIndicator; nitems++;
+	opt_gr_mousedbg = nitems;
+	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="Mouse Debug Info"; m[nitems].value = GameCfg.MouseDebugIndicator; nitems++;
+
+	opt_gr_fov = nitems;
+	static char fov_display[32];
+	// Check if FOV is locked by multiplayer host
+	if ((Game_mode & GM_MULTI) && Netgame.DisableFOVChange) {
+		snprintf(fov_display, sizeof(fov_display), "FOV: Locked by Host");
+		m[nitems].type = NM_TYPE_TEXT; m[nitems].text = fov_display; nitems++;
+	} else {
+		if (GameCfg.FOVZoom == 0)
+			snprintf(fov_display, sizeof(fov_display), "Field of View (Vanilla)");
+		else
+			snprintf(fov_display, sizeof(fov_display), "Field of View");
+		m[nitems].type = NM_TYPE_SLIDER; m[nitems].text = fov_display; m[nitems].value = GameCfg.FOVZoom; m[nitems].min_value = 0; m[nitems].max_value = 16; nitems++;
+	}
 
 	opt_gr_disablecockpit = nitems;
 	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="Disable Cockpit View"; m[nitems].value = PlayerCfg.DisableCockpit; nitems++;
@@ -1360,7 +1390,11 @@ void graphics_config()
 #endif
 	GameCfg.GammaLevel = m[opt_gr_brightness].value;
 	GameCfg.FPSIndicator = m[opt_gr_fpsindi].value;
-	PlayerCfg.DisableCockpit = m[opt_gr_disablecockpit].value; 
+	GameCfg.MouseDebugIndicator = m[opt_gr_mousedbg].value;
+	// Only save FOV if not locked by multiplayer host
+	if (!((Game_mode & GM_MULTI) && Netgame.DisableFOVChange))
+		GameCfg.FOVZoom = m[opt_gr_fov].value;
+	PlayerCfg.DisableCockpit = m[opt_gr_disablecockpit].value;
 
 	PlayerCfg.maxFps=atoi(framerate_string);
 
