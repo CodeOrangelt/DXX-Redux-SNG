@@ -1054,7 +1054,7 @@ multi_sort_kill_list(void)
 
 	for (i = 0; i < MAX_PLAYERS; i++)
 	{
-		if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS))
+		if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) || ((Game_mode & GM_CAPTURE) && Netgame.CTFVariant == CTF_VARIANT_SNG))
 			kills[i] = Players[i].score;
 		else
 		if (Show_kill_list==2)
@@ -2127,7 +2127,7 @@ multi_do_death(int objnum)
 
 	objnum = objnum;
 
-	if (!(Game_mode & GM_MULTI_COOP))
+	if (!(Game_mode & GM_MULTI_COOP) && !((Game_mode & GM_CAPTURE) && Netgame.CTFVariant == CTF_VARIANT_SNG))
 	{
 		Players[Player_num].flags |= (PLAYER_FLAGS_RED_KEY | PLAYER_FLAGS_BLUE_KEY | PLAYER_FLAGS_GOLD_KEY);
 	}
@@ -4444,7 +4444,7 @@ void multi_prep_level(void)
 
 			}
 
-			if (!(Game_mode & GM_MULTI_COOP))
+			if (!(Game_mode & GM_MULTI_COOP) && !((Game_mode & GM_CAPTURE) && Netgame.CTFVariant == CTF_VARIANT_SNG))
 				if ((Objects[i].id >= POW_KEY_BLUE) && (Objects[i].id <= POW_KEY_GOLD))
 				{
 					Objects[i].id = POW_SHIELD_BOOST;
@@ -5368,6 +5368,22 @@ void multi_send_flags (char pnum)
 	PUT_INTEL_INT(multibuf+2, Players[(int)pnum].flags);
  
 	multi_send_data(multibuf, 6, 2);
+}
+
+void multi_do_sng_flags(const ubyte* buf)
+{
+	Players[buf[1]].flags = GET_INTEL_INT(buf + 2);
+}
+
+void multi_send_sng_flags(void)
+{
+	if (is_observer()) { return; }
+
+	multibuf[0] = MULTI_SNG_FLAGS;
+	multibuf[1] = Player_num;
+	PUT_INTEL_INT(multibuf + 2, Players[Player_num].flags);
+
+	multi_send_data(multibuf, 6, 0);
 }
 
 void multi_send_drop_blobs (char pnum)
@@ -7040,6 +7056,8 @@ multi_process_data(const ubyte *buf, int len)
 			if (!Endlevel_sequence) multi_do_start_trigger(buf); break;
 		case MULTI_FLAGS:
 			if (!Endlevel_sequence) multi_do_flags(buf); break;
+		case MULTI_SNG_FLAGS:
+			if (!Endlevel_sequence) multi_do_sng_flags(buf); break;
 		case MULTI_DROP_BLOB:
 			if (!Endlevel_sequence) multi_do_drop_blob(buf); break;
 		case MULTI_ACTIVE_DOOR:

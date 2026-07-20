@@ -47,6 +47,9 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 //   he got.
 
 
+// SNG CTF variant score HUD
+void display_score_sng_ctf();
+
 // Destroys all fuel centers, clears segment backpointer array.
 void fuelcen_reset();
 // Create materialization center

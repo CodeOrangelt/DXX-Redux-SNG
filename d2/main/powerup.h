@@ -125,4 +125,10 @@ extern void powerup_basic(int redadd, int greenadd, int blueadd, int score, cons
  */
 extern int powerup_type_info_read_n(powerup_type_info *pti, int n, PHYSFS_file *fp);
 
+// SNG CTF variant: last known position/segment of the key-as-flag, used to drop it back when a carrier returns to base
+extern vms_vector blue_key_pos;
+extern int blue_key_seg;
+extern vms_vector red_key_pos;
+extern int red_key_seg;
+
 #endif /* _POWERUP_H */

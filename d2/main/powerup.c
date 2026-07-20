@@ -229,6 +229,11 @@ extern char GetKeyValue(char);
 extern void check_to_use_primary(int);
 extern void multi_send_got_flag (char);
 
+vms_vector blue_key_pos;
+int blue_key_seg;
+vms_vector red_key_pos;
+int red_key_seg;
+
 //	returns true if powerup consumed
 int do_powerup(object *obj)
 {
@@ -323,6 +328,23 @@ int do_powerup(object *obj)
 			break;
 
 		case POW_KEY_BLUE:
+			blue_key_pos = obj->pos;
+			blue_key_seg = obj->segnum;
+			if ((Game_mode & GM_CAPTURE) && Netgame.CTFVariant == CTF_VARIANT_SNG && !(Players[Player_num].flags & PLAYER_FLAGS_BLUE_KEY))
+			{
+				if (get_team(Player_num) == TEAM_BLUE)
+					break; // can't capture your own team's flag
+				PALETTE_FLASH_ADD(0, 15, 0);
+				sprintf(Network_message, "has picked up the \x01%c blue \x01%c Flag!", (unsigned char)BM_XRGB(0, 0, 63), (unsigned char)BM_XRGB(63, 63, 63));
+				Network_message_reciever = 100;
+				HUD_init_message(HM_MULTI, "\x01%cThe other team has been alerted!", (unsigned char)BM_XRGB(63, 0, 0));
+				digi_play_sample(SOUND_CONTROL_CENTER_WARNING_SIREN, F1_0);
+				multi_send_play_sound(SOUND_CONTROL_CENTER_WARNING_SIREN, F1_0);
+				Players[Player_num].flags |= PLAYER_FLAGS_BLUE_KEY;
+				multi_send_sng_flags();
+				used = 1;
+				break;
+			}
 			if (Players[Player_num].flags & PLAYER_FLAGS_BLUE_KEY)
 				break;
 #ifdef NETWORK
@@ -342,6 +364,23 @@ int do_powerup(object *obj)
 
 			break;
 		case POW_KEY_RED:
+			red_key_pos = obj->pos;
+			red_key_seg = obj->segnum;
+			if ((Game_mode & GM_CAPTURE) && Netgame.CTFVariant == CTF_VARIANT_SNG && !(Players[Player_num].flags & PLAYER_FLAGS_RED_KEY))
+			{
+				if (get_team(Player_num) == TEAM_RED)
+					break; // can't capture your own team's flag
+				PALETTE_FLASH_ADD(0, 15, 0);
+				sprintf(Network_message, "has picked up the \x01%c red \x01%c Flag!", (unsigned char)BM_XRGB(63, 0, 0), (unsigned char)BM_XRGB(63, 63, 63));
+				Network_message_reciever = 100;
+				HUD_init_message(HM_MULTI, "\x01%cThe other team has been alerted!", (unsigned char)BM_XRGB(0, 0, 63));
+				digi_play_sample(SOUND_CONTROL_CENTER_WARNING_SIREN, F1_0);
+				multi_send_play_sound(SOUND_CONTROL_CENTER_WARNING_SIREN, F1_0);
+				Players[Player_num].flags |= PLAYER_FLAGS_RED_KEY;
+				multi_send_sng_flags();
+				used = 1;
+				break;
+			}
 			if (Players[Player_num].flags & PLAYER_FLAGS_RED_KEY)
 				break;
 #ifdef NETWORK

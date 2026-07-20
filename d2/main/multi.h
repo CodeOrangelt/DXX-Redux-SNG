@@ -60,7 +60,7 @@ extern int multi_protocol; // set and determinate used protocol
 #define MULTI_PROTO_UDP 1 // UDP protocol
 
 // What version of the multiplayer protocol is this? Increment each time something drastic changes in Multiplayer without the version number changes. Can be reset to 0 each time the version of the game changes
-#define MULTI_PROTO_VERSION 30005 // Redux 1.1
+#define MULTI_PROTO_VERSION 30006 // Redux 1.1 + SNG CTF variant
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -126,6 +126,7 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_LIGHT                , 18)	\
 	VALUE(MULTI_START_TRIGGER        , 2)	\
 	VALUE(MULTI_FLAGS                , 6)	\
+	VALUE(MULTI_SNG_FLAGS            , 6)	\
 	VALUE(MULTI_DROP_BLOB            , 2)	\
 	VALUE(MULTI_ACTIVE_DOOR          , sizeof(active_door)+3)	\
 	VALUE(MULTI_SOUND_FUNCTION       , 4)	\
@@ -161,6 +162,9 @@ for_each_multiplayer_command(enum {, define_multiplayer_command, });
 #define NETGAME_HOARD           5
 #define NETGAME_TEAM_HOARD      6
 #define NETGAME_BOUNTY		7
+
+#define CTF_VARIANT_VANILLA    0   // D2's native flag-object CTF
+#define CTF_VARIANT_SNG        1   // D1 SNG-style CTF: key powerups double as flags, scored at your fuelcen
 
 #define NETSTAT_MENU                0
 #define NETSTAT_PLAYING             1
@@ -266,6 +270,8 @@ void multi_do_frame(void);
 
 
 void multi_send_flags(char);
+void multi_send_sng_flags(void);
+void multi_do_sng_flags(const ubyte *buf);
 void multi_send_fire(int laser_gun, int laser_level, int laser_flags, int laser_fired, short laser_track);
 void multi_send_destroy_controlcen(int objnum, int player);
 void multi_send_endlevel_start(int);
@@ -580,6 +586,7 @@ typedef struct netgame_info
 	ubyte						ReducedFlash;
 	ubyte						DisableFOVChange;
 	ubyte						DisableGaussSplash;
+	ubyte						CTFVariant;
 	ubyte						team_color[2];
 } __pack__ netgame_info;
 

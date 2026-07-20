@@ -3074,6 +3074,7 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.ReducedFlash; len++;
 		buf[len] = Netgame.DisableFOVChange; len++;
 		buf[len] = Netgame.DisableGaussSplash; len++;
+		buf[len] = Netgame.CTFVariant; len++;
 		buf[len] = Netgame.team_color[0];						len++;
 		buf[len] = Netgame.team_color[1];						len++;
 
@@ -3326,6 +3327,7 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		Netgame.ReducedFlash = data[len]; len++;
 		Netgame.DisableFOVChange = data[len]; len++;
 		Netgame.DisableGaussSplash = data[len]; len++;
+		Netgame.CTFVariant = data[len]; len++;
 		Netgame.team_color[0] = data[len];						len++;
 		Netgame.team_color[1] = data[len];						len++;
 
@@ -4313,7 +4315,10 @@ int net_udp_game_param_handler( newmenu *menu, d_event *event, param_opt *opt )
 				else if ( menus[opt->coop].value ) 
 					Netgame.gamemode = NETGAME_COOPERATIVE;
 				else if (menus[opt->capture].value)
+				{
 					Netgame.gamemode = NETGAME_CAPTURE_FLAG;
+					Netgame.CTFVariant = (nm_messagebox(NULL, 2, "Vanilla", "SNG", "Choose Capture the Flag variant:\nVanilla uses D2's flag objects.\nSNG uses D1's key-as-flag mod\n(works on any level, no flag\nplacement required).") == 1) ? CTF_VARIANT_SNG : CTF_VARIANT_VANILLA;
+				}
 				else if (HoardEquipped() && menus[opt->hoard].value)
 					Netgame.gamemode = NETGAME_HOARD;
 				else if (HoardEquipped() && menus[opt->team_hoard].value)
@@ -4416,6 +4421,7 @@ void netgame_set_defaults()
 	Netgame.ReducedFlash = 0;
 	Netgame.DisableFOVChange = 0;
 	Netgame.DisableGaussSplash = 0;
+	Netgame.CTFVariant = CTF_VARIANT_VANILLA;
 
 #ifdef USE_TRACKER
 	Netgame.Tracker = 1;

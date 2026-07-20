@@ -38,6 +38,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "game.h"
 #include "gauges.h"
 #include "gamefont.h"
+#include "fuelcen.h"
 #include "newdemo.h"
 #include "text.h"
 #include "multi.h"
@@ -576,6 +577,8 @@ void game_draw_hud_stuff()
 
 	if (!is_observer() && GameCfg.MouseDebugIndicator && PlayerCfg.CurrentCockpitMode != CM_REAR_VIEW)
 		show_mouse_debug();
+
+	display_score_sng_ctf();
 
 	if (Newdemo_state == ND_STATE_PLAYBACK)
 		Game_mode = Newdemo_game_mode;

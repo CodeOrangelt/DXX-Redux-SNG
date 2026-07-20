@@ -34,6 +34,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #include "wall.h"
 #include "sounds.h"
+#include "gamefont.h"
 #include "morph.h"
 #include "3d.h"
 #include "bm.h"
@@ -577,6 +578,42 @@ void fuelcen_update_all()
 
 #define FUELCEN_SOUND_DELAY (f1_0/4)		//play every half second
 
+void display_score_sng_ctf()
+{
+	int redscore = 0;
+	int bluescore = 0;
+
+	if ((Game_mode & GM_CAPTURE) && Netgame.CTFVariant == CTF_VARIANT_SNG)
+	{
+		int xkeys = FSPACX2(1);
+		int ykeys = grd_curcanv->cv_bitmap.bm_h;
+		// Look up D2's actual palette indices for red/blue/white rather than
+		// reusing D1's hardcoded palette bytes, which point at different colors here.
+		unsigned char red_idx = (unsigned char)BM_XRGB(63, 0, 0);
+		unsigned char blue_idx = (unsigned char)BM_XRGB(0, 0, 63);
+		unsigned char white_idx = (unsigned char)BM_XRGB(63, 63, 63);
+
+		for (int i = 0; i < N_players; i++)
+			if (get_team(i) == TEAM_BLUE)
+				bluescore += Players[i].score;
+		for (int i = 0; i < N_players; i++)
+			if (get_team(i) == TEAM_RED)
+				redscore += Players[i].score;
+
+		// winning team shown on top
+		if (redscore > bluescore)
+		{
+			gr_printf(xkeys * 0.5, ykeys / 1.60, "\x01%cRed:\x01%c %d", red_idx, white_idx, redscore);
+			gr_printf(xkeys * 0.5, ykeys / 1.50, "\x01%cBlue:\x01%c %d", blue_idx, white_idx, bluescore);
+		}
+		else
+		{
+			gr_printf(xkeys * 0.5, ykeys / 1.60, "\x01%cBlue:\x01%c %d", blue_idx, white_idx, bluescore);
+			gr_printf(xkeys * 0.5, ykeys / 1.50, "\x01%cRed:\x01%c %d", red_idx, white_idx, redscore);
+		}
+	}
+}
+
 //-------------------------------------------------------------
 fix fuelcen_give_fuel(segment *segp, fix MaxAmountCanTake )
 {
@@ -587,6 +624,37 @@ fix fuelcen_give_fuel(segment *segp, fix MaxAmountCanTake )
 	Assert( segp != NULL );
 
 	PlayerSegment = segp;
+
+	extern int drop_powerup(int type, int id, int num, vms_vector *init_vel, vms_vector *pos, int segnum);
+
+	if ((Game_mode & GM_CAPTURE) && Netgame.CTFVariant == CTF_VARIANT_SNG)
+	{
+		if (blue_key_seg == ConsoleObject->segnum && (Players[Player_num].flags & PLAYER_FLAGS_RED_KEY) && get_team(Player_num) == TEAM_BLUE)
+		{
+			int objnum = drop_powerup(OBJ_POWERUP, POW_KEY_RED, 1, &vmd_zero_vector, &red_key_pos, red_key_seg);
+			multi_send_create_powerup(POW_KEY_RED, red_key_seg, objnum, &red_key_pos);
+			sprintf(Network_message, "has scored!");
+			Network_message_reciever = 100;
+			Players[Player_num].flags &= ~PLAYER_FLAGS_RED_KEY;
+			PALETTE_FLASH_ADD(0, 15, 0);
+			multi_send_sng_flags();
+			digi_play_sample_once(SOUND_HOSTAGE_RESCUED, F1_0);
+			add_points_to_score(5);
+		}
+
+		if (red_key_seg == ConsoleObject->segnum && (Players[Player_num].flags & PLAYER_FLAGS_BLUE_KEY) && get_team(Player_num) == TEAM_RED)
+		{
+			int objnum = drop_powerup(OBJ_POWERUP, POW_KEY_BLUE, 1, &vmd_zero_vector, &blue_key_pos, blue_key_seg);
+			multi_send_create_powerup(POW_KEY_BLUE, blue_key_seg, objnum, &blue_key_pos);
+			sprintf(Network_message, "has scored!");
+			Network_message_reciever = 100;
+			Players[Player_num].flags &= ~PLAYER_FLAGS_BLUE_KEY;
+			PALETTE_FLASH_ADD(0, 15, 0);
+			multi_send_sng_flags();
+			digi_play_sample_once(SOUND_HOSTAGE_RESCUED, F1_0);
+			add_points_to_score(5);
+		}
+	}
 
 	if ( (segp) && (seg2p->special==SEGMENT_IS_FUELCEN) )	{
 		fix amount;
