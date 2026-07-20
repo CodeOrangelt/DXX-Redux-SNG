@@ -865,14 +865,18 @@ void do_door_open(int door_num)
 		time_elapsed = d->time;
 		n = WallAnims[w->clip_num].num_frames;
 		time_total = WallAnims[w->clip_num].play_time;
-	
-		one_frame = time_total/n;	
-	
+
+		// SNG toggle: FastDoor - makes doors open even faster
+		if (Netgame.FastDoor)
+			time_total = time_total / 2;
+
+		one_frame = time_total/n;
+
 		i = time_elapsed/one_frame;
-	
+
 		if (i < n)
 			wall_set_tmap_num(seg,side,csegp,Connectside,w->clip_num,i);
-	
+
 		if (i> n/2) {
 			Walls[seg->sides[side].wall_num].flags |= WALL_DOOR_OPENED;
 			Walls[csegp->sides[Connectside].wall_num].flags |= WALL_DOOR_OPENED;

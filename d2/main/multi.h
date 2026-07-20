@@ -60,7 +60,7 @@ extern int multi_protocol; // set and determinate used protocol
 #define MULTI_PROTO_UDP 1 // UDP protocol
 
 // What version of the multiplayer protocol is this? Increment each time something drastic changes in Multiplayer without the version number changes. Can be reset to 0 each time the version of the game changes
-#define MULTI_PROTO_VERSION 30006 // Redux 1.1 + SNG CTF variant
+#define MULTI_PROTO_VERSION 30008 // Redux 1.1 + SNG CTF variant + SNG toggles + D2 weapon spawn toggles
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -272,6 +272,7 @@ void multi_do_frame(void);
 void multi_send_flags(char);
 void multi_send_sng_flags(void);
 void multi_do_sng_flags(const ubyte *buf);
+void multi_disable_spawn_weapon_powerups(void);
 void multi_send_fire(int laser_gun, int laser_level, int laser_flags, int laser_fired, short laser_track);
 void multi_send_destroy_controlcen(int objnum, int player);
 void multi_send_endlevel_start(int);
@@ -587,6 +588,31 @@ typedef struct netgame_info
 	ubyte						DisableFOVChange;
 	ubyte						DisableGaussSplash;
 	ubyte						CTFVariant;
+	ubyte						WeaponStun;
+	ubyte						PurpleFlash;
+	ubyte						VulcanShake;
+	ubyte						FusionShake;
+	ubyte						FastDoor;
+	ubyte						QuietFan;
+	ubyte						FusionSpawn;
+	ubyte						VulcanSpawn;
+	ubyte						PlasmaSpawn;
+	ubyte						LasersSpawn;
+	ubyte						SpreadSpawn;
+	ubyte						HomersSpawn;
+	ubyte						SmartsSpawn;
+	ubyte						BombsSpawn;
+	ubyte						MegasSpawn;
+	// D2-exclusive weapons, not present in the original D1 SNG spawn-with-weapons list
+	ubyte						GaussSpawn;
+	ubyte						HelixSpawn;
+	ubyte						PhoenixSpawn;
+	ubyte						OmegaSpawn;
+	ubyte						FlashSpawn;
+	ubyte						GuidedSpawn;
+	ubyte						SmartMineSpawn;
+	ubyte						MercurySpawn;
+	ubyte						EarthshakerSpawn;
 	ubyte						team_color[2];
 } __pack__ netgame_info;
 

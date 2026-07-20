@@ -1428,7 +1428,8 @@ void GameProcessFrame(void)
 			else if (GameTime64 + FrameTime/2 >= Auto_fire_fusion_cannon_time) {
 				Auto_fire_fusion_cannon_time = 0;
 				Global_laser_firing_count = 1;
-			} else if (d_tick_step) {
+			// SNG toggle: FusionShake - toggleable fusion shake
+			} else if (!Netgame.FusionShake && d_tick_step) {
 				vms_vector	rand_vec;
 				fix			bump_amount;
 
@@ -1729,12 +1730,17 @@ void FireLaser()
 			} else
 				Auto_fire_fusion_cannon_time = GameTime64 + FrameTime/2 + 1;		//	Fire the fusion cannon at this time in the future.
 
-			flash_val = !(Game_mode & GM_MULTI) || !Netgame.ReducedFlash ? Fusion_charge >> 11 :
-				PaletteRedAdd < 10 ? 10 - PaletteRedAdd : 0;
-			if (Fusion_charge < F1_0*2)
-				PALETTE_FLASH_ADD(flash_val, 0, flash_val);
-			else
-				PALETTE_FLASH_ADD(flash_val, flash_val, 0);
+			// SNG toggle: PurpleFlash - when enabled, disable fusion screen flash
+			if (Netgame.PurpleFlash) {
+				palette_save();
+			} else {
+				flash_val = !(Game_mode & GM_MULTI) || !Netgame.ReducedFlash ? Fusion_charge >> 11 :
+					PaletteRedAdd < 10 ? 10 - PaletteRedAdd : 0;
+				if (Fusion_charge < F1_0*2)
+					PALETTE_FLASH_ADD(flash_val, 0, flash_val);
+				else
+					PALETTE_FLASH_ADD(flash_val, flash_val, 0);
+			}
 
 			if (Fusion_next_sound_time > GameTime64 + F1_0/8 + D_RAND_MAX/4) // GameTime64 is smaller than max delay - player in new level?
 				Fusion_next_sound_time = GameTime64 - 1;

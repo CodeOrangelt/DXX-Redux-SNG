@@ -469,6 +469,134 @@ void init_player_stats_new_ship(ubyte pnum)
 		Players[pnum].afterburner_charge = f1_0;
 	}
 #endif
+
+	// SNG spawn weapon toggles
+	if (Game_mode & GM_MULTI)
+	{
+		if (Netgame.FusionSpawn)
+		{
+			Players[pnum].primary_weapon = FUSION_INDEX;
+			Players[pnum].primary_weapon_flags |= HAS_FUSION_FLAG;
+		}
+
+		if (Netgame.VulcanSpawn)
+		{
+			Players[pnum].primary_weapon_flags |= HAS_VULCAN_FLAG;
+			Players[pnum].primary_ammo[VULCAN_INDEX] = VULCAN_AMMO_MAX / 4;
+			Players[pnum].primary_weapon = VULCAN_INDEX;
+		}
+
+		if (Netgame.PlasmaSpawn)
+		{
+			Players[pnum].primary_weapon = PLASMA_INDEX;
+			Players[pnum].primary_weapon_flags |= HAS_PLASMA_FLAG;
+		}
+
+		if (Netgame.LasersSpawn)
+		{
+			Players[pnum].primary_weapon = LASER_INDEX;
+			Players[pnum].primary_weapon_flags |= HAS_LASER_FLAG;
+
+			if (Netgame.LasersSpawn >= 1 && Netgame.LasersSpawn <= MAX_SUPER_LASER_LEVEL + 1)
+			{
+				Players[pnum].laser_level = Netgame.LasersSpawn - 1;
+				Players[pnum].flags |= PLAYER_FLAGS_QUAD_LASERS;
+			}
+		}
+
+		if (Netgame.SpreadSpawn)
+		{
+			Players[pnum].primary_weapon = SPREADFIRE_INDEX;
+			Players[pnum].primary_weapon_flags |= HAS_SPREADFIRE_FLAG;
+		}
+
+		if (Netgame.HomersSpawn)
+		{
+			Players[pnum].secondary_weapon = HOMING_INDEX;
+			Players[pnum].secondary_weapon_flags |= HAS_HOMING_FLAG;
+			Players[pnum].secondary_ammo[HOMING_INDEX] = 5;
+		}
+
+		if (Netgame.SmartsSpawn)
+		{
+			Players[pnum].secondary_weapon = SMART_INDEX;
+			Players[pnum].secondary_weapon_flags |= HAS_SMART_FLAG;
+			Players[pnum].secondary_ammo[SMART_INDEX] = 1;
+		}
+
+		if (Netgame.BombsSpawn)
+		{
+			Players[pnum].secondary_weapon_flags |= HAS_PROXIMITY_FLAG;
+			Players[pnum].secondary_ammo[PROXIMITY_INDEX] = 4;
+		}
+
+		if (Netgame.MegasSpawn)
+		{
+			Players[pnum].secondary_weapon = MEGA_INDEX;
+			Players[pnum].secondary_weapon_flags |= HAS_MEGA_FLAG;
+			Players[pnum].secondary_ammo[MEGA_INDEX] = 1;
+		}
+
+		// D2-exclusive weapons
+		if (Netgame.GaussSpawn)
+		{
+			Players[pnum].primary_weapon_flags |= HAS_FLAG(GAUSS_INDEX);
+			Players[pnum].primary_ammo[VULCAN_INDEX] = VULCAN_AMMO_MAX / 4; // Gauss shares the Vulcan ammo pool
+			Players[pnum].primary_weapon = GAUSS_INDEX;
+		}
+
+		if (Netgame.HelixSpawn)
+		{
+			Players[pnum].primary_weapon = HELIX_INDEX;
+			Players[pnum].primary_weapon_flags |= HAS_FLAG(HELIX_INDEX);
+		}
+
+		if (Netgame.PhoenixSpawn)
+		{
+			Players[pnum].primary_weapon = PHOENIX_INDEX;
+			Players[pnum].primary_weapon_flags |= HAS_FLAG(PHOENIX_INDEX);
+		}
+
+		if (Netgame.OmegaSpawn)
+		{
+			Players[pnum].primary_weapon = OMEGA_INDEX;
+			Players[pnum].primary_weapon_flags |= HAS_FLAG(OMEGA_INDEX);
+		}
+
+		if (Netgame.FlashSpawn)
+		{
+			Players[pnum].secondary_weapon = SMISSILE1_INDEX;
+			Players[pnum].secondary_weapon_flags |= HAS_FLAG(SMISSILE1_INDEX);
+			Players[pnum].secondary_ammo[SMISSILE1_INDEX] = 4;
+		}
+
+		if (Netgame.GuidedSpawn)
+		{
+			Players[pnum].secondary_weapon = GUIDED_INDEX;
+			Players[pnum].secondary_weapon_flags |= HAS_FLAG(GUIDED_INDEX);
+			Players[pnum].secondary_ammo[GUIDED_INDEX] = 4;
+		}
+
+		if (Netgame.SmartMineSpawn)
+		{
+			Players[pnum].secondary_weapon_flags |= HAS_FLAG(SMART_MINE_INDEX);
+			Players[pnum].secondary_ammo[SMART_MINE_INDEX] = 4;
+		}
+
+		if (Netgame.MercurySpawn)
+		{
+			Players[pnum].secondary_weapon = SMISSILE4_INDEX;
+			Players[pnum].secondary_weapon_flags |= HAS_FLAG(SMISSILE4_INDEX);
+			Players[pnum].secondary_ammo[SMISSILE4_INDEX] = 4;
+		}
+
+		if (Netgame.EarthshakerSpawn)
+		{
+			Players[pnum].secondary_weapon = SMISSILE5_INDEX;
+			Players[pnum].secondary_weapon_flags |= HAS_FLAG(SMISSILE5_INDEX);
+			Players[pnum].secondary_ammo[SMISSILE5_INDEX] = 1;
+		}
+	}
 	digi_kill_sound_linked_to_object(Players[pnum].objnum);
 
 	if (pnum == Player_num && Game_mode & GM_MULTI)
@@ -586,7 +714,11 @@ void set_sound_sources()
 						}
 
 						compute_center_point_on_side(&pnt,seg,sidenum);
-						digi_link_sound_to_pos(sn,segnum,sidenum,&pnt,1, F1_0/2);
+						// SNG toggle: QuietFan - reduce ambient fan/effect sounds
+						if (Netgame.QuietFan)
+							digi_link_sound_to_pos(sn,segnum,sidenum,&pnt,1, F1_0/4);
+						else
+							digi_link_sound_to_pos(sn,segnum,sidenum,&pnt,1, F1_0/2);
 					}
 		}
 
@@ -1551,6 +1683,12 @@ void StartNewLevelSub(int level_num, int page_in_textures, int secret_flag)
 
 	gameseq_init_network_players(); // Initialize the Players array for
 											  // this level
+
+	// SNG: Disable powerups that players spawn with
+#ifdef NETWORK
+	if (Game_mode & GM_MULTI)
+		multi_disable_spawn_weapon_powerups();
+#endif
 
 	Viewer = &Objects[Players[Player_num].objnum];
 

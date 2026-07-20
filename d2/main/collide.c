@@ -2400,7 +2400,13 @@ void collide_player_and_weapon( object * playerobj, object * weapon, vms_vector 
 
 	maybe_kill_weapon(weapon,playerobj);
 
-	bump_two_objects(playerobj, weapon, 0);	//no damage from bump
+	// SNG toggle: WeaponStun - when enabled, no weapon bump/stun effect
+	if (Netgame.WeaponStun) {
+		// NO BUMP
+	}
+	else {
+		bump_two_objects(playerobj, weapon, 0);	//no damage from bump
+	}
 
 	if ( !Weapon_info[weapon->id].damage_radius ) {
 		if ( weapon->ctype.laser_info.parent_num > -1 )
