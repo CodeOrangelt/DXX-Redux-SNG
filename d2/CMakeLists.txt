@@ -15,6 +15,8 @@ option(EDITOR "Include editor into build (experimental) [default: OFF]" OFF)
 option(IPV6 "Enable IPv6 compability [default: OFF]" OFF)
 option(UDP "Enable UDP support [default: ON]" ON)
 option(TRACKER "Enable Tracker support (requires UDP) [default: ON]" ON)
+option(GNS "Build with GameNetworkingSockets for ICE-based P2P NAT traversal (requires UDP) [default: ON]" ON)
+option(UPNP "Build with miniupnpc for automatic router port-forwarding when hosting (requires UDP) [default: ON]" ON)
 option(PNG "Build with PNG support for screenshots and textures [default: ON]" ON)
 option(OPENGLMERGE "Use an OpenGL shader for texmerge [default: ON]" ON)
 
@@ -65,6 +67,41 @@ if(UDP)
     add_definitions(/DUSE_UDP)
     if(TRACKER)
         add_definitions(/DUSE_TRACKER)
+    endif()
+    if(GNS)
+        add_definitions(/DUSE_GNS)
+        set(BUILD_STATIC_LIB ON CACHE BOOL "" FORCE)
+        set(BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)
+        set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+        # Native (non-WebRTC) ICE implementation - enough for STUN-based NAT
+        # traversal without pulling in Google's WebRTC as a dependency.
+        set(ENABLE_ICE ON CACHE BOOL "" FORCE)
+        set(USE_STEAMWEBRTC OFF CACHE BOOL "" FORCE)
+        include(FetchContent)
+        FetchContent_Declare(
+            GameNetworkingSockets
+            GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
+            GIT_TAG v1.6.0
+        )
+        FetchContent_MakeAvailable(GameNetworkingSockets)
+    endif()
+    if(UPNP)
+        add_definitions(/DUSE_UPNP)
+        set(UPNPC_BUILD_STATIC ON CACHE BOOL "" FORCE)
+        set(UPNPC_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+        set(UPNPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(UPNPC_BUILD_SAMPLE OFF CACHE BOOL "" FORCE)
+        set(NO_GETADDRINFO OFF CACHE BOOL "" FORCE)
+        include(FetchContent)
+        FetchContent_Declare(
+            miniupnpc
+            GIT_REPOSITORY https://github.com/miniupnp/miniupnp.git
+            GIT_TAG miniupnpc_2_3_3
+            SOURCE_SUBDIR miniupnpc
+        )
+        FetchContent_MakeAvailable(miniupnpc)
     endif()
 endif()
 if(PNG)

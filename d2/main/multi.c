@@ -574,6 +574,64 @@ void add_observatory_damage_stat(int player_num, fix shields_delta, fix new_shie
 
 		// Show the player's most recent death until the time listed.
 		Show_death_until[player_num] = GameTime64 + i2f(15);
+
+		// Write this kill to gamelog.txt on every peer. This piggybacks on
+		// the same network-synced damage report that already reliably
+		// drives the observer death log/kill-feed above (observer mode
+		// can't tolerate lost packets either), so no new network traffic
+		// is introduced here -- unlike a raw unacked UDP broadcast, this
+		// can't desync or drop.
+		{
+			char killed_name[CALLSIGN_LEN+1];
+			char desc[128];
+
+			snprintf(killed_name, sizeof(killed_name), "%s", Players[player_num].callsign);
+
+			switch (killer_type)
+			{
+				case OBJ_WALL:
+					snprintf(desc, sizeof(desc), "%s killed by %s", killed_name, damage_type == DAMAGE_LAVA ? "Lava" : "Wall");
+					break;
+				case OBJ_ROBOT:
+					snprintf(desc, sizeof(desc), "%s killed by a Robot", killed_name);
+					break;
+				case OBJ_CNTRLCEN:
+					snprintf(desc, sizeof(desc), "%s killed by the Reactor", killed_name);
+					break;
+				case OBJ_PLAYER:
+					if (killer_id == player_num)
+					{
+						snprintf(desc, sizeof(desc), "%s killed self", killed_name);
+					}
+					else
+					{
+						const char *reason = "Unknown";
+						switch (damage_type)
+						{
+							case DAMAGE_WEAPON:
+							case DAMAGE_BLAST:
+								reason = (source_id == SHIP_EXPLOSION_DAMAGE) ? "Explosion" : weapon_id_to_name(source_id);
+								break;
+							case DAMAGE_COLLISION:
+								reason = "Ramming";
+								break;
+							case DAMAGE_LAVA:
+								reason = "Lava";
+								break;
+							case DAMAGE_OVERCHARGE:
+								reason = "Overcharge";
+								break;
+						}
+						snprintf(desc, sizeof(desc), "%s killed by %s (%s)", killed_name, Players[killer_id].callsign, reason);
+					}
+					break;
+				default:
+					snprintf(desc, sizeof(desc), "%s died", killed_name);
+					break;
+			}
+
+			con_printf(CON_NORMAL, "Gamelog: %s\n", desc);
+		}
 	}
 }
 
@@ -2325,6 +2383,7 @@ void multi_do_message(const ubyte* cbuf)
 		if (!PlayerCfg.NoChatSound)
 			digi_play_sample(SOUND_HUD_MESSAGE, F1_0);
 		HUD_init_message(HM_MULTI, "%s %s", mesbuf, buf+2);
+		con_printf(CON_NORMAL, "Gamelog: %s: %s\n", Players[(int)buf[1]].callsign, buf+2);
 		multi_sending_message[(int)buf[1]] = 0;
 	}
 	else
@@ -2349,6 +2408,7 @@ void multi_do_message(const ubyte* cbuf)
 			if (!PlayerCfg.NoChatSound)
 				digi_play_sample(SOUND_HUD_MESSAGE, F1_0);
 			HUD_init_message(HM_MULTI, "%s %s", mesbuf, colon+1);
+			con_printf(CON_NORMAL, "Gamelog: %s: %s\n", Players[(int)buf[1]].callsign, colon+1);
 			multi_sending_message[(int)buf[1]] = 0;
 		}
 	}
@@ -3836,6 +3896,7 @@ multi_send_message(void)
 		strncpy((char *)(multibuf+loc), Network_message, MAX_MESSAGE_LEN); loc += MAX_MESSAGE_LEN;
 		multibuf[loc-1] = '\0';
 		multi_send_data(multibuf, loc, 0);
+		con_printf(CON_NORMAL, "Gamelog: %s: %s\n", Players[Player_num].callsign, Network_message);
 		Network_message_reciever = -1;
 	}
 }

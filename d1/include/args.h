@@ -24,6 +24,10 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #include "pstypes.h"
 
+#ifdef USE_TRACKER
+#define MAX_TRACKERS 4 // 2 defaults (see net_udp.h) + 2 more via -tracker3_hostaddr/-tracker4_hostaddr
+#endif
+
 extern int Num_args;
 extern char *Args[];
 extern void InitArgs(int argc, char **argv);
@@ -68,9 +72,21 @@ typedef struct Arg
 	int MplUdpHostPort;
 	int MplUdpMyPort;
 #ifdef USE_TRACKER
-	const char *MplTrackerAddr;
-	int MplTrackerPort;
+	// Up to MAX_TRACKERS trackers can be registered/queried at once -- one
+	// tracker being down doesn't stop the others from working.
+	const char *MplTrackerAddr[MAX_TRACKERS];
+	int MplTrackerPort[MAX_TRACKERS];
+	int MplTrackerCount;
 #endif
+	// Self-hosted relay server, for players who can't port-forward or use a
+	// VPN: transparently tunnels the UDP session through a server both
+	// sides can reach outbound. See tools/relay_server.py.
+	// MplRelayToken is a shared "room code" agreed out-of-band (chat, etc.)
+	// between host and joiner -- unrelated to the game's own per-session
+	// netgame_token, which the joiner can't know until after connecting.
+	const char *MplRelayAddr; // empty/NULL = relay disabled
+	int MplRelayPort;
+	int MplRelayToken; // 0 = relay not used this session
 	int DbgVerbose;
 	int DbgSafelog;
 	int DbgNoRun;

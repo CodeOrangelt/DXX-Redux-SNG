@@ -69,6 +69,8 @@ add_executable (d2x-redux
     weapon.c
     )
 
+set_target_properties(d2x-redux PROPERTIES OUTPUT_NAME "d2x-redux-sng")
+
 include_directories(${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/arch/include)
 
 target_compile_definitions(d2x-redux PUBLIC
@@ -104,8 +106,8 @@ if(WIN32)
     target_link_libraries(d2x-redux PUBLIC glu32 winmm ws2_32 dbghelp)
     target_link_libraries(d2x-redux PRIVATE arch_win32)
     target_sources(d2x-redux PRIVATE
-        ${CMAKE_SOURCE_DIR}/arch/win32/d2x-rebirth.ico
-        ${CMAKE_SOURCE_DIR}/arch/win32/d2x-rebirth.rc
+        ${CMAKE_SOURCE_DIR}/arch/win32/d2x-sng.ico
+        ${CMAKE_SOURCE_DIR}/arch/win32/d2x-sng.rc
         )
     set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} /NODEFAULTLIB:msvcrt.lib")
     if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
@@ -174,5 +176,12 @@ endif()
 target_include_directories(d2x-redux PUBLIC ${SDL_INCLUDE_DIR} ${PHYSFS_INCLUDE_DIR})
 target_link_libraries(d2x-redux PRIVATE 2d 3d arch_sdl iff libmve maths mem misc texmap)
 target_link_libraries(d2x-redux PUBLIC ${OPENGL_LIBRARY} ${SDL_LIBRARY} ${SDL_MIXER_LIBRARY} ${PHYSFS_LIBRARY} ${PNG_LIBRARY} ${EXTRA_LIBRARIES})
+if(GNS)
+    target_sources(d2x-redux PRIVATE gns_bridge.cpp)
+    target_link_libraries(d2x-redux PRIVATE GameNetworkingSockets::static)
+endif()
+if(UPNP)
+    target_link_libraries(d2x-redux PRIVATE miniupnpc::miniupnpc)
+endif()
 target_sources(d2x-redux PRIVATE vers_id.c)
 install(TARGETS d2x-redux RUNTIME DESTINATION .)

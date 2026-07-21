@@ -35,6 +35,8 @@ void net_udp_send_obs_quit();
 #ifdef USE_TRACKER
 #define TRACKER_ADDR_DEFAULT "retro-tracker.game-server.cc"
 #define TRACKER_PORT_DEFAULT 42420
+#define TRACKER2_ADDR_DEFAULT "tracker.dxxtracker.com"
+#define TRACKER2_PORT_DEFAULT 9999
 #endif
 #define UDP_REQ_ID "D1XR" // ID string for a request packet
 #define UDP_MAX_NETGAMES 900
@@ -93,6 +95,10 @@ void net_udp_send_obs_quit();
 #define UPID_OBSDATA 29
 #define UPID_OBSQUIT 30
 #define UPID_OBSQUIT_SIZE (1 + 4 + 4)
+#ifdef USE_GNS
+#define UPID_GNS_SIGNAL 31 // Relays a GameNetworkingSockets ICE signaling blob between two players, via net_udp_send_to_player() (direct or proxied through host).
+#define UPID_GNS_SIGNAL_HEADER_SIZE (1 + 4 + 1 + 1) // type, token, to_player, from_player
+#endif
 
 // Structure keeping lite game infos (for netlist, etc.)
 typedef struct UDP_netgame_info_lite

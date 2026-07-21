@@ -85,7 +85,22 @@ struct timeval
 int gettimeofday(struct timeval* tv, void* tz); // defined in mveplay for D2, but we still need the forward declaration
 #endif //  defined(_WIN32) || defined(macintosh)
 
+#ifdef USE_UPNP
+#include <miniupnpc.h>
+#include <upnpcommands.h>
+#include <upnperrors.h>
+#ifndef _WIN32
+#include <ifaddrs.h>
+#include <net/if.h>
+#endif
+#endif
+
+#ifdef USE_GNS
+#include "gns_bridge.h"
+#endif
+
 // Prototypes
+int is_same_addr(struct _sockaddr *addr1, struct _sockaddr *addr2);
 void net_udp_init();
 void net_udp_close();
 void net_udp_request_game_info(struct _sockaddr game_addr, int lite);
@@ -143,7 +158,12 @@ void resetProxy(int pnum);
 void update_address_for_player(int pnum, struct _sockaddr new_addr); 
 void net_udp_send_p2p_reattempt_direct (int to_player, int connect_to_player);
 void net_udp_process_p2p_reattempt_direct (ubyte *data, struct _sockaddr sender_addr, int data_len);
-void drop_rx_packet(ubyte  *data, char* reason); 
+void drop_rx_packet(ubyte  *data, char* reason);
+
+#ifdef USE_GNS
+void net_udp_gns_send_signal(int to_player, const unsigned char *data, int len);
+void net_udp_gns_route_found(int player_id, const void *addr, int addr_len);
+#endif
 
 void forward_to_observers(ubyte *data, int data_len, int needack);
 void check_observers(fix64 now);
@@ -166,6 +186,51 @@ int   observer_message_needack[MAX_OBS_MESSAGES];
 int   cur_obs_msg = 0;
 int   next_obs_msg_to_send = 0;
 
+// Relay server support -- see tools/relay_server.py. Transparently tunnels
+// the UDP session through a server both sides can reach outbound, for
+// players who can neither port-forward nor use a VPN. Everything above
+// dxx_sendto()/dxx_recvfrom() is unaware this is happening: a "relayed"
+// peer is addressed using a synthetic struct _sockaddr (the relay server's
+// real IP, with a port in the reserved RELAY_SYNTH_PORT_BASE.. range that
+// encodes which peer it stands in for), and those two functions rewrap/
+// unwrap packets to/from the real relay protocol transparently.
+#define RELAY_SYNTH_PORT_BASE 60000 // + 0 = "the host" (client's view), + 1..MAX_PLAYERS = "participant N" (host's view)
+
+#define RELAY_MSG_HELLO_HOST        0x01
+#define RELAY_MSG_HELLO_HOST_ACK    0x81
+#define RELAY_MSG_HELLO_CLIENT      0x02
+#define RELAY_MSG_HELLO_CLIENT_ACK  0x82
+#define RELAY_MSG_HELLO_CLIENT_NACK 0x83
+#define RELAY_MSG_DATA_UNTAGGED     0x10 // DATA_TO_HOST (client->relay) / DATA_FROM_HOST (relay->client)
+#define RELAY_MSG_DATA_TAGGED       0x11 // DATA_TO_PART (host->relay) / DATA_FROM_PART (relay->host)
+
+static struct _sockaddr RelayServerAddr;
+static int RelayActive = 0;          // 1 once GameArg.MplRelayAddr resolved successfully
+static int RelayHostRegistered = 0;  // 1 once the relay has ACK'd our HELLO_HOST
+static int RelayClientJoined = 0;    // 0 = not yet, 1 = ACK'd, -1 = NACK'd (no such host on the relay)
+
+// Returns 1 and sets *participant if addr is a relay-sentinel address
+// (see comment above). *participant is 0 for "the host" or 1..MAX_PLAYERS
+// for a specific relayed client.
+static int relay_addr_participant(const struct sockaddr *addr, int *participant)
+{
+	if (!RelayActive || !addr || addr->sa_family != AF_INET)
+		return 0;
+
+	const struct sockaddr_in *sin = (const struct sockaddr_in *)addr;
+	const struct sockaddr_in *relay_sin = (const struct sockaddr_in *)&RelayServerAddr;
+
+	if (sin->sin_addr.s_addr != relay_sin->sin_addr.s_addr)
+		return 0;
+
+	int port = ntohs(sin->sin_port);
+	if (port < RELAY_SYNTH_PORT_BASE || port > RELAY_SYNTH_PORT_BASE + MAX_PLAYERS)
+		return 0;
+
+	*participant = port - RELAY_SYNTH_PORT_BASE;
+	return 1;
+}
+
 // Variables
 int UDP_num_sendto = 0, UDP_len_sendto = 0, UDP_num_recvfrom = 0, UDP_len_recvfrom = 0;
 UDP_mdata_info		UDP_MData;
@@ -185,8 +250,19 @@ struct _sockaddr GBcast; // global Broadcast address clients and hosts will use 
 struct _sockaddr GMcast_v6; // same for IPv6-only
 #endif
 #ifdef USE_TRACKER
-struct _sockaddr TrackerSocket;
-int iTrackerVerified = 0;
+struct _sockaddr TrackerSockets[MAX_TRACKERS];
+int TrackerCount = 0;
+int iTrackerVerified[MAX_TRACKERS] = {0};
+int TrackerHudWarned[MAX_TRACKERS] = {0}; // 1 once we've told the player (via HUD, not a blocking popup) that this tracker didn't respond, so we don't repeat it every retry cycle
+
+static int tracker_index_for_addr(struct _sockaddr addr)
+{
+	int i;
+	for (i = 0; i < TrackerCount; i++)
+		if (is_same_addr(&TrackerSockets[i], &addr))
+			return i;
+	return -1;
+}
 #endif
 extern obj_position Player_init[MAX_PLAYERS];
 
@@ -278,6 +354,10 @@ char* msg_name(int type)
 			return "UPID_OBSDATA";
 		case UPID_OBSQUIT:
 			return "UPID_OBSQUIT";
+#ifdef USE_GNS
+		case UPID_GNS_SIGNAL:
+			return "UPID_GNS_SIGNAL";
+#endif
 
 		default:
 			return "UNKNOWN";
@@ -357,7 +437,43 @@ void net_log_comment(char* comment) {
 /* General UDP functions - START */
 ssize_t dxx_sendto(int sockfd, const void *msg, int len, unsigned int flags, const struct sockaddr *to, socklen_t tolen)
 {
-	net_log_log(1, msg, len, to, tolen); 
+	int participant;
+
+	if (sockfd == UDP_Socket[0] && relay_addr_participant(to, &participant))
+	{
+		ubyte relaybuf[UPID_MAX_SIZE + 16];
+		int rlen = 0;
+		uint32_t token_be = htonl((uint32_t)GameArg.MplRelayToken);
+		ssize_t rv;
+
+		if (len < 0 || (size_t)len > UPID_MAX_SIZE)
+			return -1;
+
+		if (participant == 0)
+		{
+			relaybuf[rlen++] = RELAY_MSG_DATA_UNTAGGED;
+			memcpy(relaybuf + rlen, &token_be, 4); rlen += 4;
+		}
+		else
+		{
+			relaybuf[rlen++] = RELAY_MSG_DATA_TAGGED;
+			memcpy(relaybuf + rlen, &token_be, 4); rlen += 4;
+			relaybuf[rlen++] = (ubyte)participant;
+		}
+
+		memcpy(relaybuf + rlen, msg, len);
+
+		net_log_log(1, msg, len, to, tolen);
+		rv = sendto(sockfd, relaybuf, rlen + len, flags, (struct sockaddr *)&RelayServerAddr, sizeof(struct _sockaddr));
+
+		UDP_num_sendto++;
+		if (rv > 0)
+			UDP_len_sendto += len; // count payload bytes only, not the relay envelope
+
+		return (rv > 0) ? len : rv; // report the caller's own byte count, matching non-relay semantics
+	}
+
+	net_log_log(1, msg, len, to, tolen);
 
 	ssize_t rv = sendto(sockfd, msg, len, flags, to, tolen);
 
@@ -370,6 +486,73 @@ ssize_t dxx_sendto(int sockfd, const void *msg, int len, unsigned int flags, con
 
 ssize_t dxx_recvfrom(int sockfd, void *buf, int len, unsigned int flags, struct sockaddr *from, socklen_t *fromlen)
 {
+	if (sockfd == UDP_Socket[0] && RelayActive)
+	{
+		ubyte relaybuf[UPID_MAX_SIZE + 16];
+		struct sockaddr_in raw_from;
+		socklen_t raw_fromlen = sizeof(raw_from);
+		const struct sockaddr_in *relay_sin = (const struct sockaddr_in *)&RelayServerAddr;
+		ssize_t rv = recvfrom(sockfd, relaybuf, sizeof(relaybuf), flags, (struct sockaddr *)&raw_from, &raw_fromlen);
+
+		if (rv <= 0)
+			return rv;
+
+		if (raw_from.sin_addr.s_addr == relay_sin->sin_addr.s_addr && raw_from.sin_port == relay_sin->sin_port)
+		{
+			int msg_type, rlen, participant = 0, payload_len;
+			struct sockaddr_in *synth;
+
+			if (rv < 5)
+				return 0; // malformed relay envelope
+
+			msg_type = relaybuf[0];
+			rlen = 5;
+
+			if (msg_type == RELAY_MSG_HELLO_HOST_ACK) { RelayHostRegistered = 1; return 0; }
+			if (msg_type == RELAY_MSG_HELLO_CLIENT_ACK) { RelayClientJoined = 1; return 0; }
+			if (msg_type == RELAY_MSG_HELLO_CLIENT_NACK) { RelayClientJoined = -1; return 0; }
+
+			if (msg_type == RELAY_MSG_DATA_TAGGED)
+			{
+				if (rv < 6)
+					return 0;
+				participant = relaybuf[5];
+				rlen = 6;
+			}
+			else if (msg_type != RELAY_MSG_DATA_UNTAGGED)
+			{
+				return 0; // unknown control message
+			}
+
+			synth = (struct sockaddr_in *)from;
+			memset(synth, 0, sizeof(*synth));
+			synth->sin_family = AF_INET;
+			synth->sin_addr = relay_sin->sin_addr;
+			synth->sin_port = htons(RELAY_SYNTH_PORT_BASE + participant);
+			*fromlen = sizeof(struct sockaddr_in);
+
+			payload_len = rv - rlen;
+			if (payload_len > len) payload_len = len;
+			if (payload_len < 0) payload_len = 0;
+			memcpy(buf, relaybuf + rlen, payload_len);
+
+			net_log_log(0, buf, payload_len, from, *fromlen);
+			UDP_num_recvfrom++;
+			UDP_len_recvfrom += payload_len;
+			return payload_len;
+		}
+
+		// Not from the relay -- pass a direct packet straight through.
+		if (rv > len) rv = len;
+		memcpy(buf, relaybuf, rv);
+		memcpy(from, &raw_from, raw_fromlen);
+		*fromlen = raw_fromlen;
+		net_log_log(0, buf, rv, from, *fromlen);
+		UDP_num_recvfrom++;
+		UDP_len_recvfrom += rv;
+		return rv;
+	}
+
 	ssize_t rv = recvfrom(sockfd, buf, len, flags, from, fromlen);
 
 	net_log_log(0, buf, rv, from, *fromlen);
@@ -593,18 +776,23 @@ int udp_receive_packet(int socknum, ubyte *text, int len, struct _sockaddr *send
 	if (UDP_Socket[socknum] == -1)
 		return -1;
 
-	if (udp_general_packet_ready(socknum))
+	while (udp_general_packet_ready(socknum))
 	{
 		msglen = dxx_recvfrom (UDP_Socket[socknum], text, len, 0, (struct sockaddr *)sender_addr, &clen);
 
 		if (msglen < 0)
 			return 0;
 
-		if ((msglen >= 0) && (msglen < len))
+		if (msglen == 0)
+			continue; // a relay control message was swallowed (or a genuine empty datagram) -- more may be queued this frame
+
+		if (msglen < len)
 			text[msglen] = 0;
+
+		return msglen;
 	}
 
-	return msglen;
+	return 0;
 }
 /* General UDP functions - END */
 
@@ -623,118 +811,139 @@ int udp_receive_packet(int socknum, ubyte *text, int len, struct _sockaddr *send
 int udp_tracker_init()
 {
 	int tracker_port = d_rand() % 0xffff;
+	int i;
 
 	while (tracker_port <= 1024)
 		tracker_port = d_rand() % 0xffff;
 
-	// Zero it out
-	memset( &TrackerSocket, 0, sizeof( TrackerSocket ) );
-	
+	memset( TrackerSockets, 0, sizeof( TrackerSockets ) );
+	TrackerCount = 0;
+	for (i = 0; i < MAX_TRACKERS; i++)
+	{
+		iTrackerVerified[i] = 0;
+		TrackerHudWarned[i] = 0;
+	}
+
 	// Open the socket
 	udp_open_socket( 2, tracker_port );
-	
-	// Fill the address
-	if( udp_dns_filladdr( (char *)GameArg.MplTrackerAddr, GameArg.MplTrackerPort, &TrackerSocket ) < 0 )
-		return -1;
-	
-	// Yay
-	return 0;
+
+	// Resolve each configured tracker -- one failing to resolve doesn't
+	// stop the others from being usable.
+	for (i = 0; i < GameArg.MplTrackerCount && i < MAX_TRACKERS; i++)
+	{
+		if( udp_dns_filladdr( (char *)GameArg.MplTrackerAddr[i], GameArg.MplTrackerPort[i], &TrackerSockets[TrackerCount] ) < 0 )
+		{
+			con_printf(CON_NORMAL, "Tracker: could not resolve %s:%d, skipping\n", GameArg.MplTrackerAddr[i], GameArg.MplTrackerPort[i]);
+			continue;
+		}
+		con_printf(CON_NORMAL, "Tracker: resolved %s:%d\n", GameArg.MplTrackerAddr[i], GameArg.MplTrackerPort[i]);
+		TrackerCount++;
+	}
+
+	return TrackerCount > 0 ? 0 : -1;
 }
 
-/* Unregister from the tracker */
+/* Unregister from all trackers */
 int udp_tracker_unregister()
 {
 	// Variables
 	int iLen = 5;
 	ubyte *pBuf;
-	ssize_t result;
+	int i;
 
 	pBuf = malloc( iLen );
-	
+
 	// Put the opcode
 	pBuf[0] = TRACKER_PKT_UNREGISTER;
-	
+
 	// Put the GameID
 	PUT_INTEL_INT( pBuf+1, Netgame.protocol.udp.GameID );
-	
-	// Send it off
-	result = dxx_sendto( UDP_Socket[2], pBuf, iLen, 0, (struct sockaddr *)&TrackerSocket, sizeof( TrackerSocket ) );
+
+	// Send it off to every tracker
+	for (i = 0; i < TrackerCount; i++)
+		dxx_sendto( UDP_Socket[2], pBuf, iLen, 0, (struct sockaddr *)&TrackerSockets[i], sizeof( TrackerSockets[i] ) );
 
 	free( pBuf );
 
-	return result;
+	return TrackerCount;
 }
 
-/* Tell the tracker we're starting a game */
+/* Tell every configured tracker we're starting a game */
 int udp_tracker_register()
 {
 	// Variables
 	int iLen = 15;
 	ubyte *pBuf;
-	ssize_t result;
+	int i;
 
 	pBuf = malloc( iLen );
-	
+
 	// Reset the last tracker message
-	iTrackerVerified = 0;
-	
+	for (i = 0; i < TrackerCount; i++)
+		iTrackerVerified[i] = 0;
+
 	// Put the opcode
 	pBuf[0] = TRACKER_PKT_REGISTER;
-	
+
 	// Put the protocol version
 	pBuf[1] = TRACKER_SYS_VERSION;
-	
+
 	// Write the game version (d1 = 1, d2 = 2, x = oshiii)
 	pBuf[2] = 0x02;
-	
+
 	// Write the port we're running on
 	PUT_INTEL_SHORT( pBuf+3, atoi( UDP_MyPort ) );
-	
+
 	// Put the GameID
 	PUT_INTEL_INT( pBuf+5, Netgame.protocol.udp.GameID );
-	
+
 	// Now, put the game version
 	PUT_INTEL_SHORT( pBuf+9, DXX_VERSION_MAJORi );
 	PUT_INTEL_SHORT( pBuf+11, DXX_VERSION_MINORi );
 	PUT_INTEL_SHORT( pBuf+13, DXX_VERSION_MICROi );
-	
-	// Send it off
-	result = dxx_sendto( UDP_Socket[2], pBuf, iLen, 0, (struct sockaddr *)&TrackerSocket, sizeof( TrackerSocket ) );
+
+	// Send it off to every tracker
+	for (i = 0; i < TrackerCount; i++)
+	{
+		con_printf(CON_NORMAL, "Tracker: sending registration to %s:%d\n", GameArg.MplTrackerAddr[i], GameArg.MplTrackerPort[i]);
+		dxx_sendto( UDP_Socket[2], pBuf, iLen, 0, (struct sockaddr *)&TrackerSockets[i], sizeof( TrackerSockets[i] ) );
+	}
 
 	free( pBuf );
 
-	return result;
+	return TrackerCount;
 }
 
-/* Ask the tracker to send us a list of games */
+/* Ask every tracker to send us a list of games */
 int udp_tracker_reqgames()
 {
 	// Variables
 	int iLen = 3;
 	ubyte *pBuf;
-	ssize_t result;
+	int i;
 
 	pBuf = malloc( iLen );
-	
+
 	// Put the opcode
 	pBuf[0] = TRACKER_PKT_GAMELIST;
-	
+
 	// Put the game version (d2)
 	pBuf[1] = 2;
-	
+
 	// If we're IPv6 ready, send that too
 #ifdef IPv6
 	pBuf[2] = 1;
 #else
 	pBuf[2] = 0;
 #endif
-	
-	// Send it off
-	result = dxx_sendto( UDP_Socket[2], pBuf, iLen, 0, (struct sockaddr *)&TrackerSocket, sizeof( TrackerSocket ) );
+
+	// Send it off to every tracker -- games from all of them merge into one list
+	for (i = 0; i < TrackerCount; i++)
+		dxx_sendto( UDP_Socket[2], pBuf, iLen, 0, (struct sockaddr *)&TrackerSockets[i], sizeof( TrackerSockets[i] ) );
 
 	free( pBuf );
 
-	return result;
+	return TrackerCount;
 }
 
 /* The tracker has sent us a game.  Let's list it. */
@@ -772,6 +981,223 @@ int udp_tracker_process_game( ubyte *data, int data_len )
 }
 
 #endif /* USE_TRACKER */
+
+/* UPnP stuff, begin! */
+#ifdef USE_UPNP
+
+static struct UPNPUrls upnp_urls;
+static struct IGDdatas upnp_data;
+static int upnp_mapped = 0; // 1 if we successfully added a port mapping we're responsible for removing
+
+// Best-effort: ask the LAN router to forward 'port' (UDP) to us, so hosts
+// behind NAT don't have to manually port-forward. Silently does nothing if
+// no UPnP-capable router is found -- the existing manual port-forward path
+// is unaffected either way.
+void net_udp_upnp_map_port(int port)
+{
+	int error = 0;
+	struct UPNPDev *devlist = NULL;
+	char lanaddr[64];
+	char wanaddr[64];
+	char portstr[6];
+
+	if (upnp_mapped)
+		return; // already have a mapping from this session
+
+	devlist = upnpDiscover(1000 /* ms */, NULL, NULL, 0, 0, 2, &error);
+
+#ifndef _WIN32
+	if (!devlist)
+	{
+		// Automatic interface selection can send the SSDP multicast probe
+		// out the wrong adapter when several are active at once (VPNs like
+		// Tailscale/Hamachi alongside a real LAN connection are common for
+		// exactly the kind of player who'd need this). Retry explicitly on
+		// each real, non-tunnel interface until one gets an answer.
+		struct ifaddrs *ifap = NULL, *ifa;
+		if (getifaddrs(&ifap) == 0)
+		{
+			for (ifa = ifap; ifa && !devlist; ifa = ifa->ifa_next)
+			{
+				if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET)
+					continue;
+				if (ifa->ifa_flags & IFF_LOOPBACK)
+					continue;
+				if (ifa->ifa_flags & IFF_POINTOPOINT) // most VPN/tunnel adapters
+					continue;
+				if (!(ifa->ifa_flags & IFF_BROADCAST)) // real LAN interfaces have this; most VPN adapters don't
+					continue;
+
+				char ifip[INET_ADDRSTRLEN];
+				struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
+				if (!inet_ntop(AF_INET, &sin->sin_addr, ifip, sizeof(ifip)))
+					continue;
+
+				con_printf(CON_NORMAL, "UPnP: retrying discovery on interface %s (%s)\n", ifa->ifa_name, ifip);
+				devlist = upnpDiscover(1000, ifip, NULL, 0, 0, 2, &error);
+			}
+			freeifaddrs(ifap);
+		}
+	}
+#endif
+
+	if (!devlist)
+	{
+		con_printf(CON_NORMAL, "UPnP: no devices found (error %d) -- port not auto-forwarded, manual port-forward still needed\n", error);
+		return;
+	}
+
+	memset(&upnp_urls, 0, sizeof(upnp_urls));
+	memset(&upnp_data, 0, sizeof(upnp_data));
+
+	int igd = UPNP_GetValidIGD(devlist, &upnp_urls, &upnp_data, lanaddr, sizeof(lanaddr), wanaddr, sizeof(wanaddr));
+	freeUPNPDevlist(devlist);
+
+	if (igd != 1 && igd != 2) // 1 = connected IGD, 2 = a (possibly disconnected) IGD found on the LAN
+	{
+		con_printf(CON_NORMAL, "UPnP: no valid Internet Gateway Device found -- port not auto-forwarded, manual port-forward still needed\n");
+		return;
+	}
+
+	snprintf(portstr, sizeof(portstr), "%d", port);
+
+	int r = UPNP_AddPortMapping(upnp_urls.controlURL, upnp_data.first.servicetype,
+		portstr, portstr, lanaddr, "DXX-Redux-SNG", "UDP", NULL, "0");
+
+	if (r != UPNPCOMMAND_SUCCESS)
+	{
+		con_printf(CON_NORMAL, "UPnP: AddPortMapping failed: %s -- port not auto-forwarded, manual port-forward still needed\n", strupnperror(r));
+		FreeUPNPUrls(&upnp_urls);
+		return;
+	}
+
+	con_printf(CON_NORMAL, "UPnP: successfully mapped UDP port %s -> %s on %s\n", portstr, portstr, wanaddr);
+	upnp_mapped = 1;
+}
+
+// Remove the mapping we added, if any. Leaves the router untouched otherwise.
+void net_udp_upnp_unmap_port(int port)
+{
+	if (!upnp_mapped)
+		return;
+
+	char portstr[6];
+	snprintf(portstr, sizeof(portstr), "%d", port);
+
+	UPNP_DeletePortMapping(upnp_urls.controlURL, upnp_data.first.servicetype, portstr, "UDP", NULL);
+	FreeUPNPUrls(&upnp_urls);
+	upnp_mapped = 0;
+}
+
+#endif /* USE_UPNP */
+
+/* Relay server stuff, begin! (see tools/relay_server.py) */
+
+// Resolve the configured relay server address, if any. Safe to call even
+// when relay isn't configured -- RelayActive just stays 0.
+void net_udp_relay_init(void)
+{
+	RelayActive = 0;
+	RelayHostRegistered = 0;
+	RelayClientJoined = 0;
+
+	if (!GameArg.MplRelayAddr || !GameArg.MplRelayAddr[0] || GameArg.MplRelayPort == 0 || GameArg.MplRelayToken == 0)
+		return;
+
+	// The synthetic sentinel addresses relay_addr_participant() recognizes
+	// reuse the relay server's own IP with a port in
+	// [RELAY_SYNTH_PORT_BASE, RELAY_SYNTH_PORT_BASE+MAX_PLAYERS]. If the
+	// relay's *real* port were ever configured inside that same range,
+	// dxx_sendto()'s raw control sends (which target that real port
+	// directly) would get misidentified as a synthetic address and silently
+	// double-wrapped, corrupting the relay protocol. Refuse rather than
+	// fail in a way that's hard to diagnose.
+	if (GameArg.MplRelayPort >= RELAY_SYNTH_PORT_BASE && GameArg.MplRelayPort <= RELAY_SYNTH_PORT_BASE + MAX_PLAYERS)
+	{
+		con_printf(CON_NORMAL, "Relay: -relay_hostport %d conflicts with the reserved sentinel port range (%d-%d), refusing to enable relay. Configure the relay server on a different port.\n", GameArg.MplRelayPort, RELAY_SYNTH_PORT_BASE, RELAY_SYNTH_PORT_BASE + MAX_PLAYERS);
+		return;
+	}
+
+	if (udp_dns_filladdr((char *)GameArg.MplRelayAddr, GameArg.MplRelayPort, &RelayServerAddr) < 0)
+	{
+		con_printf(CON_NORMAL, "Relay: could not resolve %s:%d\n", GameArg.MplRelayAddr, GameArg.MplRelayPort);
+		return;
+	}
+
+	RelayActive = 1;
+	con_printf(CON_NORMAL, "Relay: enabled, server %s:%d, token %d\n", GameArg.MplRelayAddr, GameArg.MplRelayPort, GameArg.MplRelayToken);
+}
+
+static void net_udp_relay_send_control(ubyte msg_type)
+{
+	ubyte buf[5];
+	uint32_t token_be;
+
+	if (!RelayActive)
+		return;
+
+	buf[0] = msg_type;
+	token_be = htonl((uint32_t)GameArg.MplRelayToken);
+	memcpy(buf + 1, &token_be, 4);
+
+	// Sent directly to RelayServerAddr's real port -- not a synthetic
+	// sentinel -- so this bypasses dxx_sendto()'s relay-wrap logic and goes
+	// out as a raw control message, exactly as it should.
+	dxx_sendto(UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&RelayServerAddr, sizeof(struct _sockaddr));
+}
+
+// Periodic registration/keepalive while hosting via the relay. Call once
+// per frame; no-ops unless we're both the master and relay is configured.
+void net_udp_relay_host_frame(fix64 time)
+{
+	static fix64 last_hello = 0;
+
+	if (!RelayActive || !multi_i_am_master())
+		return;
+
+	if (time > last_hello + (RelayHostRegistered ? F1_0 * 15 : F1_0))
+	{
+		net_udp_relay_send_control(RELAY_MSG_HELLO_HOST);
+		last_hello = time;
+	}
+}
+
+// Periodic registration while attempting to join via the relay -- resent
+// alongside net_udp_game_connect()'s own retry loop until we see an ACK/NACK.
+// net_udp_game_connect() runs every idle tick of the connect menu (tens of
+// times per second), so this throttles to once a second itself rather than
+// flooding the relay with a HELLO_CLIENT per frame.
+void net_udp_relay_client_frame(void)
+{
+	static fix64 last_hello = 0;
+	fix64 now;
+
+	if (!RelayActive || RelayClientJoined != 0)
+		return;
+
+	now = timer_query();
+	if (now < last_hello + F1_0)
+		return;
+
+	last_hello = now;
+	net_udp_relay_send_control(RELAY_MSG_HELLO_CLIENT);
+}
+
+// Point host_addr at the relay's "the host" sentinel instead of resolving a
+// real address -- used in place of udp_dns_filladdr() when joining via
+// -relay_token instead of a manual IP.
+void net_udp_relay_set_sentinel_host_addr(struct _sockaddr *host_addr)
+{
+	struct sockaddr_in *sin = (struct sockaddr_in *)host_addr;
+	const struct sockaddr_in *relay_sin = (const struct sockaddr_in *)&RelayServerAddr;
+
+	memset(sin, 0, sizeof(*sin));
+	sin->sin_family = AF_INET;
+	sin->sin_addr = relay_sin->sin_addr;
+	sin->sin_port = htons(RELAY_SYNTH_PORT_BASE); // participant 0 == "the host"
+}
+
+/* Relay server stuff, end! */
 
 typedef struct direct_join
 {
@@ -932,6 +1358,9 @@ int valid_size(ubyte *data, int data_len, struct _sockaddr sender_addr) {
 		case UPID_P2P_PING: 			if(data_len != UPID_P2P_PING_SIZE          )  { rv = 0; }  break;
 		case UPID_P2P_PONG: 			if(data_len != UPID_P2P_PONG_SIZE          )  { rv = 0; }  break;
 		case UPID_REATTEMPT_DIRECT: 	if(data_len != UPID_REATTEMPT_DIRECT_SIZE  )  { rv = 0; }  break;
+#ifdef USE_GNS
+		case UPID_GNS_SIGNAL: 			if(data_len < UPID_GNS_SIGNAL_HEADER_SIZE  )  { rv = 0; }  break;
+#endif
 
 		// Special cases
 		case UPID_GAME_INFO:     		rv = 1; break; // Don't check, it varies
@@ -963,12 +1392,15 @@ int valid_token(ubyte *data, int data_len, struct _sockaddr sender_addr) {
 		case UPID_OBSDATA:
 		case UPID_OBSQUIT:
 		case UPID_MDATA_PNEEDACK:
-		case UPID_P2P_PING: 
-		case UPID_P2P_PONG: 
+		case UPID_P2P_PING:
+		case UPID_P2P_PONG:
 		case UPID_PROXY:
-		case UPID_REATTEMPT_DIRECT:		
+		case UPID_REATTEMPT_DIRECT:
+#ifdef USE_GNS
+		case UPID_GNS_SIGNAL:
+#endif
 		// case UPID_SYNC: // Special case is handled in sync processing
-			rv = GET_INTEL_INT(data + 1) == netgame_token; 
+			rv = GET_INTEL_INT(data + 1) == netgame_token;
 
 			if(! rv) {				
 				sprintf(err_mess, "token %d != %d", GET_INTEL_INT(data + 1), netgame_token );
@@ -1066,6 +1498,15 @@ int net_udp_game_connect(direct_join *dj)
 		return 0;
 	}
 	
+	if (RelayActive && RelayClientJoined == -1)
+	{
+		nm_messagebox(TXT_ERROR,1,TXT_OK,"Relay server says no host is registered for this token.\nDouble check the token and that they're actually hosting.");
+		dj->connecting = 0;
+		return 0;
+	}
+
+	net_udp_relay_client_frame();
+
 	if (timer_query() >= dj->last_time + F1_0)
 	{
 		net_udp_request_game_info(dj->host_addr, 0);
@@ -1155,12 +1596,17 @@ static int manual_join_game_handler(newmenu *menu, d_event *event, direct_join *
 				return 1;
 			}
 			
-			// Resolve address
-			if (udp_dns_filladdr(dj->addrbuf, atoi(dj->portbuf), &dj->host_addr) < 0)
+			// Resolve address -- via the relay's sentinel if a relay token
+			// is configured (see -relay_token), otherwise the normal way.
+			if (RelayActive && GameArg.MplRelayToken != 0)
+			{
+				net_udp_relay_set_sentinel_host_addr(&dj->host_addr);
+			}
+			else if (udp_dns_filladdr(dj->addrbuf, atoi(dj->portbuf), &dj->host_addr) < 0)
 			{
 				return 1;
 			}
-			else
+
 			{
 				multi_new_game();
 				net_udp_reset_connection_statuses();
@@ -1667,12 +2113,27 @@ void net_udp_init()
 	// Initialize the tracker info
 	udp_tracker_init();
 #endif
+
+#ifdef USE_GNS
+	gns_bridge_set_callbacks(net_udp_gns_send_signal, net_udp_gns_route_found);
+	gns_bridge_init();
+#endif
+
+	net_udp_relay_init();
 }
 
 void net_udp_close()
 {
 #ifdef _WIN32
 	WSACleanup();
+#endif
+
+#ifdef USE_UPNP
+	net_udp_upnp_unmap_port(atoi(UDP_MyPort));
+#endif
+
+#ifdef USE_GNS
+	gns_bridge_shutdown();
 #endif
 
 	if( UDP_Socket[0] != -1 )
@@ -2713,7 +3174,12 @@ void net_udp_dump_player(struct _sockaddr dump_addr, int their_token, int why)
 	if (multi_i_am_master())
 		for (i = 1; i < N_players; i++)
 			if (!memcmp((struct _sockaddr *)&dump_addr, (struct _sockaddr *)&Netgame.players[i].protocol.udp.addr, sizeof(struct _sockaddr)))
+			{
 				multi_disconnect_player(i);
+#ifdef USE_GNS
+				gns_bridge_reset_player(i);
+#endif
+			}
 }
 
 void net_udp_update_netgame(void)
@@ -3651,8 +4117,19 @@ void net_udp_process_packet(ubyte *data, struct _sockaddr sender_addr, int lengt
 
 #ifdef USE_TRACKER
 		case UPID_TRACKER_VERIFY:
-			iTrackerVerified = 1;
+		{
+			int ti = tracker_index_for_addr(sender_addr);
+			if (ti >= 0)
+			{
+				iTrackerVerified[ti] = 1;
+				con_printf(CON_NORMAL, "Tracker: %s:%d verified us\n", GameArg.MplTrackerAddr[ti], GameArg.MplTrackerPort[ti]);
+			}
+			else
+			{
+				con_printf(CON_NORMAL, "Tracker: got a VERIFY from an address that doesn't match any configured tracker\n");
+			}
 			break;
+		}
 
 		case UPID_TRACKER_INCGAME:
 			udp_tracker_process_game( data, length );
@@ -3672,7 +4149,18 @@ void net_udp_process_packet(ubyte *data, struct _sockaddr sender_addr, int lengt
 
 		case UPID_REATTEMPT_DIRECT:
 			net_udp_process_p2p_reattempt_direct( data, sender_addr, length);
-			break; 
+			break;
+
+#ifdef USE_GNS
+		case UPID_GNS_SIGNAL:
+		{
+			int to_player = data[5];
+			int from_player = data[6];
+			if (to_player == Player_num && from_player >= 0 && from_player < MAX_PLAYERS)
+				gns_bridge_on_signal_received(from_player, data + UPID_GNS_SIGNAL_HEADER_SIZE, length - UPID_GNS_SIGNAL_HEADER_SIZE);
+			break;
+		}
+#endif
 
 		default:
 			con_printf(CON_DEBUG, "unknown packet type received - type %i\n", data[0]);
@@ -5499,6 +5987,28 @@ int net_udp_start_game(void)
 	if (i != 0)
 		return 0;
 
+#ifdef USE_UPNP
+	{
+		// UPnP discovery is a blocking network round-trip (up to a couple
+		// seconds, more if it has to retry across several interfaces) --
+		// show a "please wait" screen so this doesn't look like a freeze.
+		newmenu_item m[1];
+		newmenu *wait_menu;
+
+		m[0].type = NM_TYPE_TEXT;
+		m[0].text = "Setting up automatic\nport forwarding (UPnP)...\n\nPlease wait...";
+
+		wait_menu = newmenu_do3(NULL, NULL, 1, m, NULL, NULL, 0, NULL);
+		timer_delay(F1_0 / 4);
+		event_process();
+
+		net_udp_upnp_map_port(atoi(UDP_MyPort));
+
+		if (wait_menu)
+			window_close(newmenu_get_window(wait_menu));
+	}
+#endif
+
 	// prepare broadcast address to announce our game
 	memset(&GBcast, '\0', sizeof(struct _sockaddr));
 	udp_dns_filladdr(UDP_BCAST_ADDR, UDP_PORT_DEFAULT, &GBcast);
@@ -5962,41 +6472,85 @@ void net_udp_do_frame(int force, int listen)
 	}
 
 #ifdef USE_TRACKER
-	// If we use the tracker, tell the tracker about us every 10 seconds
+	// If we use the tracker(s), tell them about us every 10 seconds.
+	// One tracker being down doesn't stop the others from working.
 	if( Netgame.Tracker )
 	{
-		// Static variable... the last time we sent to the tracker
+		// Static variable... the last time we sent to the trackers
 		static fix64 iLastQuery = 0;
 		static int iAttempts = 0;
 		fix64 iNow = timer_query();
-		
+		int i, any_unverified = 0;
+
+		for (i = 0; i < TrackerCount; i++)
+			if (!iTrackerVerified[i])
+				any_unverified = 1;
+
 		// Set the last query to now if we must
 		if( iLastQuery == 0 )
 			iLastQuery = iNow;
-		
+
 		// Test it
-		if( iTrackerVerified == 0 && iNow >= iLastQuery + ( F1_0 * 3 ) )
+		if( any_unverified && iNow >= iLastQuery + ( F1_0 * 3 ) )
 		{
-			// Update it
+			// Update it and actually resend the registration -- a single
+			// dropped packet (in either direction) shouldn't be mistaken
+			// for a tracker being down.
 			iLastQuery = iNow;
 			iAttempts++;
+			udp_tracker_register();
 		}
-		
+
 		// Have we had all our attempts?
-		if( iTrackerVerified == 0 && iAttempts > 3 )
+		if( any_unverified && iAttempts > 3 )
 		{
-			// Turn off tracker
-			Netgame.Tracker = 0;
-			
+			int any_verified = 0;
+
+			for (i = 0; i < TrackerCount; i++)
+				if (iTrackerVerified[i])
+					any_verified = 1;
+
+			if( any_verified )
+			{
+				// At least one tracker heard us, so the game genuinely is
+				// listed and joinable -- don't interrupt the player with a
+				// blocking popup for a tracker that's merely redundant.
+				// Note it once via the HUD instead, like any other status
+				// message.
+				for (i = 0; i < TrackerCount; i++)
+				{
+					if (!iTrackerVerified[i] && !TrackerHudWarned[i])
+					{
+						HUD_init_message(HM_MULTI, "Tracker %s:%d did not respond -- game still listed on other tracker(s).", GameArg.MplTrackerAddr[i], GameArg.MplTrackerPort[i]);
+						TrackerHudWarned[i] = 1;
+					}
+				}
+			}
+			else
+			{
+				char failed_list[200] = "";
+
+				for (i = 0; i < TrackerCount; i++)
+				{
+					char entry[80];
+					snprintf(entry, sizeof(entry), "%s:%d\n", GameArg.MplTrackerAddr[i], GameArg.MplTrackerPort[i]);
+					strncat(failed_list, entry, sizeof(failed_list) - strlen(failed_list) - 1);
+				}
+
+				// None of them verified us -- genuinely not listed
+				// anywhere, so this is actually worth interrupting for.
+				Netgame.Tracker = 0;
+				nm_messagebox( TXT_WARNING, 1, TXT_OK, "No response from tracker(s):\n%sPossible causes:\nTracker is down\nYour port is likely not open!\n\nGame port: %s", failed_list, UDP_MyPort );
+			}
+
 			// Reset the static variables for next time
 			iLastQuery = 0;
 			iAttempts = 0;
-			
-			// Warn
-			nm_messagebox( TXT_WARNING, 1, TXT_OK, "No response from tracker!\nPossible causes:\nTracker is down\nYour port is likely not open!\n\nTracker: %s\nGame port: %s", GameArg.MplTrackerAddr, UDP_MyPort );
 		}
 	}
 #endif
+
+	net_udp_relay_host_frame(time);
 
 	if(Netgame.RetroProtocol) {
 		net_udp_p2p_ping_frame(time); 
@@ -7271,7 +7825,7 @@ void net_udp_send_p2p_ping (int to_player, int force_direct, fix64 time) {
 	int len = 0;
 
 	if((! multi_i_am_master()) &&
-		(! to_player == multi_who_is_master()) && 
+		(to_player != multi_who_is_master()) &&
 		(connection_statuses[to_player].type == CONNT_DIRECT) &&
 	   (timer_query() - connection_statuses[to_player].last_direct_pong < F1_0 * 20) && 
 	   (timer_query() - connection_statuses[to_player].last_direct_pong > F1_0 * 5)
@@ -7481,9 +8035,60 @@ void reattemptDirect(int pnum) {
 	net_log_comment("   (reset)"); 
 
 	connection_statuses[pnum].holepunch_attempts = 0;
-	connection_statuses[pnum].last_direct_pong = timer_query(); 
-	
+	connection_statuses[pnum].last_direct_pong = timer_query();
+
 }
+
+#ifdef USE_GNS
+
+// gns_bridge wants a signaling blob delivered to to_player. Piggyback on
+// whatever route net_udp_send_to_player() already picks (direct or proxied
+// through the host) -- same mesh the naive holepunch above uses.
+void net_udp_gns_send_signal(int to_player, const unsigned char *data, int len)
+{
+	ubyte *buf;
+	int hlen = 0;
+
+	if (to_player < 0 || to_player >= MAX_PLAYERS)
+		return;
+
+	buf = malloc(len + UPID_GNS_SIGNAL_HEADER_SIZE);
+	if (!buf)
+		return;
+
+	buf[hlen] = UPID_GNS_SIGNAL; hlen++;
+	PUT_INTEL_INT(buf + hlen, netgame_token); hlen += 4;
+	buf[hlen] = to_player; hlen++;
+	buf[hlen] = Player_num; hlen++;
+	memcpy(buf + hlen, data, len);
+
+	net_udp_send_to_player(buf, hlen + len, to_player);
+	free(buf);
+}
+
+// gns_bridge found an ICE/STUN-verified route to player_id -- feed it into
+// the same connection_statuses[] mesh the naive holepunch maintains, so all
+// existing game traffic (which already goes through net_udp_send_to_player())
+// benefits immediately, with no other code needing to know GNS exists.
+void net_udp_gns_route_found(int player_id, const void *addr, int addr_len)
+{
+	struct _sockaddr sa;
+
+	if (player_id < 0 || player_id >= MAX_PLAYERS)
+		return;
+	if (addr_len != sizeof(struct _sockaddr))
+		return;
+
+	memcpy(&sa, addr, sizeof(sa));
+	update_address_for_player(player_id, sa);
+
+	connection_statuses[player_id].type = CONNT_DIRECT;
+	connection_statuses[player_id].last_direct_pong = timer_query();
+
+	con_printf(CON_DEBUG, "GNS: ICE found a route to player %d\n", player_id);
+}
+
+#endif /* USE_GNS */
 
 void net_udp_send_to_player(ubyte* data, int len, int to_player) {
 	if(connection_statuses[to_player].type == CONNT_DIRECT) {
@@ -7533,6 +8138,11 @@ void net_udp_process_proxy(ubyte* data, struct _sockaddr sender_addr, int data_l
 	int to_player = data[5];
 	//int from_player = data[2];
 
+	if (to_player < 0 || to_player > MAX_PLAYERS - 1) {
+		drop_rx_packet(data, "to invalid player");
+		return;
+	}
+
 	if(to_player == Player_num) {
 		// For me?? :)
 		ubyte* contents = data + UPID_PROXY_HEADER_SIZE; 
@@ -7570,31 +8180,43 @@ void net_udp_p2p_ping_frame(fix64 time)
 	fix64 pingTimeSetup = F1_0/10;
 	fix64 pingTimeHeartbeat = F1_0;
 
+#ifdef USE_GNS
+	gns_bridge_poll();
+#endif
+
 	for(int i = 0; i < MAX_PLAYERS; i++) {
-		if(i == Player_num) continue; 
-		if(! Players[i].connected) continue; 
+		if(i == Player_num) continue;
+		if(! Players[i].connected) continue;
 
 		if(is_observer() && !multi_i_am_master() && i > 0) { return; }
 
-		int sentping = 0; 
+		int sentping = 0;
 
 		// Initiate punchthrough if that's what we're trying to do
 		if( connection_statuses[i].holepunch_attempts < MAX_HOLEPUNCH_ATTEMPTS) {
 
-			if(time > lastPing[i] + pingTimeSetup) {	
-				net_udp_send_p2p_ping(i, 1, time); 
-				sentping = 1; 
-				connection_statuses[i].holepunch_attempts++; 
+			if(time > lastPing[i] + pingTimeSetup) {
+				net_udp_send_p2p_ping(i, 1, time);
+				sentping = 1;
+				connection_statuses[i].holepunch_attempts++;
 			}
 		}
+#ifdef USE_GNS
+		else if (i != multi_who_is_master() && connection_statuses[i].type == CONNT_PROXY) {
+			// Our own simultaneous-send holepunch gave up -- let ICE take a
+			// shot at it. Common for symmetric NAT / CGNAT pairs the naive
+			// approach can't solve, but STUN-based candidate gathering can.
+			gns_bridge_connect_to_player(i);
+		}
+#endif
 
 		// Connection measurement / heartbeat ping
-		if(time > lastPing[i] + pingTimeHeartbeat) {	
-			net_udp_send_p2p_ping(i, 0, time); 
-			sentping = 1; 
+		if(time > lastPing[i] + pingTimeHeartbeat) {
+			net_udp_send_p2p_ping(i, 0, time);
+			sentping = 1;
 		}
 
-		if(sentping) {			
+		if(sentping) {
 			lastPing[i] = time;
 		}
 
