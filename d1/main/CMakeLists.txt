@@ -99,6 +99,13 @@ endif()
 
 if(UDP)
     target_sources(d1x-redux PRIVATE net_udp.c)
+    if(GNS)
+        target_sources(d1x-redux PRIVATE gns_bridge.cpp)
+        target_link_libraries(d1x-redux PRIVATE GameNetworkingSockets::static)
+    endif()
+    if(UPNP)
+        target_link_libraries(d1x-redux PRIVATE miniupnpc::miniupnpc)
+    endif()
 endif()
 
 if(WIN32)

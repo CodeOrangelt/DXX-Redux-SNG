@@ -24,6 +24,14 @@ int net_udp_level_sync();
 void net_udp_send_mdata_direct(ubyte *data, int data_len, int pnum, int priority);
 void net_udp_send_netgame_update();
 void net_udp_send_obs_quit();
+#ifdef USE_TRACKER
+// Forward a single kill/damage/chat event to every configured tracker.
+// Host-only: call sites in multi.c gate these behind multi_i_am_master().
+void udp_tracker_send_kill(ubyte killed_pnum, short killer_objnum, ubyte killer_net, ubyte team_vector, ubyte bounty_target);
+void udp_tracker_send_damage(ubyte victim_pnum, fix damage, fix shields_after, ubyte killer_type, ubyte killer_id, ubyte damage_type, ubyte source_id);
+void udp_tracker_send_message(ubyte player_num, const char *text);
+void udp_tracker_send_obs_message(const char *formatted_text);
+#endif
 
 // Some defines
 #ifdef IPv6
@@ -35,6 +43,8 @@ void net_udp_send_obs_quit();
 #ifdef USE_TRACKER
 #define TRACKER_ADDR_DEFAULT "retro-tracker.game-server.cc"
 #define TRACKER_PORT_DEFAULT 42420
+#define TRACKER2_ADDR_DEFAULT "tracker.dxxtracker.com"
+#define TRACKER2_PORT_DEFAULT 9999
 #endif
 #define UDP_REQ_ID "D1XR" // ID string for a request packet
 #define UDP_MAX_NETGAMES 900
@@ -93,6 +103,10 @@ void net_udp_send_obs_quit();
 #define UPID_OBSDATA 29
 #define UPID_OBSQUIT 30
 #define UPID_OBSQUIT_SIZE (1 + 4 + 4)
+#ifdef USE_GNS
+#define UPID_GNS_SIGNAL 31 // Relays a GameNetworkingSockets ICE signaling blob between two players, via net_udp_send_to_player() (direct or proxied through host).
+#define UPID_GNS_SIGNAL_HEADER_SIZE (1 + 4 + 1 + 1) // type, token, to_player, from_player
+#endif
 
 // Structure keeping lite game infos (for netlist, etc.)
 typedef struct UDP_netgame_info_lite
