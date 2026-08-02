@@ -21,6 +21,16 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+
+    # windows-latest ships CMake 4.x, which removed support for reading the
+    # LOCATION property off non-imported targets. vcpkg's yasm port (a build
+    # dependency of SDL_mixer's vorbis/mp3 codecs) still relies on that
+    # removed behavior and fails to configure under CMake 4. Pin to the last
+    # 3.x release so vcpkg's internal port builds keep working.
+    - uses: lukka/get-cmake@latest
+      with:
+        cmakeVersion: "3.31.6"
+
     - uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: ${{ matrix.arch }}

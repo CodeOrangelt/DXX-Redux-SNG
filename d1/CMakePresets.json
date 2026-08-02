@@ -8,16 +8,14 @@
   "configurePresets": [
     {
       "name": "windows-base",
-      "description": "Target Windows with the Visual Studio development environment.",
+      "description": "Target Windows with the MSVC development environment (via msvc-dev-cmd / vcvarsall on PATH).",
       "hidden": true,
-      "generator": "Visual Studio 17 2022",
-      "architecture": {
-        "value": "Win32",
-        "strategy": "external"
-      },
+      "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "installDir": "${sourceDir}/out/install/${presetName}",
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_CXX_COMPILER": "cl.exe",
         "CMAKE_TOOLCHAIN_FILE": {
           "value": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
           "type": "FILEPATH"
