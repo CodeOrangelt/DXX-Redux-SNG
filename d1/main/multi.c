@@ -141,7 +141,10 @@ const char GMNames[MULTI_GAME_TYPE_COUNT][MULTI_GAME_NAME_LENGTH]={
 	"Unknown",
 	"Unknown",
 	"Unknown",
-	"Bounty"
+	"Bounty",
+	"Capture Flag",
+	"Turkey Shoot",
+	"Arcade"
 };
 const char GMNamesShrt[MULTI_GAME_TYPE_COUNT][8]={
 	"ANRCHY",
@@ -151,7 +154,10 @@ const char GMNamesShrt[MULTI_GAME_TYPE_COUNT][8]={
 	"UNKNOWN",
 	"UNKNOWN",
 	"UNKNOWN",
-	"BOUNTY"
+	"BOUNTY",
+	"CTF",
+	"TURKEY",
+	"ARCADE"
 };
 
 int Current_obs_player = OBSERVER_PLAYER_ID; // Current player being observed. Defaults to the observer player ID.
@@ -1447,6 +1453,9 @@ void multi_do_frame(void)
 		// Handle turkey cloaking
 		multi_turkey_handle_cloak();
 	}
+
+	// Arcade Mode handling - spawns super powers around the mine (spawner only)
+	multi_arcade_do_frame();
 
 	multi_send_message(); // Send any waiting messages
 
@@ -3465,6 +3474,282 @@ void multi_new_turkey_target(int pnum)
 // END TURKEY SHOOT IMPLEMENTATION
 // ================================
 
+// ================================
+// ARCADE MODE IMPLEMENTATION
+// ================================
+
+// Grace period after level start, so clients are synced before the first event.
+#define ARCADE_SPAWN_WARMUP     (F1_0 * 3)
+
+static fix64 Arcade_next_event = 0;	// when the next announcement fires
+static fix64 Arcade_drop_at = 0;	// when the announced super power actually drops
+static int Arcade_pending_spid = -1;	// announced but not yet dropped
+
+void multi_arcade_init_level(void)
+{
+	if (!(Game_mode & GM_ARCADE))
+		return;
+
+	Arcade_next_event = GameTime64 + ARCADE_SPAWN_WARMUP;
+	Arcade_drop_at = 0;
+	Arcade_pending_spid = -1;
+	arcade_reset_player_state();
+	arcade_clear_announcement();
+}
+
+// Super powers currently sitting in the mine, so the map does not silt up when
+// nobody is collecting them.
+static int multi_arcade_count_active(void)
+{
+	int i, count = 0;
+
+	for (i = 0; i <= Highest_object_index; i++)
+		if (Objects[i].type == OBJ_POWERUP && arcade_object_superpower(&Objects[i]) >= 0)
+			count++;
+
+	return count;
+}
+
+// Exactly one machine spawns super powers, and it has to be one that owns a real
+// player object: created objects are keyed to their owner's player number for
+// objnum mapping and removal. That is normally the host, but a host running as an
+// observer has no player object, so the lowest-numbered player takes over.
+// Every machine evaluates this the same way from the same player state.
+static int multi_arcade_spawner_pnum(void)
+{
+	int i;
+
+	if (!Netgame.host_is_obs && Players[multi_who_is_master()].connected == CONNECT_PLAYING)
+		return multi_who_is_master();
+
+	for (i = 0; i < N_players; i++)
+		if (i != multi_who_is_master() && Players[i].connected == CONNECT_PLAYING)
+			return i;
+
+	return -1;
+}
+
+void multi_send_arcade_powerup(int spid, int segnum, int objnum, vms_vector *pos)
+{
+#ifdef WORDS_BIGENDIAN
+	vms_vector swapped_vec;
+#endif
+	int count = 0;
+
+	if (is_observer()) { return; }
+
+	multibuf[count] = MULTI_ARCADE_POWERUP;			count += 1;
+	multibuf[count] = Player_num;				count += 1;
+	multibuf[count] = (char)spid;				count += 1;
+	PUT_INTEL_SHORT(multibuf+count, segnum);		count += 2;
+	PUT_INTEL_SHORT(multibuf+count, objnum);		count += 2;
+#ifndef WORDS_BIGENDIAN
+	memcpy(multibuf+count, pos, sizeof(vms_vector));	count += sizeof(vms_vector);
+#else
+	swapped_vec.x = (fix)INTEL_INT( (int)pos->x );
+	swapped_vec.y = (fix)INTEL_INT( (int)pos->y );
+	swapped_vec.z = (fix)INTEL_INT( (int)pos->z );
+	memcpy(multibuf+count, &swapped_vec, 12);		count += 12;
+#endif
+	//								-----------
+	//								Total = 19
+
+	multi_send_data(multibuf, count, 2);
+
+	if (Network_send_objects && multi_objnum_is_past(objnum))
+		Network_send_objnum = -1;
+}
+
+void multi_send_arcade_announce(int spid, int seconds)
+{
+	if (is_observer()) { return; }
+
+	multibuf[0] = MULTI_ARCADE_ANNOUNCE;
+	multibuf[1] = (char)spid;
+	multibuf[2] = (char)seconds;
+
+	multi_send_data(multibuf, 3, 2);
+}
+
+void multi_do_arcade_announce(const ubyte *buf)
+{
+	int spid = buf[1];
+	int seconds = buf[2];
+
+	if (!(Game_mode & GM_ARCADE))
+		return;
+
+	if (spid < 0 || spid >= NUM_ARCADE_SUPERPOWERS)
+		return;
+
+	arcade_start_announcement(spid, seconds);
+}
+
+void multi_do_arcade_powerup(const ubyte *buf)
+{
+	short segnum, objnum;
+	int my_objnum, pnum, spid, powerup_type;
+	int count = 1;
+	vms_vector new_pos;
+
+	if (Endlevel_sequence || Control_center_destroyed)
+		return;
+
+	pnum = buf[count++];
+	spid = buf[count++];
+	segnum = GET_INTEL_SHORT(buf + count); count += 2;
+	objnum = GET_INTEL_SHORT(buf + count); count += 2;
+
+	if ((pnum < 0) || (pnum >= MAX_PLAYERS) || (Players[pnum].objnum < 0))
+		return;
+
+	if ((segnum < 0) || (segnum > Highest_segment_index))
+		return;
+
+	powerup_type = arcade_superpower_powerup_type(spid);
+	if (powerup_type < 0)
+		return;
+
+	new_pos = *(vms_vector *)(buf+count); count += sizeof(vms_vector);
+
+#ifdef WORDS_BIGENDIAN
+	new_pos.x = (fix)SWAPINT((int)new_pos.x);
+	new_pos.y = (fix)SWAPINT((int)new_pos.y);
+	new_pos.z = (fix)SWAPINT((int)new_pos.z);
+#endif
+
+	Net_create_loc = 0;
+	my_objnum = call_object_create_egg(&Objects[Players[pnum].objnum], 1, OBJ_POWERUP, powerup_type);
+
+	if (my_objnum < 0)
+		return;
+
+	if (Network_send_objects && multi_objnum_is_past(my_objnum))
+		Network_send_objnum = -1;
+
+	Objects[my_objnum].pos = new_pos;
+	vm_vec_zero(&Objects[my_objnum].mtype.phys_info.velocity);
+	obj_relink(my_objnum, segnum);
+
+	arcade_mark_superpower(my_objnum, spid);
+
+	map_objnum_local_to_remote(my_objnum, objnum, pnum);
+
+	object_create_explosion(segnum, &new_pos, i2f(5), VCLIP_POWERUP_DISAPPEARANCE);
+
+	// Deliberately not counted in PowerupsInMine: super powers are a bonus on
+	// top of the level's powerup budget and must not suppress death drops.
+}
+
+// Spawner only. Drops one super power in a random segment reachable from a player.
+static void multi_arcade_spawn_superpower(int spid)
+{
+	int segnum, objnum, powerup_type;
+	vms_vector new_pos;
+	extern int choose_drop_segment(void);
+
+	powerup_type = arcade_superpower_powerup_type(spid);
+	if (powerup_type < 0)
+		return;
+
+	segnum = choose_drop_segment();
+	if ((segnum < 0) || (segnum > Highest_segment_index))
+		return;
+
+	Net_create_loc = 0;
+	objnum = call_object_create_egg(&Objects[Players[Player_num].objnum], 1, OBJ_POWERUP, powerup_type);
+	if (objnum < 0)
+		return;
+
+	pick_random_point_in_seg(&new_pos, segnum);
+
+	Objects[objnum].pos = new_pos;
+	vm_vec_zero(&Objects[objnum].mtype.phys_info.velocity);
+	obj_relink(objnum, segnum);
+
+	arcade_mark_superpower(objnum, spid);
+
+	multi_send_arcade_powerup(spid, segnum, objnum, &new_pos);
+
+	object_create_explosion(segnum, &new_pos, i2f(5), VCLIP_POWERUP_DISAPPEARANCE);
+}
+
+// Picks one of the enabled super powers at random, or -1 if the host has turned
+// them all off. Exactly one is chosen per event - never a batch - so each drop is
+// its own thing.
+static int multi_arcade_pick_superpower(void)
+{
+	int i, n = 0;
+	int candidates[NUM_ARCADE_SUPERPOWERS];
+
+	for (i = 0; i < NUM_ARCADE_SUPERPOWERS; i++)
+		if (arcade_superpower_enabled(i))
+			candidates[n++] = i;
+
+	if (n == 0)
+		return -1;
+
+	return candidates[(d_rand() * n) >> 15];
+}
+
+void multi_arcade_do_frame(void)
+{
+	int spid, countdown;
+
+	if (!(Game_mode & GM_ARCADE))
+		return;
+
+	// One machine owns every spawn so that all players see the same super powers
+	// in the same places; everyone else only reacts to the arcade packets.
+	if (is_observer() || Player_num != multi_arcade_spawner_pnum())
+		return;
+
+	if (Control_center_destroyed || Endlevel_sequence)
+		return;
+
+	// An announcement is in flight - drop it when the countdown runs out. This
+	// keeps its own deadline rather than reading the banner's, which the renderer
+	// resets once the banner has finished lingering.
+	if (Arcade_pending_spid >= 0) {
+		if (GameTime64 < Arcade_drop_at)
+			return;
+
+		multi_arcade_spawn_superpower(Arcade_pending_spid);
+		Arcade_pending_spid = -1;
+		Arcade_next_event = GameTime64 + i2f(Netgame.ArcadeInterval);
+		return;
+	}
+
+	if (GameTime64 < Arcade_next_event)
+		return;
+
+	// Stay on the fixed cadence even when the mine happens to be full, rather
+	// than silently retrying every frame until a slot frees up. The latter
+	// makes the very next pickup trigger an almost-instant replacement, which
+	// reads as "nothing spawns until you use what's already out there" - not
+	// what a generous default cap should feel like.
+	if (multi_arcade_count_active() >= Netgame.ArcadeMaxActive) {
+		Arcade_next_event = GameTime64 + i2f(Netgame.ArcadeInterval);
+		return;
+	}
+
+	spid = multi_arcade_pick_superpower();
+	if (spid < 0) {
+		Arcade_next_event = GameTime64 + i2f(Netgame.ArcadeInterval);
+		return;
+	}
+
+	countdown = Netgame.ArcadeCountdown;
+	Arcade_pending_spid = spid;
+	Arcade_drop_at = GameTime64 + i2f(countdown);
+	arcade_start_announcement(spid, countdown);
+	multi_send_arcade_announce(spid, countdown);
+}
+
+// ================================
+// END ARCADE MODE IMPLEMENTATION
+// ================================
+
 void
 multi_reset_stuff(void)
 {
@@ -3867,6 +4152,12 @@ void multi_powcap_cap_objects()
 
 	Players[Player_num].secondary_ammo[PROXIMITY_INDEX]+=Proximity_dropped;
 	Proximity_dropped=0;
+
+	// SNG: Arcade - super powers intentionally push players past the level's
+	// powerup budget, so the cap would immediately claw the ammo back.
+	if(Game_mode & GM_ARCADE) {
+		return;
+	}
 
 	// Don't even try.  TODO: There is no try, only do.
 	if(Netgame.PrimaryDupFactor > 1 || Netgame.SecondaryDupFactor > 1 || Netgame.SecondaryCapFactor > 1 ) {
@@ -4536,6 +4827,10 @@ multi_prep_level(void)
 	// Initialize Turkey Shoot mode
 	if (Game_mode & GM_TURKEY_SHOOT)
 		multi_turkey_init_game();
+
+	// Initialize Arcade mode
+	if (Game_mode & GM_ARCADE)
+		multi_arcade_init_level();
 
 	multi_consistency_error(1);
 
@@ -5779,6 +6074,10 @@ multi_process_data(const ubyte *buf, int len)
 			if (!Endlevel_sequence) multi_do_controlcen_fire(buf); break;
 		case MULTI_CREATE_POWERUP:
 			if (!Endlevel_sequence) multi_do_create_powerup(buf); break;
+		case MULTI_ARCADE_POWERUP:
+			if (!Endlevel_sequence) multi_do_arcade_powerup(buf); break;
+		case MULTI_ARCADE_ANNOUNCE:
+			if (!Endlevel_sequence) multi_do_arcade_announce(buf); break;
 		case MULTI_PLAY_SOUND:
 			if (!Endlevel_sequence) multi_do_play_sound(buf); break;
 		case MULTI_ROBOT_CLAIM:

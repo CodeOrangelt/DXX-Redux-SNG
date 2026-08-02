@@ -588,7 +588,13 @@ void do_cloak_stuff(void)
 						multi_send_play_sound(SOUND_CLOAK_OFF, F1_0);
 						multi_send_ship_status();
 					}
-					maybe_drop_net_powerup(POW_CLOAK);
+					// SNG: Arcade - the cloak super power reuses this same flag and
+					// timer, so every super-power cloak expiring would otherwise
+					// also trigger this stock "restock the mine" mechanic, on top
+					// of arcade's own scheduled spawns. Arcade's spawner is the
+					// sole source of extra drops instead.
+					if (!(Game_mode & GM_ARCADE))
+						maybe_drop_net_powerup(POW_CLOAK);
 					if ( Newdemo_state != ND_STATE_PLAYBACK )
 						multi_send_decloak(); // For demo recording
 #endif
@@ -613,7 +619,10 @@ void do_invulnerable_stuff(void)
 				if (Game_mode & GM_MULTI)
 				{
 					multi_send_play_sound(SOUND_INVULNERABILITY_OFF, F1_0);
-					maybe_drop_net_powerup(POW_INVULNERABILITY);
+					// SNG: Arcade - see do_cloak_stuff() above; the invulnerability
+					// super power reuses this same flag and timer.
+					if (!(Game_mode & GM_ARCADE))
+						maybe_drop_net_powerup(POW_INVULNERABILITY);
 					multi_send_ship_status();
 				}
 				#endif
@@ -1190,6 +1199,8 @@ void GameProcessFrame(void)
 	diminish_palette_towards_normal();		//	Should leave palette effect up for as long as possible by putting right before render.
 	do_cloak_stuff();
 	do_invulnerable_stuff();
+	arcade_do_infinite_energy_frame();
+	arcade_do_announcement_frame();
 	remove_obsolete_stuck_objects();
 #ifdef EDITOR
 	check_create_player_path();

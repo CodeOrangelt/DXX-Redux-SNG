@@ -507,6 +507,11 @@ void game_draw_hud_stuff()
 	if (Newdemo_state == ND_STATE_PLAYBACK)
 		Game_mode = GM_NORMAL | (Game_mode & GM_OBSERVER);
 
+	// SNG: Arcade - super power labels read through walls; countdown banner is
+	// drawn last so it sits on top of everything else.
+	arcade_draw_superpower_labels();
+	arcade_draw_announcement();
+
 	if ( Player_is_dead )
 		player_dead_message();
 }

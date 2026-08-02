@@ -1568,7 +1568,15 @@ void do_missile_firing(int drop_bomb)
 				{
 					Proximity_dropped = 0;
 #ifdef NETWORK
-					maybe_drop_net_powerup(POW_PROXIMITY_WEAPON);
+					// SNG: Arcade - this stock "restock the mine on fire" mechanic
+					// has no cap of its own (see maybe_drop_net_powerup()), and
+					// arcade super powers hand out far more ammo than the normal
+					// pickup caps it was designed around. Left enabled, firing
+					// through a super-power-granted stack floods the mine with
+					// extra powerups on top of arcade's own scheduled spawns.
+					// Arcade's spawner is the sole source of extra drops instead.
+					if (!(Game_mode & GM_ARCADE))
+						maybe_drop_net_powerup(POW_PROXIMITY_WEAPON);
 #endif
 				}
 				Laser_player_fire( ConsoleObject, PROXIMITY_ID, PROXIMITY_GUN, 1, 0, orient);
@@ -1578,7 +1586,9 @@ void do_missile_firing(int drop_bomb)
 				Laser_player_fire( ConsoleObject, HOMING_ID, HOMING_GUN+(Missile_gun & 1), 1, 0, orient );
 				Missile_gun++;
 				#ifdef NETWORK
-				maybe_drop_net_powerup(POW_HOMING_AMMO_1);
+				// SNG: Arcade - see PROXIMITY_INDEX above.
+				if (!(Game_mode & GM_ARCADE))
+					maybe_drop_net_powerup(POW_HOMING_AMMO_1);
 				#endif
 				break;
 
@@ -1586,14 +1596,18 @@ void do_missile_firing(int drop_bomb)
 			case SMART_INDEX:
 				Laser_player_fire( ConsoleObject, SMART_ID, SMART_GUN, 1, 0, orient);
 #ifdef NETWORK
-				maybe_drop_net_powerup(POW_SMARTBOMB_WEAPON);
+				// SNG: Arcade - see PROXIMITY_INDEX above.
+				if (!(Game_mode & GM_ARCADE))
+					maybe_drop_net_powerup(POW_SMARTBOMB_WEAPON);
 #endif
 				break;
 
 			case MEGA_INDEX:
 				Laser_player_fire( ConsoleObject, MEGA_ID, MEGA_GUN, 1, 0, orient);
 #ifdef NETWORK
-				maybe_drop_net_powerup(POW_MEGA_WEAPON);
+				// SNG: Arcade - see PROXIMITY_INDEX above.
+				if (!(Game_mode & GM_ARCADE))
+					maybe_drop_net_powerup(POW_MEGA_WEAPON);
 #endif
 
 				{ vms_vector force_vec;

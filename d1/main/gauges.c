@@ -4258,6 +4258,131 @@ void observer_show_bomb_highlights()
 
 //draw all the things on the HUD
 
+// SNG: Arcade mode - big centre-screen banner announcing an incoming super power,
+// counting down to the drop. Drawn on top of everything for players and observers
+// alike, and independent of the HUD mode, because everyone needs to see it.
+void arcade_draw_announcement(void)
+{
+	char countdown[8];
+	const char *name;
+	int secs_left, w, h, aw, box_w, box_h, x, y, name_y;
+
+	if (!(Game_mode & GM_ARCADE) || Arcade_announce_spid < 0)
+		return;
+
+	// Stays up for a moment past zero so the drop itself is not a silent cut.
+	if (GameTime64 > Arcade_announce_drop_time + ARCADE_ANNOUNCE_LINGER) {
+		arcade_clear_announcement();
+		return;
+	}
+
+	name = arcade_superpower_name(Arcade_announce_spid);
+	secs_left = arcade_announce_seconds_left();
+
+	if (secs_left > 0)
+		snprintf(countdown, sizeof(countdown), "%d", secs_left);
+	else
+		snprintf(countdown, sizeof(countdown), "GO!");
+
+	// Size the backing box off the wider of the two lines.
+	gr_set_curfont(MEDIUM2_FONT);
+	gr_get_string_size((char *)name, &box_w, &box_h, &aw);
+
+	gr_set_curfont(HUGE_FONT);
+	gr_get_string_size(countdown, &w, &h, &aw);
+
+	if (w > box_w)
+		box_w = w;
+	box_h += h;
+
+	box_w += FSPACX(16);
+	box_h += FSPACY(10);
+
+	x = (grd_curcanv->cv_bitmap.bm_w - box_w) / 2;
+	y = (grd_curcanv->cv_bitmap.bm_h - box_h) / 2;
+
+	gr_settransblend(14, GR_BLEND_NORMAL);
+	gr_setcolor(BM_XRGB(0, 0, 0));
+	gr_rect(x, y, x + box_w, y + box_h);
+	gr_settransblend(GR_FADE_OFF, GR_BLEND_NORMAL);
+
+	name_y = y + FSPACY(4);
+
+	gr_set_curfont(MEDIUM2_FONT);
+	gr_set_fontcolor(BM_XRGB(31, 25, 0), -1);
+	gr_string(0x8000, name_y, (char *)name);
+
+	// The digit flashes as it ticks; "GO!" goes solid green.
+	gr_set_curfont(HUGE_FONT);
+	if (secs_left > 0)
+		gr_set_fontcolor((GameTime64 & 0x8000) ? BM_XRGB(31, 31, 31) : BM_XRGB(31, 10, 0), -1);
+	else
+		gr_set_fontcolor(BM_XRGB(0, 31, 0), -1);
+	gr_string(0x8000, y + box_h - h - FSPACY(4), countdown);
+
+	gr_set_curfont(GAME_FONT);
+}
+
+// SNG: Arcade mode - floating label over every super power currently in the
+// mine, so players can actually go find the thing instead of stumbling onto
+// it. Deliberately skips the see_object() line-of-sight check that
+// show_HUD_names() uses for player names, so the label reads through walls -
+// that's the point, these are meant to be found. It's still bounded by the
+// view frustum (g3_rotate_point's p3_codes), so it's not an all-seeing ping;
+// you have to be facing roughly the right way.
+void arcade_draw_superpower_labels(void)
+{
+	int i;
+
+	if (!(Game_mode & GM_ARCADE))
+		return;
+
+	gr_set_curfont(GAME_FONT);
+
+	for (i = 0; i <= Highest_object_index; i++)
+	{
+		int spid;
+		g3s_point obj_point;
+
+		if (Objects[i].type != OBJ_POWERUP)
+			continue;
+
+		spid = arcade_object_superpower(&Objects[i]);
+		if (spid < 0)
+			continue;
+
+		g3_rotate_point(&obj_point, &Objects[i].pos);
+
+		if (obj_point.p3_codes != 0) // outside view frustum
+			continue;
+
+		g3_project_point(&obj_point);
+
+		if (obj_point.p3_flags & PF_OVERFLOW)
+			continue;
+
+		{
+			fix x, y, dy;
+			const char *name = arcade_superpower_name(spid);
+			int w, h, aw, x1, y1;
+
+			x = obj_point.p3_sx;
+			y = obj_point.p3_sy;
+			dy = -fixmuldiv(fixmul(Objects[i].size, Matrix_scale.y), i2f(grd_curcanv->cv_bitmap.bm_h) / 2, obj_point.p3_z);
+
+			gr_get_string_size((char *)name, &w, &h, &aw);
+			x1 = f2i(x) - w / 2;
+			y1 = f2i(y - dy) - h - FSPACY(1);
+
+			// Pulses so it draws the eye even against similar-colored terrain.
+			gr_set_fontcolor((GameTime64 & 0x4000) ? BM_XRGB(31, 25, 0) : BM_XRGB(20, 16, 0), -1);
+			gr_string(x1, y1, (char *)name);
+		}
+	}
+
+	gr_set_curfont(GAME_FONT);
+}
+
 void draw_hud()
 {
 
@@ -4329,6 +4454,16 @@ void draw_hud()
 			gr_set_fontcolor(BM_XRGB(0, 31, 0), -1); // Green text
 			gr_printf(0x8000, grd_curcanv->cv_bitmap.bm_h - LINE_SPACING * 3, "Hunt the turkey: %s", Players[Turkey_target].callsign);
 		}
+	}
+
+	// Arcade HUD - countdown for the temporary infinite energy super power
+	if ((Game_mode & GM_ARCADE) && Arcade_infinite_energy_end > GameTime64)
+	{
+		int secs_left = f2i(Arcade_infinite_energy_end - GameTime64) + 1;
+
+		gr_set_curfont(GAME_FONT);
+		gr_set_fontcolor(BM_XRGB(0, 31, 31), -1);
+		gr_printf(0x8000, grd_curcanv->cv_bitmap.bm_h - LINE_SPACING * 3, "INFINITE ENERGY: %d", secs_left);
 	}
 
 	// Cruise speed
