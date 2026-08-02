@@ -183,9 +183,31 @@ void ReadCmdArgs(void)
 	GameArg.MplUdpHostPort		= get_int_arg("-udp_hostport", 0);
 	GameArg.MplUdpMyPort		= get_int_arg("-udp_myport", 0);
 #ifdef USE_TRACKER
-	GameArg.MplTrackerAddr		= get_str_arg("-tracker_hostaddr", TRACKER_ADDR_DEFAULT);
-	GameArg.MplTrackerPort		= get_int_arg("-tracker_hostport", TRACKER_PORT_DEFAULT);
+	GameArg.MplTrackerCount = 0;
+	{
+		static const char *arg_names_addr[MAX_TRACKERS] = { "-tracker_hostaddr", "-tracker2_hostaddr", "-tracker3_hostaddr", "-tracker4_hostaddr" };
+		static const char *arg_names_port[MAX_TRACKERS] = { "-tracker_hostport", "-tracker2_hostport", "-tracker3_hostport", "-tracker4_hostport" };
+		const char *defaults_addr[MAX_TRACKERS] = { TRACKER_ADDR_DEFAULT, TRACKER2_ADDR_DEFAULT, NULL, NULL };
+		int defaults_port[MAX_TRACKERS] = { TRACKER_PORT_DEFAULT, TRACKER2_PORT_DEFAULT, 0, 0 };
+		int i;
+
+		for (i = 0; i < MAX_TRACKERS; i++)
+		{
+			const char *addr = get_str_arg((char *)arg_names_addr[i], (char *)defaults_addr[i]);
+			int port = get_int_arg((char *)arg_names_port[i], defaults_port[i]);
+
+			if (addr && addr[0] && port != 0)
+			{
+				GameArg.MplTrackerAddr[GameArg.MplTrackerCount] = addr;
+				GameArg.MplTrackerPort[GameArg.MplTrackerCount] = port;
+				GameArg.MplTrackerCount++;
+			}
+		}
+	}
 #endif
+	GameArg.MplRelayAddr		= get_str_arg("-relay_hostaddr", NULL);
+	GameArg.MplRelayPort		= get_int_arg("-relay_hostport", 0);
+	GameArg.MplRelayToken		= get_int_arg("-relay_token", 0);
 #endif
 
 	// Editor Options

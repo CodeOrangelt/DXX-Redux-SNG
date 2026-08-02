@@ -101,7 +101,7 @@ build_appimage() {
 
 # Build each subunit
 build_appimage "d1x-redux" "d1x-redux" "d1x-redux-sng"
-build_appimage "d2x-redux" "d2x-redux" "d2x-redux"
+build_appimage "d2x-redux" "d2x-redux" "d2x-redux-sng"
 
 # Clean
 rm -f appimagetool* AppRun* linuxdeploy-*
