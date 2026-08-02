@@ -815,6 +815,19 @@ int udp_receive_packet(int socknum, ubyte *text, int len, struct _sockaddr *send
 #define TRACKER_PKT_UNREGISTER		1	/* Unregister our game */
 #define TRACKER_PKT_GAMELIST		2	/* Request the game list */
 
+/* Tracker defines:  Game event sub-message types (kill/damage/chat).
+ * These numbers are fixed by the tracker's own parser (scraper/udp-tracker.js)
+ * and must NOT be derived from this engine's MULTI_* enum -- SNG has added
+ * extra multiplayer commands ahead of MULTI_KILL_HOST/MULTI_DAMAGE in that
+ * enum, which has shifted their ordinal values away from what the tracker
+ * expects. MULTI_MESSAGE/MULTI_OBS_MESSAGE still happen to equal 5/6 today,
+ * but are pinned here too rather than relied upon, since a future command
+ * insertion could shift them as well. */
+#define TRACKER_EVT_MESSAGE		5	/* MULTI_MESSAGE equivalent (chat) */
+#define TRACKER_EVT_OBS_MESSAGE	6	/* MULTI_OBS_MESSAGE equivalent (observer chat) */
+#define TRACKER_EVT_KILL_HOST		43	/* MULTI_KILL_HOST equivalent */
+#define TRACKER_EVT_DAMAGE		48	/* MULTI_DAMAGE equivalent */
+
 /* Tracker initialization */
 int udp_tracker_init()
 {
@@ -987,6 +1000,121 @@ int udp_tracker_process_game( ubyte *data, int data_len )
 	net_udp_process_game_info( &data[iPos - 1], data_len - iPos, sAddr, 1 , 0);
 	return 0;
 }
+
+/* Game-event forwarding to the tracker(s), begin!
+ *
+ * These are called only by the host (multi_i_am_master() checked at every
+ * call site in multi.c before calling in here), from the same points where
+ * the host already has fully-resolved, reliably-delivered kill/damage/chat
+ * data -- either because it just relayed it via the ack'd MULTI_KILL_HOST /
+ * MULTI_DAMAGE channel, or because it's the one forward_to_observers()
+ * would otherwise be sending it to. No new unacked network path is added
+ * upstream of these calls; only the outbound hop to the tracker itself is
+ * fire-and-forget, which is inherent to the tracker's own UDP protocol.
+ *
+ * All four event kinds share one wire framing: a 6-byte MDATA header
+ * (opcode 17, our netgame token, our own Player_num) followed by exactly
+ * one sub-message. This was verified against the tracker's actual deployed
+ * source (scraper/udp-tracker.js, walkMDATAPayload()) rather than assumed:
+ * that parser only ever reads type bytes 43/5/6 from *inside* an
+ * MDATA-wrapped payload -- there is no top-level opcode handler for a bare
+ * 43 or 48 byte, so a standalone/unwrapped packet is dropped before it
+ * reaches any kill/damage logic at all. Each event is still sent as its
+ * own dedicated packet (never batched with unrelated engine traffic),
+ * since the walker stops at the first sub-message type it doesn't
+ * recognize and would silently truncate anything after it.
+ *
+ * MULTI_DAMAGE (48) is wired up here for forward-compatibility, but as of
+ * this writing walkMDATAPayload() has no branch for type 48 at all -- it
+ * falls through to "unknown type, stop scanning" -- so weapon/damage
+ * events will not appear on the tracker until that's added server-side.
+ * Kill and chat both have working server-side parsing today.
+ */
+
+static void udp_tracker_send_mdata_event(const ubyte *submsg, int submsg_len)
+{
+	ubyte buf[6 + 47]; // 6-byte MDATA header + largest sub-message (MULTI_OBS_MESSAGE, 47 bytes)
+	int len = 0, i;
+
+	if (TrackerCount == 0)
+		return;
+
+	buf[len] = UPID_MDATA_PNORM;					len++;
+	PUT_INTEL_INT(buf + len, netgame_token);		len += 4;
+	buf[len] = Player_num;							len++;
+
+	memcpy(buf + len, submsg, submsg_len);
+	len += submsg_len;
+
+	for (i = 0; i < TrackerCount; i++)
+		dxx_sendto( UDP_Socket[2], buf, len, 0, (struct sockaddr *)&TrackerSockets[i], sizeof( TrackerSockets[i] ) );
+}
+
+/* MDATA-wrapped 7-byte MULTI_KILL_HOST-equivalent sub-message. */
+void udp_tracker_send_kill(ubyte killed_pnum, short killer_objnum, ubyte killer_net, ubyte team_vector, ubyte bounty_target)
+{
+	ubyte sub[7];
+
+	sub[0] = TRACKER_EVT_KILL_HOST;
+	sub[1] = killed_pnum;
+	PUT_INTEL_SHORT(sub + 2, killer_objnum);
+	sub[4] = killer_net;
+	sub[5] = team_vector;
+	sub[6] = bounty_target;
+
+	udp_tracker_send_mdata_event(sub, sizeof(sub));
+}
+
+/* MDATA-wrapped 14-byte MULTI_DAMAGE-equivalent sub-message. damage/
+ * shields_after are `fix` (16.16 fixed point) -- sent as-is; the tracker
+ * divides by 65536. See the block comment above: not parsed server-side
+ * yet, sent anyway so nothing else needs to change once it is. */
+void udp_tracker_send_damage(ubyte victim_pnum, fix damage, fix shields_after, ubyte killer_type, ubyte killer_id, ubyte damage_type, ubyte source_id)
+{
+	ubyte sub[14];
+
+	sub[0] = TRACKER_EVT_DAMAGE;
+	sub[1] = victim_pnum;
+	PUT_INTEL_INT(sub + 2, damage);
+	PUT_INTEL_INT(sub + 6, shields_after);
+	sub[10] = killer_type;
+	sub[11] = killer_id;
+	sub[12] = damage_type;
+	sub[13] = source_id;
+
+	udp_tracker_send_mdata_event(sub, sizeof(sub));
+}
+
+/* MDATA-wrapped 37-byte MULTI_MESSAGE-equivalent chat sub-message. */
+void udp_tracker_send_message(ubyte player_num, const char *text)
+{
+	ubyte sub[1 + 1 + MAX_MESSAGE_LEN];
+
+	sub[0] = TRACKER_EVT_MESSAGE;
+	sub[1] = player_num;
+	memset(sub + 2, 0, MAX_MESSAGE_LEN);
+	strncpy((char *)sub + 2, text, MAX_MESSAGE_LEN - 1);
+
+	udp_tracker_send_mdata_event(sub, sizeof(sub));
+}
+
+/* MDATA-wrapped 47-byte MULTI_OBS_MESSAGE-equivalent observer chat
+ * sub-message. formatted_text must already be "callsign: message" -- the
+ * tracker splits on the first ": " itself, same as multi_do_obs_message()
+ * expects. */
+void udp_tracker_send_obs_message(const char *formatted_text)
+{
+	ubyte sub[1 + 1 + 45];
+
+	sub[0] = TRACKER_EVT_OBS_MESSAGE;
+	sub[1] = OBSERVER_PLAYER_ID;
+	memset(sub + 2, 0, 45);
+	strncpy((char *)sub + 2, formatted_text, 44);
+
+	udp_tracker_send_mdata_event(sub, sizeof(sub));
+}
+/* Game-event forwarding to the tracker(s), end! */
+
 #endif /* USE_TRACKER */
 
 /* UPnP stuff, begin! */

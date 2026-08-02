@@ -24,6 +24,14 @@ int net_udp_level_sync();
 void net_udp_send_mdata_direct(ubyte *data, int data_len, int pnum, int priority);
 void net_udp_send_netgame_update();
 void net_udp_send_obs_quit();
+#ifdef USE_TRACKER
+// Forward a single kill/damage/chat event to every configured tracker.
+// Host-only: call sites in multi.c gate these behind multi_i_am_master().
+void udp_tracker_send_kill(ubyte killed_pnum, short killer_objnum, ubyte killer_net, ubyte team_vector, ubyte bounty_target);
+void udp_tracker_send_damage(ubyte victim_pnum, fix damage, fix shields_after, ubyte killer_type, ubyte killer_id, ubyte damage_type, ubyte source_id);
+void udp_tracker_send_message(ubyte player_num, const char *text);
+void udp_tracker_send_obs_message(const char *formatted_text);
+#endif
 
 // Some defines
 #ifdef IPv6
