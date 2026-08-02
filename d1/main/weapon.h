@@ -160,6 +160,9 @@ extern int player_has_weapon(ubyte pnum, int weapon_num, int secondary_flag);
 //when you pick up a secondary, you always get the weapon & ammo for it
 int pick_up_secondary(int weapon_index,int count);
 
+// SNG: Arcade mode - grants secondary ammo ignoring Secondary_ammo_max.
+void arcade_add_secondary(int weapon_index, int count);
+
 //called when a primary weapon is picked up
 //returns true if actually picked up
 int pick_up_primary(int weapon_index);

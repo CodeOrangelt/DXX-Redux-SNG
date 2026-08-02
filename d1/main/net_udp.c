@@ -3077,6 +3077,19 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.team_color[0];						len++;
 		buf[len] = Netgame.team_color[1];						len++;
 
+		buf[len] = Netgame.ArcadeTeams;							len++;
+		buf[len] = Netgame.ArcadeInterval;						len++;
+		buf[len] = Netgame.ArcadeMaxActive;						len++;
+		buf[len] = Netgame.ArcadeCountdown;						len++;
+		buf[len] = Netgame.ArcadeEnergyTime;					len++;
+		buf[len] = Netgame.ArcadeHomingCount;					len++;
+		buf[len] = Netgame.ArcadeSmartCount;					len++;
+		buf[len] = Netgame.ArcadeProxyCount;					len++;
+		buf[len] = Netgame.ArcadeMegaCount;						len++;
+		for (int asp = 0; asp < NUM_ARCADE_SUPERPOWERS; asp++) {
+			buf[len] = Netgame.ArcadeEnabled[asp];				len++;
+		}
+
 		if(info_upid == UPID_SYNC) {
 			PUT_INTEL_INT(buf + len, player_token); len += 4; 
 			PUT_INTEL_INT(buf + len, netgame_token); len += 4; 
@@ -3339,6 +3352,19 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		Netgame.GaussAmmoStyle = data[len]; len++;
 		Netgame.team_color[0] = data[len];						len++;
 		Netgame.team_color[1] = data[len];						len++;
+
+		Netgame.ArcadeTeams = data[len];						len++;
+		Netgame.ArcadeInterval = data[len];						len++;
+		Netgame.ArcadeMaxActive = data[len];					len++;
+		Netgame.ArcadeCountdown = data[len];					len++;
+		Netgame.ArcadeEnergyTime = data[len];					len++;
+		Netgame.ArcadeHomingCount = data[len];					len++;
+		Netgame.ArcadeSmartCount = data[len];					len++;
+		Netgame.ArcadeProxyCount = data[len];					len++;
+		Netgame.ArcadeMegaCount = data[len];					len++;
+		for (int asp = 0; asp < NUM_ARCADE_SUPERPOWERS; asp++) {
+			Netgame.ArcadeEnabled[asp] = data[len];				len++;
+		}
 
 		if (Netgame.host_is_obs) {
 			multi_make_player_ghost(0);
@@ -3954,7 +3980,135 @@ void net_udp_staticpowerupsmenu(void)
 	Netgame.StaticMissiles = m[9].value;
 }
 
+// SNG Arcade mode submenu.
+//
+// Every slider here is deliberately short-ranged: newmenu draws one glyph per
+// step, so a wide range runs off the side of the screen. Values that need a
+// bigger span are stepped instead (ARCADE_INTERVAL_STEP, ARCADE_ENERGY_STEP).
+#define ARCADE_INTERVAL_STEP  5		// interval slider: 5..60 seconds
+#define ARCADE_INTERVAL_MAX   11
+#define ARCADE_ENERGY_STEP    2		// energy slider: 2..24 seconds
+#define ARCADE_ENERGY_MAX     11
+#define ARCADE_MAXACTIVE_STEP 2		// max-in-mine slider: 2..20
+
+static int opt_arcade_teams, opt_arcade_interval, opt_arcade_maxactive, opt_arcade_countdown;
+static int opt_arcade_energytime, opt_arcade_homing, opt_arcade_smart, opt_arcade_proxy, opt_arcade_mega;
+
+static void net_udp_arcade_menu_text(newmenu_item *m)
+{
+	sprintf(m[opt_arcade_interval].text,   "Every %d sec", (m[opt_arcade_interval].value + 1) * ARCADE_INTERVAL_STEP);
+	sprintf(m[opt_arcade_maxactive].text,  "Max in mine: %d", (m[opt_arcade_maxactive].value + 1) * ARCADE_MAXACTIVE_STEP);
+	sprintf(m[opt_arcade_countdown].text,  "Countdown: %d sec", m[opt_arcade_countdown].value);
+	sprintf(m[opt_arcade_energytime].text, "Energy: %d sec", (m[opt_arcade_energytime].value + 1) * ARCADE_ENERGY_STEP);
+	sprintf(m[opt_arcade_homing].text,     "Homers: %d", m[opt_arcade_homing].value + 1);
+	sprintf(m[opt_arcade_smart].text,      "Smarts: %d", m[opt_arcade_smart].value + 1);
+	sprintf(m[opt_arcade_proxy].text,      "Proxies: %d", m[opt_arcade_proxy].value + 1);
+	sprintf(m[opt_arcade_mega].text,       "Megas: %d", m[opt_arcade_mega].value + 1);
+}
+
+static int menu_arcade_handler( newmenu *menu, d_event *event, void *userdata )
+{
+	newmenu_item *menus = newmenu_get_items(menu);
+
+	if (event->type == EVENT_NEWMENU_CHANGED)
+		net_udp_arcade_menu_text(menus);
+
+	userdata = userdata;
+	return 0;
+}
+
+// Rounds a stored value onto its slider step and returns the slider position.
+static int arcade_slider_pos(int value, int step, int max_pos)
+{
+	int pos = (value + step - 1) / step - 1;
+
+	if (pos < 0) pos = 0;
+	if (pos > max_pos) pos = max_pos;
+
+	return pos;
+}
+
+void net_udp_arcade_menu(void)
+{
+	int opt = 0, i;
+	newmenu_item m[20];
+	char interval_text[32], maxactive_text[32], countdown_text[32], energy_text[32];
+	char homing_text[32], smart_text[32], proxy_text[32], mega_text[32];
+	int enable_opt[NUM_ARCADE_SUPERPOWERS];
+
+	opt_arcade_teams = opt;
+	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Team anarchy (off = FFA)"; m[opt].value = Netgame.ArcadeTeams; opt++;
+
+	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Powers that can drop..."; opt++;
+
+	for (i = 0; i < NUM_ARCADE_SUPERPOWERS; i++)
+	{
+		enable_opt[i] = opt;
+		m[opt].type = NM_TYPE_CHECK;
+		m[opt].text = (char *)arcade_superpower_menu_name(i);
+		m[opt].value = Netgame.ArcadeEnabled[i];
+		opt++;
+	}
+
+	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Drop timing..."; opt++;
+
+	opt_arcade_interval = opt;
+	m[opt].type = NM_TYPE_SLIDER; m[opt].text = interval_text; m[opt].min_value = 0; m[opt].max_value = ARCADE_INTERVAL_MAX;
+	m[opt].value = arcade_slider_pos(Netgame.ArcadeInterval, ARCADE_INTERVAL_STEP, ARCADE_INTERVAL_MAX); opt++;
+
+	opt_arcade_maxactive = opt;
+	m[opt].type = NM_TYPE_SLIDER; m[opt].text = maxactive_text; m[opt].min_value = 0; m[opt].max_value = 9;
+	m[opt].value = arcade_slider_pos(Netgame.ArcadeMaxActive, ARCADE_MAXACTIVE_STEP, 9); opt++;
+
+	opt_arcade_countdown = opt;
+	m[opt].type = NM_TYPE_SLIDER; m[opt].text = countdown_text; m[opt].min_value = 0; m[opt].max_value = 9;
+	m[opt].value = Netgame.ArcadeCountdown; opt++;
+
+	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Amounts given..."; opt++;
+
+	opt_arcade_homing = opt;
+	m[opt].type = NM_TYPE_SLIDER; m[opt].text = homing_text; m[opt].min_value = 0; m[opt].max_value = 11;
+	m[opt].value = arcade_slider_pos(Netgame.ArcadeHomingCount, 1, 11); opt++;
+
+	opt_arcade_smart = opt;
+	m[opt].type = NM_TYPE_SLIDER; m[opt].text = smart_text; m[opt].min_value = 0; m[opt].max_value = 9;
+	m[opt].value = arcade_slider_pos(Netgame.ArcadeSmartCount, 1, 9); opt++;
+
+	opt_arcade_proxy = opt;
+	m[opt].type = NM_TYPE_SLIDER; m[opt].text = proxy_text; m[opt].min_value = 0; m[opt].max_value = 11;
+	m[opt].value = arcade_slider_pos(Netgame.ArcadeProxyCount, 1, 11); opt++;
+
+	opt_arcade_mega = opt;
+	m[opt].type = NM_TYPE_SLIDER; m[opt].text = mega_text; m[opt].min_value = 0; m[opt].max_value = 4;
+	m[opt].value = arcade_slider_pos(Netgame.ArcadeMegaCount, 1, 4); opt++;
+
+	opt_arcade_energytime = opt;
+	m[opt].type = NM_TYPE_SLIDER; m[opt].text = energy_text; m[opt].min_value = 0; m[opt].max_value = ARCADE_ENERGY_MAX;
+	m[opt].value = arcade_slider_pos(Netgame.ArcadeEnergyTime, ARCADE_ENERGY_STEP, ARCADE_ENERGY_MAX); opt++;
+
+	Assert(opt <= (int)SDL_arraysize(m));
+
+	net_udp_arcade_menu_text(m);
+
+	newmenu_do1( NULL, "Arcade Options", opt, m, menu_arcade_handler, NULL, 0 );
+
+	Netgame.ArcadeTeams       = m[opt_arcade_teams].value;
+	Netgame.ArcadeInterval    = (m[opt_arcade_interval].value + 1) * ARCADE_INTERVAL_STEP;
+	Netgame.ArcadeMaxActive   = (m[opt_arcade_maxactive].value + 1) * ARCADE_MAXACTIVE_STEP;
+	Netgame.ArcadeCountdown   = m[opt_arcade_countdown].value;
+	Netgame.ArcadeEnergyTime  = (m[opt_arcade_energytime].value + 1) * ARCADE_ENERGY_STEP;
+	Netgame.ArcadeHomingCount = m[opt_arcade_homing].value + 1;
+	Netgame.ArcadeSmartCount  = m[opt_arcade_smart].value + 1;
+	Netgame.ArcadeProxyCount  = m[opt_arcade_proxy].value + 1;
+	Netgame.ArcadeMegaCount   = m[opt_arcade_mega].value + 1;
+
+	for (i = 0; i < NUM_ARCADE_SUPERPOWERS; i++)
+		Netgame.ArcadeEnabled[i] = m[enable_opt[i]].value;
+}
+
+
 int net_udp_more_options_handler( newmenu *menu, d_event *event, void *userdata );
+
 
 void net_udp_more_game_options ()
 {
@@ -4391,7 +4545,7 @@ int net_udp_more_options_handler( newmenu *menu, d_event *event, void *userdata 
 typedef struct param_opt
 {
 	int start_game, load_preset, save_preset, name, level, mode, mode_end, moreopts;
-	int closed, refuse, maxnet, maxobs, obsdelay, obsmin, anarchy, team_anarchy, robot_anarchy, coop, bounty, ctf, turkey_shoot;
+	int closed, refuse, maxnet, maxobs, obsdelay, obsmin, anarchy, team_anarchy, robot_anarchy, coop, bounty, ctf, turkey_shoot, arcade;
 } param_opt;
 
 int net_udp_start_game(void);
@@ -4527,6 +4681,17 @@ int net_udp_game_param_handler( newmenu *menu, d_event *event, param_opt *opt )
 					Netgame.gamemode = NETGAME_BOUNTY;
 				else if ( menus[opt->turkey_shoot].value )
 					Netgame.gamemode = NETGAME_TURKEY_SHOOT;
+				else if ( menus[opt->arcade].value ) {
+					int was_arcade = (Netgame.gamemode == NETGAME_ARCADE);
+
+					Netgame.gamemode = NETGAME_ARCADE;
+					Netgame.CTF = 0;
+
+					// Opening Arcade for the first time drops straight into its
+					// options; it stays reachable from Advanced options after that.
+					if (!was_arcade)
+						net_udp_arcade_menu();
+				}
 				else Int3(); // Invalid mode -- see Rob
 			}
 
@@ -4654,6 +4819,9 @@ void netgame_set_defaults(void)
 	Netgame.GaussAmmoStyle = GAUSS_STYLE_DEPLETING;
 	Netgame.NewSpawnAlgorithm = 1;
 
+	// SNG Arcade defaults
+	arcade_set_default_netgame_options();
+
 #ifdef USE_TRACKER
 	Netgame.Tracker = 1;
 #endif
@@ -4763,7 +4931,7 @@ int net_udp_setup_game()
 	int i;
 	int optnum;
 	param_opt opt;
-	newmenu_item m[24];
+	newmenu_item m[25];	// grown for the Arcade game mode radio button
 	char slevel[5];
 	char level_text[32];
 	char srmaxnet[50];
@@ -4838,7 +5006,8 @@ int net_udp_setup_game()
 		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = TXT_COOPERATIVE; m[optnum].value=(Netgame.gamemode == NETGAME_COOPERATIVE); m[optnum].group=0; opt.coop=optnum; optnum++;
 		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Bounty"; m[optnum].value=(Netgame.gamemode == NETGAME_BOUNTY); m[optnum].group=0; opt.bounty=optnum; optnum++;
 		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Capture the Flag"; m[optnum].value=(Netgame.CTF); m[optnum].group=0; opt.ctf=optnum; optnum++;
-		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Turkey Shoot"; m[optnum].value=(Netgame.gamemode == NETGAME_TURKEY_SHOOT); m[optnum].group=0; opt.mode_end=opt.turkey_shoot=optnum; optnum++;
+		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Turkey Shoot"; m[optnum].value=(Netgame.gamemode == NETGAME_TURKEY_SHOOT); m[optnum].group=0; opt.turkey_shoot=optnum; optnum++;
+		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Arcade"; m[optnum].value=(Netgame.gamemode == NETGAME_ARCADE); m[optnum].group=0; opt.mode_end=opt.arcade=optnum; optnum++;
 
 		m[optnum].type = NM_TYPE_TEXT; m[optnum].text = ""; optnum++;
 
@@ -4938,6 +5107,17 @@ net_udp_set_game_mode(int gamemode, ubyte join_as_obs)
 	{
 		Game_mode = GM_NETWORK | GM_TEAM | GM_TURKEY_SHOOT;
 		Show_kill_list = 3;
+	}
+	else if( gamemode == NETGAME_ARCADE )
+	{
+		// Arcade layers on top of a normal free-for-all or team anarchy.
+		Game_mode = GM_NETWORK | GM_ARCADE;
+
+		if (Netgame.ArcadeTeams)
+		{
+			Game_mode |= GM_TEAM;
+			Show_kill_list = 3;
+		}
 	}
 	else
 		Int3();

@@ -1243,6 +1243,21 @@ void drop_player_eggs_remote(object *playerobj, ubyte remote)
 		maybe_drop_primary_weapon_egg(playerobj, PLASMA_INDEX);
 		maybe_drop_primary_weapon_egg(playerobj, FUSION_INDEX);
 
+		// SNG: Arcade mode super powers hand out ammo far past Secondary_ammo_max
+		// (up to ARCADE_SECONDARY_HARD_MAX). Dying with that surplus would
+		// otherwise egg-drop it as one powerup object per unit - up to 200
+		// separate mega/smart pickups, or 50 homing 4-packs, flooding the mine
+		// and the network in a single frame. Clamp to the normal caps before
+		// the drop math runs; the player is dead and about to respawn, so their
+		// live ammo values don't need to survive this.
+		if (Game_mode & GM_ARCADE)
+		{
+			int sidx;
+			for (sidx = 0; sidx < MAX_SECONDARY_WEAPONS; sidx++)
+				if (Players[playerobj->id].secondary_ammo[sidx] > Secondary_ammo_max[sidx])
+					Players[playerobj->id].secondary_ammo[sidx] = Secondary_ammo_max[sidx];
+		}
+
 		//	Drop the secondary weapons
 		//	Note, proximity weapon only comes in packets of 4.  So drop n/2, but a max of 3 (handled inside maybe_drop..)  Make sense?
 

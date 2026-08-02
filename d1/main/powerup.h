@@ -121,5 +121,79 @@ extern int red_key_seg;
 // SNG: Static Powerups - resets the local player's per-life "already collected" tracker
 extern void reset_static_powerups_collected(void);
 
+// SNG: Arcade mode "super powers".
+//
+// A super power is an ordinary powerup object that has been tagged as special.
+// The tag lives in ctype.powerup_info.count, which is the only spare per-powerup
+// field the network code already replicates: multi_object_to_object_rw() and
+// multi_object_rw_to_object() both copy it, so a super power stays a super power
+// for clients that join after it was spawned, and the tag survives object sync.
+// count is otherwise only meaningful for the vulcan powerups, which are not used
+// by any super power.
+#define ARCADE_SP_HOMING        0   // 6 homing missiles
+#define ARCADE_SP_MEGA          1   // 1 mega missile
+#define ARCADE_SP_SMART         2   // 3 smart missiles
+#define ARCADE_SP_PROXY         3   // 8 proximity bombs
+#define ARCADE_SP_CLOAK         4   // cloak
+#define ARCADE_SP_INVULN        5   // invulnerability
+#define ARCADE_SP_ENERGY        6   // temporary infinite energy
+#define NUM_ARCADE_SUPERPOWERS  7
+
+// Tag base. Real powerups carry a count of 1 (or a vulcan ammo count), so this
+// is far outside any legitimate value.
+#define ARCADE_MARK_BASE        1000
+
+// Ceiling applied when a super power pushes a secondary past its normal maximum.
+#define ARCADE_SECONDARY_HARD_MAX 200
+
+// How long the "incoming" banner stays up after the countdown reaches zero.
+#define ARCADE_ANNOUNCE_LINGER (F1_0 * 3 / 2)
+
+// Which powerup object type represents this super power.
+extern int arcade_superpower_powerup_type(int spid);
+
+// Name of a super power, including the configured amount, for on-screen text.
+extern const char *arcade_superpower_name(int spid);
+
+// Stable label for the options menu (no amount baked in).
+extern const char *arcade_superpower_menu_name(int spid);
+
+// How much of the relevant secondary this super power grants.
+extern int arcade_superpower_amount(int spid);
+
+// Is this super power allowed to spawn in the current game?
+extern int arcade_superpower_enabled(int spid);
+
+// Populates the Netgame.Arcade* settings with their defaults.
+extern void arcade_set_default_netgame_options(void);
+
+// Tag an already-created powerup object as a super power.
+extern void arcade_mark_superpower(int objnum, int spid);
+
+// Super power carried by this object, or -1 if it is an ordinary powerup.
+extern int arcade_object_superpower(object *obj);
+
+// Apply a super power to the local player. Returns 1 if the powerup is consumed.
+extern int arcade_pick_up_superpower(object *obj, int spid);
+
+// Per-frame upkeep for the temporary infinite energy super power.
+extern void arcade_do_infinite_energy_frame(void);
+
+// Cleared on level start and on respawn.
+extern void arcade_reset_player_state(void);
+
+// GameTime64 at which infinite energy runs out; 0 when inactive.
+extern fix64 Arcade_infinite_energy_end;
+
+// Centre-screen "incoming super power" banner.
+extern void arcade_start_announcement(int spid, int seconds);
+extern void arcade_clear_announcement(void);
+extern void arcade_draw_announcement(void);
+extern void arcade_draw_superpower_labels(void);
+extern void arcade_do_announcement_frame(void);
+extern int arcade_announce_seconds_left(void);
+extern int Arcade_announce_spid;		// -1 when nothing is announced
+extern fix64 Arcade_announce_drop_time;	// GameTime64 the countdown reaches zero
+
 #endif /* _POWERUP_H */
 

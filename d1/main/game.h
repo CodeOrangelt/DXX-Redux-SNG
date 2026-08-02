@@ -72,6 +72,7 @@ extern int ft_preference;
 #define GM_MULTI        38      // You are in some type of multiplayer game
 #define GM_OBSERVER     1024    // You are observing this game
 #define GM_TURKEY_SHOOT 2048    // Turkey shoot game mode
+#define GM_ARCADE       4096    // Arcade game mode - random "super powers" spawn around the mine
 
 #define NDL 5       // Number of difficulty levels.
 

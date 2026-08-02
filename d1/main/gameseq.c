@@ -394,6 +394,9 @@ void init_player_stats_new_ship(ubyte pnum)
 
 		// SNG: Static Powerups - each new life can collect static weapons again
 		reset_static_powerups_collected();
+
+		// SNG: Arcade - infinite energy does not carry across a death
+		arcade_reset_player_state();
 	}
 
 	Players[pnum].energy = INITIAL_ENERGY;

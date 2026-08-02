@@ -228,6 +228,298 @@ void reset_static_powerups_collected(void)
 	StaticPowerupsCollected = 0;
 }
 
+// SNG: Arcade mode "super powers" ------------------------------------------------
+
+fix64 Arcade_infinite_energy_end = 0;
+
+// Energy level the "infinite energy" super power maintains. This is the
+// player's own energy at the moment of pickup, not MAX_ENERGY - the point is
+// unlimited firing without paying energy cost, not a free top-up. It tracks
+// upward if the player picks up real energy while it's active, but is never
+// pushed up by the super power itself.
+static fix Arcade_infinite_energy_floor = 0;
+
+// Announcement currently on screen. Every machine keeps its own copy; the
+// spawner broadcasts the start of one and each client counts down locally.
+int Arcade_announce_spid = -1;
+fix64 Arcade_announce_drop_time = 0;
+
+int arcade_superpower_powerup_type(int spid)
+{
+	switch (spid) {
+		case ARCADE_SP_HOMING: return POW_HOMING_AMMO_4;
+		case ARCADE_SP_MEGA:   return POW_MEGA_WEAPON;
+		case ARCADE_SP_SMART:  return POW_SMARTBOMB_WEAPON;
+		case ARCADE_SP_PROXY:  return POW_PROXIMITY_WEAPON;
+		case ARCADE_SP_CLOAK:  return POW_CLOAK;
+		case ARCADE_SP_INVULN: return POW_INVULNERABILITY;
+		case ARCADE_SP_ENERGY: return POW_ENERGY;
+	}
+	return -1;
+}
+
+void arcade_set_default_netgame_options(void)
+{
+	int i;
+
+	Netgame.ArcadeTeams      = 0;
+	Netgame.ArcadeInterval   = 45;
+	Netgame.ArcadeMaxActive  = 14;
+	Netgame.ArcadeCountdown  = 3;
+	Netgame.ArcadeEnergyTime = 8;
+	Netgame.ArcadeHomingCount = 6;
+	Netgame.ArcadeSmartCount  = 3;
+	Netgame.ArcadeProxyCount  = 8;
+	Netgame.ArcadeMegaCount   = 1;
+
+	for (i = 0; i < NUM_ARCADE_SUPERPOWERS; i++)
+		Netgame.ArcadeEnabled[i] = 1;
+}
+
+int arcade_superpower_enabled(int spid)
+{
+	if (spid < 0 || spid >= NUM_ARCADE_SUPERPOWERS)
+		return 0;
+
+	return Netgame.ArcadeEnabled[spid] != 0;
+}
+
+// How much of the relevant secondary a super power hands out. Only meaningful
+// for the missile super powers.
+int arcade_superpower_amount(int spid)
+{
+	switch (spid) {
+		case ARCADE_SP_HOMING: return Netgame.ArcadeHomingCount;
+		case ARCADE_SP_MEGA:   return Netgame.ArcadeMegaCount;
+		case ARCADE_SP_SMART:  return Netgame.ArcadeSmartCount;
+		case ARCADE_SP_PROXY:  return Netgame.ArcadeProxyCount;
+	}
+	return 0;
+}
+
+// Stable label for the options menu, where the amount is a separate slider.
+const char *arcade_superpower_menu_name(int spid)
+{
+	switch (spid) {
+		case ARCADE_SP_HOMING: return "Homing missiles";
+		case ARCADE_SP_MEGA:   return "Mega missiles";
+		case ARCADE_SP_SMART:  return "Smart missiles";
+		case ARCADE_SP_PROXY:  return "Proximity bombs";
+		case ARCADE_SP_CLOAK:  return "Cloak";
+		case ARCADE_SP_INVULN: return "Invulnerability";
+		case ARCADE_SP_ENERGY: return "Infinite energy";
+	}
+	return "Super power";
+}
+
+// Names carry the configured amount, so the announcement and the pickup message
+// always describe what this game actually hands out.
+const char *arcade_superpower_name(int spid)
+{
+	static char name[40];
+	int amount = arcade_superpower_amount(spid);
+
+	switch (spid) {
+		case ARCADE_SP_HOMING:
+			snprintf(name, sizeof(name), "%d HOMING MISSILE%s", amount, amount == 1 ? "" : "S");
+			return name;
+		case ARCADE_SP_MEGA:
+			snprintf(name, sizeof(name), "%d MEGA MISSILE%s", amount, amount == 1 ? "" : "S");
+			return name;
+		case ARCADE_SP_SMART:
+			snprintf(name, sizeof(name), "%d SMART MISSILE%s", amount, amount == 1 ? "" : "S");
+			return name;
+		case ARCADE_SP_PROXY:
+			snprintf(name, sizeof(name), "%d PROXIMITY BOMB%s", amount, amount == 1 ? "" : "S");
+			return name;
+		case ARCADE_SP_CLOAK:  return "CLOAK";
+		case ARCADE_SP_INVULN: return "INVULNERABILITY";
+		case ARCADE_SP_ENERGY: return "INFINITE ENERGY";
+	}
+	return "SUPER POWER";
+}
+
+void arcade_mark_superpower(int objnum, int spid)
+{
+	if (objnum < 0 || objnum > Highest_object_index)
+		return;
+	if (Objects[objnum].type != OBJ_POWERUP)
+		return;
+	if (spid < 0 || spid >= NUM_ARCADE_SUPERPOWERS)
+		return;
+
+	Objects[objnum].ctype.powerup_info.count = ARCADE_MARK_BASE + spid;
+}
+
+int arcade_object_superpower(object *obj)
+{
+	int spid;
+
+	if (!(Game_mode & GM_ARCADE))
+		return -1;
+	if (obj->type != OBJ_POWERUP)
+		return -1;
+
+	spid = obj->ctype.powerup_info.count - ARCADE_MARK_BASE;
+	if (spid < 0 || spid >= NUM_ARCADE_SUPERPOWERS)
+		return -1;
+
+	// The tag and the object have to agree, so a stale count can never turn an
+	// unrelated powerup into a super power.
+	if (arcade_superpower_powerup_type(spid) != obj->id)
+		return -1;
+
+	return spid;
+}
+
+int arcade_pick_up_superpower(object *obj, int spid)
+{
+	int used = 1;
+
+	switch (spid) {
+		case ARCADE_SP_HOMING:
+			arcade_add_secondary(HOMING_INDEX, arcade_superpower_amount(spid));
+			break;
+		case ARCADE_SP_MEGA:
+			arcade_add_secondary(MEGA_INDEX, arcade_superpower_amount(spid));
+			break;
+		case ARCADE_SP_SMART:
+			arcade_add_secondary(SMART_INDEX, arcade_superpower_amount(spid));
+			break;
+		case ARCADE_SP_PROXY:
+			arcade_add_secondary(PROXIMITY_INDEX, arcade_superpower_amount(spid));
+			break;
+		case ARCADE_SP_CLOAK:
+			// Unlike the stock powerup this refreshes an active cloak rather
+			// than refusing the pickup, so a super power is never wasted.
+			Players[Player_num].cloak_time = GameTime64;
+			Players[Player_num].flags |= PLAYER_FLAGS_CLOAKED;
+			ai_do_cloak_stuff();
+#ifdef NETWORK
+			if (Game_mode & GM_MULTI)
+				multi_send_cloak();
+#endif
+			break;
+		case ARCADE_SP_INVULN:
+			Players[Player_num].invulnerable_time = GameTime64;
+			Players[Player_num].flags |= PLAYER_FLAGS_INVULNERABLE;
+#ifdef NETWORK
+			if (Game_mode & GM_MULTI)
+				multi_send_ship_status();
+#endif
+			break;
+		case ARCADE_SP_ENERGY:
+			Arcade_infinite_energy_end = GameTime64 + i2f(Netgame.ArcadeEnergyTime);
+			// Extending an already-active window keeps the higher floor rather
+			// than resetting down to whatever energy happens to be right now.
+			if (Players[Player_num].energy > Arcade_infinite_energy_floor)
+				Arcade_infinite_energy_floor = Players[Player_num].energy;
+			break;
+		default:
+			return 0;
+	}
+
+	powerup_basic(20, 20, 0, 0, "SUPER POWER: %s!", arcade_superpower_name(spid));
+
+	// SNG: Arcade - tell everyone else who just grabbed it. Mirrors the CTF
+	// "has scored!" broadcast: set Network_message and let multi_send_message()
+	// pick it up next frame, which prefixes it with the picker's callsign for
+	// every other client. The picker themselves already saw the message above.
+	if (Game_mode & GM_MULTI) {
+		snprintf(Network_message, sizeof(Network_message), "picked up %s!", arcade_superpower_name(spid));
+		Network_message_reciever = 100;
+	}
+
+	if (Powerup_info[obj->id].hit_sound > -1) {
+#ifdef NETWORK
+		if (Game_mode & GM_MULTI)
+			multi_send_play_sound(Powerup_info[obj->id].hit_sound, F1_0);
+#endif
+		digi_play_sample(Powerup_info[obj->id].hit_sound, F1_0);
+	}
+
+	return used;
+}
+
+void arcade_do_infinite_energy_frame(void)
+{
+	if (!(Game_mode & GM_ARCADE) || !Arcade_infinite_energy_end)
+		return;
+
+	if (GameTime64 >= Arcade_infinite_energy_end) {
+		Arcade_infinite_energy_end = 0;
+		Arcade_infinite_energy_floor = 0;
+		HUD_init_message(HM_DEFAULT, "Infinite energy expired!");
+		return;
+	}
+
+	// A real energy pickup during the window raises the floor to match; the
+	// super power itself never grants energy, only refuses to let it drop.
+	if (Players[Player_num].energy > Arcade_infinite_energy_floor)
+		Arcade_infinite_energy_floor = Players[Player_num].energy;
+	else if (Players[Player_num].energy < Arcade_infinite_energy_floor)
+		Players[Player_num].energy = Arcade_infinite_energy_floor;
+}
+
+void arcade_reset_player_state(void)
+{
+	Arcade_infinite_energy_end = 0;
+	Arcade_infinite_energy_floor = 0;
+}
+
+// Last whole second we played a countdown voice for, so each number is spoken
+// once. -1 means nothing is counting down.
+static int Arcade_last_countdown_sound = -1;
+
+void arcade_start_announcement(int spid, int seconds)
+{
+	if (spid < 0 || spid >= NUM_ARCADE_SUPERPOWERS)
+		return;
+
+	Arcade_announce_spid = spid;
+	Arcade_announce_drop_time = GameTime64 + i2f(seconds);
+	Arcade_last_countdown_sound = -1;
+}
+
+void arcade_clear_announcement(void)
+{
+	Arcade_announce_spid = -1;
+	Arcade_announce_drop_time = 0;
+	Arcade_last_countdown_sound = -1;
+}
+
+// Seconds remaining on the banner; 0 once the super power has dropped.
+int arcade_announce_seconds_left(void)
+{
+	fix64 remaining;
+
+	if (Arcade_announce_spid < 0)
+		return 0;
+
+	remaining = Arcade_announce_drop_time - GameTime64;
+
+	return (remaining > 0) ? f2i(remaining) + 1 : 0;
+}
+
+// Speaks the countdown using the same voice samples as the reactor countdown.
+// Runs on every machine, not just the spawner, so the whole game hears 3-2-1.
+void arcade_do_announcement_frame(void)
+{
+	int secs_left;
+
+	if (!(Game_mode & GM_ARCADE) || Arcade_announce_spid < 0) {
+		Arcade_last_countdown_sound = -1;
+		return;
+	}
+
+	secs_left = arcade_announce_seconds_left();
+
+	if (secs_left != Arcade_last_countdown_sound && secs_left <= 9) {
+		digi_play_sample(SOUND_COUNTDOWN_0_SECS + secs_left, F3_0);
+		Arcade_last_countdown_sound = secs_left;
+	}
+}
+
 //	returns true if powerup consumed
 int do_powerup(object *obj)
 {
@@ -265,6 +557,15 @@ int do_powerup(object *obj)
 		}
 		*/
 	//}
+
+	// SNG: Arcade mode - super powers are tagged powerups and bypass the normal
+	// pickup rules entirely (including the secondary ammo caps).
+	{
+		int arcade_sp = arcade_object_superpower(obj);
+
+		if (arcade_sp >= 0)
+			return arcade_pick_up_superpower(obj, arcade_sp);
+	}
 
 	switch (obj->id) {
 		case POW_EXTRA_LIFE:

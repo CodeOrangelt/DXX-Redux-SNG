@@ -513,6 +513,34 @@ void auto_select_weapon(int weapon_type)
 }
 
 int delayed_secondary_autoselect_weapon_index = -1;
+
+// SNG: Arcade mode super powers ignore Secondary_ammo_max - that is the whole
+// point of the "regardless of missile count cap" rule - so this deliberately
+// does not go through pick_up_secondary(). Only ARCADE_SECONDARY_HARD_MAX keeps
+// the ushort ammo counter in sane territory.
+void arcade_add_secondary(int weapon_index, int count)
+{
+	int had_none = (Players[Player_num].secondary_ammo[weapon_index] == 0);
+
+	Players[Player_num].secondary_weapon_flags |= (1 << weapon_index);
+	Players[Player_num].secondary_ammo[weapon_index] += count;
+
+	if (Players[Player_num].secondary_ammo[weapon_index] > ARCADE_SECONDARY_HARD_MAX)
+		Players[Player_num].secondary_ammo[weapon_index] = ARCADE_SECONDARY_HARD_MAX;
+
+	// Only autoselect if the player was dry, matching pick_up_secondary().
+	if (had_none && SOrderList(weapon_index) < SOrderList(255) &&
+	    (SOrderList(weapon_index) < SOrderList(Players[Player_num].secondary_weapon) ||
+	     Players[Player_num].secondary_ammo[Players[Player_num].secondary_weapon] == 0))
+	{
+		if (!(Controls.fire_secondary_state && PlayerCfg.NoFireAutoselect))
+			select_weapon(weapon_index, 1, 0, 1);
+	}
+
+	if (Game_mode & GM_MULTI)
+		multi_send_ship_status();
+}
+
 //	---------------------------------------------------------------------
 //called when one of these weapons is picked up
 //when you pick up a secondary, you always get the weapon & ammo for it

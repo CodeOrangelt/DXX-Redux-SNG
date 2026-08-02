@@ -64,7 +64,7 @@ extern int multi_protocol; // set and determinate used protocol
 #define MULTI_PROTO_UDP 1 // UDP protocol
 
 // What version of the multiplayer protocol is this? Increment each time something drastic changes in Multiplayer without the version number changes. Can be reset to 0 each time the version of the game changes
-#define MULTI_PROTO_VERSION 30080 // SNG 1.7
+#define MULTI_PROTO_VERSION 30082 // SNG 1.7 + Arcade mode
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -129,6 +129,8 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_FLAGS				 , 6)   \
 	VALUE(MULTI_SHIP_STATUS          , 29)  \
 	VALUE(MULTI_CREATE_EXPLOSION2    , 24)  \
+	VALUE(MULTI_ARCADE_POWERUP       , 19)  \
+	VALUE(MULTI_ARCADE_ANNOUNCE      , 3)   \
 	AFTER
 for_each_multiplayer_command(enum {, define_multiplayer_command, });
 
@@ -145,6 +147,7 @@ for_each_multiplayer_command(enum {, define_multiplayer_command, });
 #define NETGAME_BOUNTY		7
 #define NETGAME_CTF		8
 #define NETGAME_TURKEY_SHOOT	9
+#define NETGAME_ARCADE		10
 
 #define NETSTAT_MENU                0
 #define NETSTAT_PLAYING             1
@@ -205,7 +208,7 @@ enum { for_each_netflag_value(define_netflag_bit_enum) };
 enum { for_each_netflag_value(define_netflag_bit_mask) };
 enum { NETFLAG_DOPOWERUP = 0 for_each_netflag_value(define_netflag_powerup_mask) };
 
-#define MULTI_GAME_TYPE_COUNT	8
+#define MULTI_GAME_TYPE_COUNT	11
 #define MULTI_GAME_NAME_LENGTH	13
 #define MULTI_ALLOW_POWERUP_MAX 13
 extern int multi_allow_powerup_mask[MAX_POWERUP_TYPES];
@@ -337,6 +340,14 @@ extern fix64 Turkey_time_as_turkey[MAX_PLAYERS];
 extern int Turkey_hunter_kills[MAX_PLAYERS];
 extern fix64 Turkey_start_time;
 extern int Turkey_last_target;
+
+// Arcade mode functions
+void multi_arcade_init_level(void);
+void multi_arcade_do_frame(void);
+void multi_send_arcade_powerup(int spid, int segnum, int objnum, vms_vector *pos);
+void multi_do_arcade_powerup(const ubyte *buf);
+void multi_send_arcade_announce(int spid, int seconds);
+void multi_do_arcade_announce(const ubyte *buf);
 
 // Exported variables
 
@@ -556,6 +567,19 @@ typedef struct netgame_info
 	ubyte						HomersSpawn; 
 	ubyte						BombsSpawn; 
 	ubyte						MegasSpawn; 
+	// SNG: Arcade mode tunables. All of these are set on the host and pushed to
+	// every client in the game info packet, so the whole game agrees on what can
+	// spawn, how often, and how much it gives.
+	ubyte						ArcadeTeams;		// 0 = free-for-all, 1 = team anarchy
+	ubyte						ArcadeInterval;		// seconds between super power events
+	ubyte						ArcadeMaxActive;	// uncollected super powers allowed at once
+	ubyte						ArcadeCountdown;	// seconds of on-screen warning before a drop
+	ubyte						ArcadeEnergyTime;	// seconds of infinite energy
+	ubyte						ArcadeHomingCount;
+	ubyte						ArcadeSmartCount;
+	ubyte						ArcadeProxyCount;
+	ubyte						ArcadeMegaCount;
+	ubyte						ArcadeEnabled[NUM_ARCADE_SUPERPOWERS];
 	ubyte						StaticVulcan;
 	ubyte						StaticSpread;
 	ubyte						StaticLasers;
