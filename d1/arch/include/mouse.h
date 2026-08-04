@@ -46,5 +46,6 @@ extern void mouse_get_delta( int *dx, int *dy, int *dz );
 extern void event_mouse_get_delta(struct d_event *event, int *dx, int *dy, int *dz);
 extern int mouse_get_btns();
 extern void mouse_toggle_cursor(int activate);
+extern void mouse_touch_cursor_time(void);
 
 #endif
