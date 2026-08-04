@@ -891,9 +891,10 @@ int udp_tracker_register()
 
 	pBuf = malloc( iLen );
 
-	// Reset the last tracker message
-	for (i = 0; i < TrackerCount; i++)
-		iTrackerVerified[i] = 0;
+	// Deliberately NOT resetting iTrackerVerified[] here: this is also called
+	// for the periodic retry resend to unresponsive trackers, and clobbering
+	// a tracker that already confirmed us would make the "did any tracker
+	// verify us" check below think none of them ever did.
 
 	// Put the opcode
 	pBuf[0] = TRACKER_PKT_REGISTER;
@@ -6123,7 +6124,7 @@ int net_udp_start_game(void)
 		newmenu *wait_menu;
 
 		m[0].type = NM_TYPE_TEXT;
-		m[0].text = "Setting up automatic\nport forwarding (UPnP)...\n\nPlease wait...";
+		m[0].text = "Establish connection to relay server/tracker\n\nPlease wait...";
 
 		wait_menu = newmenu_do3(NULL, NULL, 1, m, NULL, NULL, 0, NULL);
 		timer_delay(F1_0 / 4);
@@ -6648,7 +6649,7 @@ void net_udp_do_frame(int force, int listen)
 				{
 					if (!iTrackerVerified[i] && !TrackerHudWarned[i])
 					{
-						HUD_init_message(HM_MULTI, "Tracker %s:%d did not respond -- game still listed on other tracker(s).", GameArg.MplTrackerAddr[i], GameArg.MplTrackerPort[i]);
+						HUD_init_message(HM_MULTI, "%c%cTracker %s:%d did not respond -- game still listed on other tracker(s).", CC_COLOR, BM_XRGB(31, 0, 0), GameArg.MplTrackerAddr[i], GameArg.MplTrackerPort[i]);
 						TrackerHudWarned[i] = 1;
 					}
 				}

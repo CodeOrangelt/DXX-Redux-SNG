@@ -899,9 +899,10 @@ int udp_tracker_register()
 
 	pBuf = malloc(iLen);
 
-	// Reset the last tracker message
-	for (i = 0; i < TrackerCount; i++)
-		iTrackerVerified[i] = 0;
+	// Deliberately NOT resetting iTrackerVerified[] here: this is also called
+	// for the periodic retry resend to unresponsive trackers, and clobbering
+	// a tracker that already confirmed us would make the "did any tracker
+	// verify us" check below think none of them ever did.
 
 	// Put the opcode
 	pBuf[0] = TRACKER_PKT_REGISTER;
@@ -1123,6 +1124,7 @@ void udp_tracker_send_obs_message(const char *formatted_text)
 static struct UPNPUrls upnp_urls;
 static struct IGDdatas upnp_data;
 static int upnp_mapped = 0; // 1 if we successfully added a port mapping we're responsible for removing
+static int upnp_attempted = 0; // 1 once we've tried discovery this session, success or not -- don't re-probe every time we host
 
 // Best-effort: ask the LAN router to forward 'port' (UDP) to us, so hosts
 // behind NAT don't have to manually port-forward. Silently does nothing if
@@ -1139,7 +1141,12 @@ void net_udp_upnp_map_port(int port)
 	if (upnp_mapped)
 		return; // already have a mapping from this session
 
-	devlist = upnpDiscover(1000 /* ms */, NULL, NULL, 0, 0, 2, &error);
+	if (upnp_attempted)
+		return; // already probed and failed this session -- router topology won't have changed, don't make the player wait again
+
+	upnp_attempted = 1;
+
+	devlist = upnpDiscover(500 /* ms */, NULL, NULL, 0, 0, 2, &error);
 
 #ifndef _WIN32
 	if (!devlist)
@@ -1169,7 +1176,7 @@ void net_udp_upnp_map_port(int port)
 					continue;
 
 				con_printf(CON_NORMAL, "UPnP: retrying discovery on interface %s (%s)\n", ifa->ifa_name, ifip);
-				devlist = upnpDiscover(1000, ifip, NULL, 0, 0, 2, &error);
+				devlist = upnpDiscover(500, ifip, NULL, 0, 0, 2, &error);
 			}
 			freeifaddrs(ifap);
 		}
@@ -6279,7 +6286,7 @@ int net_udp_start_game(void)
 		newmenu *wait_menu;
 
 		m[0].type = NM_TYPE_TEXT;
-		m[0].text = "Setting up automatic\nport forwarding (UPnP)...\n\nPlease wait...";
+		m[0].text = "Routing to server relay/network for hosting\n\nPlease wait...";
 
 		wait_menu = newmenu_do3(NULL, NULL, 1, m, NULL, NULL, 0, NULL);
 		timer_delay(F1_0 / 4);
@@ -6774,7 +6781,7 @@ void net_udp_do_frame(int force, int listen)
 				{
 					if (!iTrackerVerified[i] && !TrackerHudWarned[i])
 					{
-						HUD_init_message(HM_MULTI, "Tracker %s:%d did not respond -- game still listed on other tracker(s).", GameArg.MplTrackerAddr[i], GameArg.MplTrackerPort[i]);
+						HUD_init_message(HM_MULTI, "%c%cTracker %s:%d did not respond -- game still listed on other tracker(s).", CC_COLOR, BM_XRGB(31, 0, 0), GameArg.MplTrackerAddr[i], GameArg.MplTrackerPort[i]);
 						TrackerHudWarned[i] = 1;
 					}
 				}

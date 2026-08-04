@@ -196,6 +196,13 @@ int pick_up_vulcan_ammo(void)
 		VulcanAmmoBoxesOnBoard[Player_num] += 1;
 		VulcanBoxAmmo[Player_num] += VULCAN_AMMO_AMOUNT;
 		powerup_basic(7, 14, 21, VULCAN_AMMO_SCORE, "%s!", TXT_VULCAN_AMMO);
+		// SNG: restock the mine as soon as a box is taken, rather than waiting
+		// for whoever picked it up to fire it dry. Only meaningful under the
+		// Steady Respawning gauss style - the other styles don't tie vulcan
+		// ammo pickups to a host-managed restock at all.
+		if ((Game_mode & GM_MULTI) && !(Game_mode & GM_MULTI_COOP) &&
+		    Netgame.GaussAmmoStyle == GAUSS_STYLE_STEADY_RESPAWNING)
+			maybe_drop_net_powerup(POW_VULCAN_AMMO);
 		used = 1;
 	} else {
 		HUD_init_message(HM_DEFAULT|HM_REDUNDANT|HM_MAYDUPL, "%s %d %s!",TXT_ALREADY_HAVE,f2i(VULCAN_AMMO_SCALE * Primary_ammo_max[VULCAN_INDEX]),TXT_VULCAN_ROUNDS);
@@ -893,6 +900,12 @@ int do_powerup(object *obj)
 				#ifdef NETWORK
 				if (Game_mode & GM_MULTI)
 					multi_send_cloak();
+				// SNG: restock the mine as soon as this one is taken, rather than
+				// waiting for whoever picked it up to let it run out. Arcade mode
+				// reuses this same flag/timer for its own super power and has its
+				// own scheduled spawner, so it's excluded here.
+				if (!(Game_mode & GM_ARCADE))
+					maybe_drop_net_powerup(POW_CLOAK);
 				#endif
 				powerup_basic(-10,-10,-10, CLOAK_SCORE, "%s!",TXT_CLOAKING_DEVICE);
 				used = 1;
@@ -906,6 +919,11 @@ int do_powerup(object *obj)
 				Players[Player_num].invulnerable_time = GameTime64;
 				Players[Player_num].flags |= PLAYER_FLAGS_INVULNERABLE;
 				powerup_basic(7, 14, 21, INVULNERABILITY_SCORE, "%s!",TXT_INVULNERABILITY);
+				// SNG: see POW_CLOAK above - restock on pickup, not on expiry.
+				#ifdef NETWORK
+				if (!(Game_mode & GM_ARCADE))
+					maybe_drop_net_powerup(POW_INVULNERABILITY);
+				#endif
 				used = 1;
 				break;
 			}
