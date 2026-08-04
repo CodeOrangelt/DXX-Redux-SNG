@@ -99,6 +99,11 @@ endif()
 
 if(UDP)
     target_sources(d1x-redux PRIVATE net_udp.c)
+    if(OPENGL)
+        # Nuklear-based hosting/advanced-options UI (nk_ui.c) needs a GL
+        # context to draw into -- only available in OpenGL builds.
+        target_sources(d1x-redux PRIVATE nk_ui.c)
+    endif()
     if(GNS)
         target_sources(d1x-redux PRIVATE gns_bridge.cpp)
         target_link_libraries(d1x-redux PRIVATE GameNetworkingSockets::static)

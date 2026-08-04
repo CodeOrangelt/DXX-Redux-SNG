@@ -8,6 +8,7 @@
 
 // Exported functions
 int net_udp_setup_game(void);
+char *net_udp_get_my_port_buf(void); // for nk_ui.c: direct access to the (otherwise file-static) UDP_MyPort edit buffer
 void net_udp_manual_join_game();
 void net_udp_list_join_game();
 int net_udp_objnum_is_past(int objnum);

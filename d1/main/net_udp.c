@@ -53,6 +53,9 @@
 #include "byteswap.h"
 #include "config.h"
 #include "vers_id.h"
+#ifdef OGL
+#include "nk_ui.h"
+#endif
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -250,6 +253,13 @@ int num_active_udp_games = 0;
 int num_active_udp_changed = 0;
 static int UDP_Socket[3] = { -1, -1, -1 };
 static char UDP_MyPort[6] = "";
+
+// Accessor for the Nuklear-based advanced-options UI (nk_ui.c), which lives
+// in a separate translation unit and can't see this file's statics directly.
+char *net_udp_get_my_port_buf(void)
+{
+	return UDP_MyPort;
+}
 struct _sockaddr GBcast; // global Broadcast address clients and hosts will use for lite_info exchange over LAN
 #ifdef IPv6
 struct _sockaddr GMcast_v6; // same for IPv6-only
@@ -5591,6 +5601,12 @@ int net_udp_setup_game()
 
 	sprintf( slevel, "1" ); Netgame.levelnum = 1;
 
+#ifdef OGL
+	// Nuklear-based hosting setup UI -- see nk_ui.c. Not available in the
+	// plain SDL software-surface build, which has no GL context for it to
+	// draw into; that build keeps the legacy newmenu-based flow below.
+	choice = nk_ui_hosting_setup() ? 1 : -1;
+#else
 	choice = 0;
 	for (;;) {
 		optnum = 0;
@@ -5674,6 +5690,7 @@ int net_udp_setup_game()
 			break;
 		choice = opt.load_preset;
 	}
+#endif
 
 	if (choice < 0)
 		net_udp_close();
