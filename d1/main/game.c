@@ -588,13 +588,9 @@ void do_cloak_stuff(void)
 						multi_send_play_sound(SOUND_CLOAK_OFF, F1_0);
 						multi_send_ship_status();
 					}
-					// SNG: Arcade - the cloak super power reuses this same flag and
-					// timer, so every super-power cloak expiring would otherwise
-					// also trigger this stock "restock the mine" mechanic, on top
-					// of arcade's own scheduled spawns. Arcade's spawner is the
-					// sole source of extra drops instead.
-					if (!(Game_mode & GM_ARCADE))
-						maybe_drop_net_powerup(POW_CLOAK);
+					// SNG: the replacement cloak powerup now spawns at pickup time
+					// (do_powerup() in powerup.c), not here on expiry, so it no
+					// longer waits on whoever's holding it to let it run out.
 					if ( Newdemo_state != ND_STATE_PLAYBACK )
 						multi_send_decloak(); // For demo recording
 #endif
@@ -619,10 +615,8 @@ void do_invulnerable_stuff(void)
 				if (Game_mode & GM_MULTI)
 				{
 					multi_send_play_sound(SOUND_INVULNERABILITY_OFF, F1_0);
-					// SNG: Arcade - see do_cloak_stuff() above; the invulnerability
-					// super power reuses this same flag and timer.
-					if (!(Game_mode & GM_ARCADE))
-						maybe_drop_net_powerup(POW_INVULNERABILITY);
+					// SNG: see do_cloak_stuff() above - replacement now spawns on
+					// pickup instead of here on expiry.
 					multi_send_ship_status();
 				}
 				#endif

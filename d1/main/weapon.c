@@ -565,23 +565,37 @@ int pick_up_secondary(int weapon_index,int count)
 	if (Players[Player_num].secondary_ammo[weapon_index] > max) {
 		num_picked_up = count - (Players[Player_num].secondary_ammo[weapon_index] - max);
 		Players[Player_num].secondary_ammo[weapon_index] = max;
-
-		// Respawn extras
-		if(weapon_index == HOMING_INDEX) {
-			for(int i = 0; i < count - num_picked_up; i++) {
-				maybe_drop_net_powerup(POW_HOMING_AMMO_1); 
-			}
-		}
-
-		if(weapon_index == CONCUSSION_INDEX && (Game_mode & GM_MULTI) && Netgame.RespawnConcs) {
-			for(int i = 0; i < count - num_picked_up; i++) {
-				maybe_drop_net_powerup(POW_MISSILE_1); 
-			}
-		}
 	}
 
 	if(weapon_index == CONCUSSION_INDEX && (Game_mode & GM_MULTI) && Netgame.RespawnConcs) {
-		RespawningConcussions[Player_num] += num_picked_up; 
+		RespawningConcussions[Player_num] += num_picked_up;
+	}
+
+	// SNG: restock the mine as soon as ammo is taken, rather than waiting for
+	// whoever picked it up to fire it all off - previously this only
+	// re-armed on pickup overflow (and for concussions, per shot fired via
+	// RespawningConcussions), so a player who just sat on a stack stalled
+	// the supply for everyone else. One replacement per pickup event, not
+	// per unit picked up.
+	if (!(Game_mode & GM_ARCADE)) {
+		switch (weapon_index) {
+			case HOMING_INDEX:
+				maybe_drop_net_powerup(POW_HOMING_AMMO_1);
+				break;
+			case PROXIMITY_INDEX:
+				maybe_drop_net_powerup(POW_PROXIMITY_WEAPON);
+				break;
+			case SMART_INDEX:
+				maybe_drop_net_powerup(POW_SMARTBOMB_WEAPON);
+				break;
+			case MEGA_INDEX:
+				maybe_drop_net_powerup(POW_MEGA_WEAPON);
+				break;
+			case CONCUSSION_INDEX:
+				if ((Game_mode & GM_MULTI) && Netgame.RespawnConcs)
+					maybe_drop_net_powerup(POW_MISSILE_1);
+				break;
+		}
 	}
 
 	if (Players[Player_num].secondary_ammo[weapon_index] == count)	// only autoselect if player didn't have any

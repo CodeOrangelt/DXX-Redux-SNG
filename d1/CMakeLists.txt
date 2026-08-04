@@ -79,6 +79,23 @@ if(UDP)
         # traversal without pulling in Google's WebRTC as a dependency.
         set(ENABLE_ICE ON CACHE BOOL "" FORCE)
         set(USE_STEAMWEBRTC OFF CACHE BOOL "" FORCE)
+        # When cross-compiling, GNS still needs a *host* protoc to run codegen.
+        # FindProtobuf.cmake normally auto-creates an IMPORTED protobuf::protoc
+        # target pointing at Protobuf_PROTOC_EXECUTABLE the first time
+        # protobuf_generate() runs, but that target isn't marked GLOBAL, so
+        # when it's first instantiated from GNS's own (nested) CMakeLists.txt
+        # it doesn't resolve when referenced from sibling scopes - Ninja ends
+        # up with a literal "protobuf::protoc" command it can't run. Pre-create
+        # it as GLOBAL here so find_package(Protobuf)'s "if(NOT TARGET ...)"
+        # guard picks up ours instead.
+        if(CMAKE_CROSSCOMPILING AND NOT TARGET protobuf::protoc)
+            find_program(Protobuf_PROTOC_EXECUTABLE NAMES protoc)
+            if(Protobuf_PROTOC_EXECUTABLE)
+                add_executable(protobuf::protoc IMPORTED GLOBAL)
+                set_target_properties(protobuf::protoc PROPERTIES
+                    IMPORTED_LOCATION "${Protobuf_PROTOC_EXECUTABLE}")
+            endif()
+        endif()
         include(FetchContent)
         FetchContent_Declare(
             GameNetworkingSockets

@@ -1266,7 +1266,9 @@ void do_laser_firing_player(void)
 						if(VulcanBoxAmmo[Player_num] <=
 							(VulcanAmmoBoxesOnBoard[Player_num] - 1) * VULCAN_AMMO_AMOUNT) {
 
-							maybe_drop_net_powerup(POW_VULCAN_AMMO);
+							// SNG: replacement box now spawns on pickup
+							// (pick_up_vulcan_ammo() in powerup.c), not here on
+							// depletion.
 							VulcanAmmoBoxesOnBoard[Player_num] -= 1;
 						}
 					}
@@ -1554,11 +1556,12 @@ void do_missile_firing(int drop_bomb)
 				Missile_gun++;
 
 				#ifdef NETWORK
+					// SNG: replacement now spawns on pickup (pick_up_secondary()
+					// in weapon.c), not here per shot fired.
 					if(Game_mode & GM_MULTI && Netgame.RespawnConcs && RespawningConcussions[Player_num] > 0 ) {
-						maybe_drop_net_powerup(POW_MISSILE_1);
-						RespawningConcussions[Player_num]--; 
+						RespawningConcussions[Player_num]--;
 					}
-				#endif				
+				#endif
 
 				break;
 
@@ -1567,17 +1570,6 @@ void do_missile_firing(int drop_bomb)
 				if (Proximity_dropped == 4)
 				{
 					Proximity_dropped = 0;
-#ifdef NETWORK
-					// SNG: Arcade - this stock "restock the mine on fire" mechanic
-					// has no cap of its own (see maybe_drop_net_powerup()), and
-					// arcade super powers hand out far more ammo than the normal
-					// pickup caps it was designed around. Left enabled, firing
-					// through a super-power-granted stack floods the mine with
-					// extra powerups on top of arcade's own scheduled spawns.
-					// Arcade's spawner is the sole source of extra drops instead.
-					if (!(Game_mode & GM_ARCADE))
-						maybe_drop_net_powerup(POW_PROXIMITY_WEAPON);
-#endif
 				}
 				Laser_player_fire( ConsoleObject, PROXIMITY_ID, PROXIMITY_GUN, 1, 0, orient);
 				break;
@@ -1585,30 +1577,18 @@ void do_missile_firing(int drop_bomb)
 			case HOMING_INDEX:
 				Laser_player_fire( ConsoleObject, HOMING_ID, HOMING_GUN+(Missile_gun & 1), 1, 0, orient );
 				Missile_gun++;
-				#ifdef NETWORK
-				// SNG: Arcade - see PROXIMITY_INDEX above.
-				if (!(Game_mode & GM_ARCADE))
-					maybe_drop_net_powerup(POW_HOMING_AMMO_1);
-				#endif
+				// SNG: replacement now spawns on pickup, not here on fire.
 				break;
 
 #ifndef SHAREWARE
 			case SMART_INDEX:
 				Laser_player_fire( ConsoleObject, SMART_ID, SMART_GUN, 1, 0, orient);
-#ifdef NETWORK
-				// SNG: Arcade - see PROXIMITY_INDEX above.
-				if (!(Game_mode & GM_ARCADE))
-					maybe_drop_net_powerup(POW_SMARTBOMB_WEAPON);
-#endif
+				// SNG: replacement now spawns on pickup, not here on fire.
 				break;
 
 			case MEGA_INDEX:
 				Laser_player_fire( ConsoleObject, MEGA_ID, MEGA_GUN, 1, 0, orient);
-#ifdef NETWORK
-				// SNG: Arcade - see PROXIMITY_INDEX above.
-				if (!(Game_mode & GM_ARCADE))
-					maybe_drop_net_powerup(POW_MEGA_WEAPON);
-#endif
+				// SNG: replacement now spawns on pickup, not here on fire.
 
 				{ vms_vector force_vec;
 			force_vec.x = -(ConsoleObject->orient.fvec.x << 7);
