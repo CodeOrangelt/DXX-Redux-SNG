@@ -53,6 +53,11 @@ void multi_do_create_robot_powerups(const ubyte *buf);
 int multi_explode_robot_sub(int botnum, int killer, char unused);
 
 void multi_drop_robot_powerups(int objnum);
+// Broadcasts the powerups a just-killed robot dropped, using del_obj's
+// contains_* fields plus the Net_create_objnums[] the preceding
+// object_create_egg() filled in. Exposed for survival.c, which rolls its own
+// drop table and emits one of these per drop.
+void multi_send_create_robot_powerups(struct object *del_obj);
 void multi_dump_robots(void);
 
 void multi_strip_robots(int playernum);

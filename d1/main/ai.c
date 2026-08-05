@@ -506,6 +506,18 @@ int player_is_visible_from_object(object *objp, vms_vector *pos, fix field_of_vi
 	fix			dot;
 	fvi_query	fq;
 
+#ifdef NETWORK
+	// Survival: robots hunt the player through walls -- skip the raycast
+	// and field-of-view gate entirely and report "visible, dead ahead"
+
+	// an attack. Everything downstream of this (pursuit path, awareness
+	// timers) is untouched, so once "seen" they behave exactly like any
+	// other alerted robot -- they just never lose track of the player
+	// behind a wall.
+	if ((Game_mode & GM_MULTI) && Netgame.gamemode == NETGAME_SURVIVAL)
+		return 2;
+#endif
+
 	fq.p0						= pos;
 	if ((pos->x != objp->pos.x) || (pos->y != objp->pos.y) || (pos->z != objp->pos.z)) {
 		int	segnum = find_point_seg(pos, objp->segnum);
@@ -2185,7 +2197,14 @@ void do_ai_frame(object *obj)
 
 	//	- -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -
 	//	Occasionally make non-still robots make a path to the player.  Based on agitation and distance from player.
-	if ((aip->behavior != AIB_RUN_FROM) && (aip->behavior != AIB_STILL) && !(Game_mode & GM_MULTI))
+	// Survival: real pathing is normally off in all multiplayer modes (see
+	// the retry-count block below too) -- fine for stock modes, which don't
+	// force "sees through walls" and so rarely get robots wedged against
+	// geometry chasing a straight-line target they can't reach. Surviving
+	// robots do exactly that (see player_is_visible_from_object()), so they
+	// need this stuck-recovery pathing turned back on or they lock up
+	// pushing on a wall forever instead of routing around it.
+	if ((aip->behavior != AIB_RUN_FROM) && (aip->behavior != AIB_STILL) && (!(Game_mode & GM_MULTI) || Netgame.gamemode == NETGAME_SURVIVAL))
 		if (Overall_agitation > 70) {
                         if ((dist_to_player < F1_0*200) && (d_rand() < FrameTime/4)) {
                                 if (d_rand() * (Overall_agitation - 40) > F1_0*5) {
@@ -2201,7 +2220,7 @@ void do_ai_frame(object *obj)
 	//	If it is 0, cut down consecutive_retries.
 	//	This is largely a hack to speed up physics and deal with stupid AI.  This is low level
 	//	communication between systems of a sort that should not be done.
-	if ((ailp->retry_count) && !(Game_mode & GM_MULTI)) {
+	if ((ailp->retry_count) && (!(Game_mode & GM_MULTI) || Netgame.gamemode == NETGAME_SURVIVAL)) {
 		ailp->consecutive_retries += ailp->retry_count;
 		ailp->retry_count = 0;
 		if (ailp->consecutive_retries > 3) {
@@ -2214,7 +2233,7 @@ void do_ai_frame(object *obj)
 						attempt_to_resume_path(obj);
 					break;
 				case AIM_FOLLOW_PATH:
-					if (Game_mode & GM_MULTI)
+					if (Game_mode & GM_MULTI && Netgame.gamemode != NETGAME_SURVIVAL)
 						ailp->mode = AIM_STILL;
 					else
 						attempt_to_resume_path(obj);

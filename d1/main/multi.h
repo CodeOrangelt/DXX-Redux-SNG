@@ -131,6 +131,9 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_CREATE_EXPLOSION2    , 24)  \
 	VALUE(MULTI_ARCADE_POWERUP       , 19)  \
 	VALUE(MULTI_ARCADE_ANNOUNCE      , 3)   \
+	VALUE(MULTI_SURVIVAL_WAVE_STATE  , 5)   \
+	VALUE(MULTI_SURVIVAL_SPAWN_ROBOT , 24)  \
+	VALUE(MULTI_SURVIVAL_ELIMINATED  , 2)   \
 	AFTER
 for_each_multiplayer_command(enum {, define_multiplayer_command, });
 
@@ -148,6 +151,7 @@ for_each_multiplayer_command(enum {, define_multiplayer_command, });
 #define NETGAME_CTF		8
 #define NETGAME_TURKEY_SHOOT	9
 #define NETGAME_ARCADE		10
+#define NETGAME_SURVIVAL	11
 
 #define NETSTAT_MENU                0
 #define NETSTAT_PLAYING             1
@@ -208,7 +212,7 @@ enum { for_each_netflag_value(define_netflag_bit_enum) };
 enum { for_each_netflag_value(define_netflag_bit_mask) };
 enum { NETFLAG_DOPOWERUP = 0 for_each_netflag_value(define_netflag_powerup_mask) };
 
-#define MULTI_GAME_TYPE_COUNT	11
+#define MULTI_GAME_TYPE_COUNT	12
 #define MULTI_GAME_NAME_LENGTH	13
 #define MULTI_ALLOW_POWERUP_MAX 13
 extern int multi_allow_powerup_mask[MAX_POWERUP_TYPES];

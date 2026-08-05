@@ -57,6 +57,7 @@ add_executable (d1x-redux
     snddecom.c
     songs.c
     state.c
+    survival.c
     switch.c
     terrain.c
     texmerge.c

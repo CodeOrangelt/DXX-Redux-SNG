@@ -33,6 +33,7 @@
 #include "net_udp.h"
 #include "game.h"
 #include "multi.h"
+#include "survival.h"
 #include "endlevel.h"
 #include "palette.h"
 #include "cntrlcen.h"
@@ -234,6 +235,23 @@ static int relay_addr_participant(const struct sockaddr *addr, int *participant)
 
 	*participant = port - RELAY_SYNTH_PORT_BASE;
 	return 1;
+}
+
+// True if our current route to pnum runs through the relay -- i.e. the
+// address we hold for them is one of the synthetic sentinels above rather
+// than a real endpoint. Such a route works from anywhere, but every packet
+// takes an extra hop out to the relay server and back, so these are exactly
+// the connections worth handing to ICE for a direct upgrade. The relay is
+// meant to be a rendezvous point that lets peers find each other through
+// NAT, not the permanent carrier for gameplay traffic.
+int net_udp_player_is_relayed(int pnum)
+{
+	int participant;
+
+	if (pnum < 0 || pnum >= MAX_PLAYERS)
+		return 0;
+
+	return relay_addr_participant((const struct sockaddr *)&Netgame.players[pnum].protocol.udp.addr, &participant);
 }
 
 // Variables
@@ -516,9 +534,9 @@ ssize_t dxx_recvfrom(int sockfd, void *buf, int len, unsigned int flags, struct 
 			msg_type = relaybuf[0];
 			rlen = 5;
 
-			if (msg_type == RELAY_MSG_HELLO_HOST_ACK) { RelayHostRegistered = 1; return 0; }
-			if (msg_type == RELAY_MSG_HELLO_CLIENT_ACK) { RelayClientJoined = 1; return 0; }
-			if (msg_type == RELAY_MSG_HELLO_CLIENT_NACK) { RelayClientJoined = -1; return 0; }
+			if (msg_type == RELAY_MSG_HELLO_HOST_ACK) { RelayHostRegistered = 1; con_printf(CON_NORMAL, "Relay: <- HELLO_HOST_ACK (registered as host)\n"); return 0; }
+			if (msg_type == RELAY_MSG_HELLO_CLIENT_ACK) { RelayClientJoined = 1; con_printf(CON_NORMAL, "Relay: <- HELLO_CLIENT_ACK (joined as participant)\n"); return 0; }
+			if (msg_type == RELAY_MSG_HELLO_CLIENT_NACK) { RelayClientJoined = -1; con_printf(CON_NORMAL, "Relay: <- HELLO_CLIENT_NACK (no host registered for this token!)\n"); return 0; }
 
 			if (msg_type == RELAY_MSG_DATA_TAGGED)
 			{
@@ -1244,7 +1262,15 @@ void net_udp_relay_init(void)
 	RelayClientJoined = 0;
 
 	if (!GameArg.MplRelayAddr || !GameArg.MplRelayAddr[0] || GameArg.MplRelayPort == 0 || GameArg.MplRelayToken == 0)
+	{
+		// Spell out exactly which piece is missing -- a half-configured relay
+		// silently behaves as "no relay at all", which looks identical to a
+		// relay that's configured but broken.
+		con_printf(CON_NORMAL, "Relay: DISABLED (addr='%s' port=%d token=%d -- all three are required)\n",
+			(GameArg.MplRelayAddr && GameArg.MplRelayAddr[0]) ? GameArg.MplRelayAddr : "(unset)",
+			GameArg.MplRelayPort, GameArg.MplRelayToken);
 		return;
+	}
 
 	// The synthetic sentinel addresses relay_addr_participant() recognizes
 	// reuse the relay server's own IP with a port in
@@ -1285,6 +1311,10 @@ static void net_udp_relay_send_control(ubyte msg_type)
 	// Sent directly to RelayServerAddr's real port -- not a synthetic
 	// sentinel -- so this bypasses dxx_sendto()'s relay-wrap logic and goes
 	// out as a raw control message, exactly as it should.
+	con_printf(CON_NORMAL, "Relay: -> %s (token %d)\n",
+		msg_type == RELAY_MSG_HELLO_HOST ? "HELLO_HOST" :
+		msg_type == RELAY_MSG_HELLO_CLIENT ? "HELLO_CLIENT" : "control",
+		GameArg.MplRelayToken);
 	dxx_sendto(UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&RelayServerAddr, sizeof(struct _sockaddr));
 }
 
@@ -1945,6 +1975,28 @@ int net_udp_list_join_poll( newmenu *menu, d_event *event, direct_join *dj )
 				dj->start_time = timer_query();
 				dj->last_time = 0;
 				memcpy((struct _sockaddr *)&dj->host_addr, (struct _sockaddr *)&Active_udp_games[(citem+(NLPage*UDP_NETGAMES_PPAGE))-4].game_addr, sizeof(struct _sockaddr));
+
+				// The address we just took from the games list is whatever the
+				// tracker/LAN broadcast advertised -- i.e. the host's *public*
+				// IP:port. Connecting straight to that is exactly what the relay
+				// exists to avoid: if the host is behind NAT with no forwarded
+				// port, nothing ever reaches them and the join dies with "No
+				// response by host" even though the game is plainly visible in
+				// the list (the tracker listing works regardless of reachability).
+				// The manual-join path already redirects to the relay sentinel in
+				// this situation; this path was never given the same treatment,
+				// so joining from the browser silently bypassed the relay
+				// entirely. Mirror manual_join_game_handler() here.
+				if (RelayActive && GameArg.MplRelayToken != 0)
+					net_udp_relay_set_sentinel_host_addr(&dj->host_addr);
+
+				{
+					struct sockaddr_in *dbg = (struct sockaddr_in *)&dj->host_addr;
+					con_printf(CON_NORMAL, "Join: connecting to %s:%d (relay %s)\n",
+						inet_ntoa(dbg->sin_addr), SWAPSHORT(dbg->sin_port),
+						(RelayActive && GameArg.MplRelayToken != 0) ? "VIA SENTINEL" : "off/direct");
+				}
+
 				memcpy((struct _sockaddr *)&Netgame.players[0].protocol.udp.addr, (struct _sockaddr *)&dj->host_addr, sizeof(struct _sockaddr));
 				dj->connecting = 1;
 				return 1;
@@ -4440,6 +4492,15 @@ int net_udp_start_poll( newmenu *menu, d_event *event, void *userdata )
    //end this section kill - VR
 	
 	n = Netgame.numplayers;
+	// Keep our relay registration alive while sitting in the lobby. This poll
+	// loop -- not net_udp_do_frame() -- is what runs during "waiting for
+	// players", which is precisely when clients attempt to join. Without this
+	// the host only ever announces itself to the *tracker* here (a few lines
+	// down in net_udp_select_players()), so the game shows up in the browser
+	// while the relay still has no host registered for our token, and every
+	// relayed join gets HELLO_CLIENT_NACK. Cheap to call every frame: it
+	// self-throttles to 1s until registered, 15s after.
+	net_udp_relay_host_frame(timer_query());
 	net_udp_listen();
 
 	if (n < Netgame.numplayers )
@@ -5168,7 +5229,7 @@ int net_udp_more_options_handler( newmenu *menu, d_event *event, void *userdata 
 typedef struct param_opt
 {
 	int start_game, load_preset, save_preset, name, level, mode, mode_end, moreopts;
-	int closed, refuse, maxnet, maxobs, obsdelay, obsmin, anarchy, team_anarchy, robot_anarchy, coop, bounty, ctf, turkey_shoot, arcade;
+	int closed, refuse, maxnet, maxobs, obsdelay, obsmin, anarchy, team_anarchy, robot_anarchy, coop, bounty, ctf, turkey_shoot, arcade, survival;
 } param_opt;
 
 int net_udp_start_game(void);
@@ -5314,6 +5375,10 @@ int net_udp_game_param_handler( newmenu *menu, d_event *event, param_opt *opt )
 					// options; it stays reachable from Advanced options after that.
 					if (!was_arcade)
 						net_udp_arcade_menu();
+				}
+				else if ( menus[opt->survival].value ) {
+					Netgame.gamemode = NETGAME_SURVIVAL;
+					Netgame.CTF = 0;
 				}
 				else Int3(); // Invalid mode -- see Rob
 			}
@@ -5554,7 +5619,7 @@ int net_udp_setup_game()
 	int i;
 	int optnum;
 	param_opt opt;
-	newmenu_item m[25];	// grown for the Arcade game mode radio button
+	newmenu_item m[26];	// grown for the Arcade and Survival game mode radio buttons
 	char slevel[5];
 	char level_text[32];
 	char srmaxnet[50];
@@ -5630,7 +5695,8 @@ int net_udp_setup_game()
 		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Bounty"; m[optnum].value=(Netgame.gamemode == NETGAME_BOUNTY); m[optnum].group=0; opt.bounty=optnum; optnum++;
 		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Capture the Flag"; m[optnum].value=(Netgame.CTF); m[optnum].group=0; opt.ctf=optnum; optnum++;
 		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Turkey Shoot"; m[optnum].value=(Netgame.gamemode == NETGAME_TURKEY_SHOOT); m[optnum].group=0; opt.turkey_shoot=optnum; optnum++;
-		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Arcade"; m[optnum].value=(Netgame.gamemode == NETGAME_ARCADE); m[optnum].group=0; opt.mode_end=opt.arcade=optnum; optnum++;
+		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Arcade"; m[optnum].value=(Netgame.gamemode == NETGAME_ARCADE); m[optnum].group=0; opt.arcade=optnum; optnum++;
+		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Survival"; m[optnum].value=(Netgame.gamemode == NETGAME_SURVIVAL); m[optnum].group=0; opt.mode_end=opt.survival=optnum; optnum++;
 
 		m[optnum].type = NM_TYPE_TEXT; m[optnum].text = ""; optnum++;
 
@@ -5741,6 +5807,13 @@ net_udp_set_game_mode(int gamemode, ubyte join_as_obs)
 			Game_mode |= GM_TEAM;
 			Show_kill_list = 3;
 		}
+	}
+	else if( gamemode == NETGAME_SURVIVAL )
+	{
+		// Everyone is on one side against the robot waves -- same
+		// single-team/no-friendly-fire semantics as Coop.
+		Game_mode = GM_NETWORK | GM_MULTI_COOP | GM_MULTI_ROBOTS;
+		survival_start();
 	}
 	else
 		Int3();
@@ -6393,6 +6466,7 @@ int net_udp_request_poll( newmenu *menu, d_event *event, void *userdata )
 	menu = menu;
 	userdata = userdata;
 	
+	net_udp_relay_host_frame(timer_query()); // see net_udp_start_poll() -- same reason
 	net_udp_listen();
 	net_udp_timeout_check(timer_query());
 
@@ -8310,12 +8384,22 @@ void net_udp_gns_route_found(int player_id, const void *addr, int addr_len)
 		return;
 
 	memcpy(&sa, addr, sizeof(sa));
+
+	{
+		// Worth calling out loudly: if this player was relayed, gameplay
+		// traffic stops paying the relay round-trip from here on.
+		int was_relayed = net_udp_player_is_relayed(player_id);
+		struct sockaddr_in *dbg = (struct sockaddr_in *)&sa;
+
+		con_printf(CON_NORMAL, "GNS: ICE route to player %d -> %s:%d%s\n",
+			player_id, inet_ntoa(dbg->sin_addr), SWAPSHORT(dbg->sin_port),
+			was_relayed ? "  (UPGRADED off relay -- now peer-to-peer)" : "");
+	}
+
 	update_address_for_player(player_id, sa);
 
 	connection_statuses[player_id].type = CONNT_DIRECT;
 	connection_statuses[player_id].last_direct_pong = timer_query();
-
-	con_printf(CON_DEBUG, "GNS: ICE found a route to player %d\n", player_id);
 }
 
 #endif /* USE_GNS */
@@ -8432,10 +8516,27 @@ void net_udp_p2p_ping_frame(fix64 time)
 			}
 		}
 #ifdef USE_GNS
-		else if (i != multi_who_is_master() && connection_statuses[i].type == CONNT_PROXY) {
+		else if ((i != multi_who_is_master() && connection_statuses[i].type == CONNT_PROXY)
+			 || (net_udp_player_is_relayed(i) && !multi_i_am_master())) {
 			// Our own simultaneous-send holepunch gave up -- let ICE take a
 			// shot at it. Common for symmetric NAT / CGNAT pairs the naive
 			// approach can't solve, but STUN-based candidate gathering can.
+			//
+			// The second clause covers the host link. Joining through the
+			// relay leaves us addressing the host by sentinel, which is
+			// marked CONNT_DIRECT (it *is* direct -- to the relay), so it
+			// never matched the proxy test above and the host connection
+			// could never be upgraded: every packet kept paying the extra
+			// hop out to the relay server for the whole match. The relay is
+			// only supposed to be the rendezvous that gets peers through
+			// NAT; once ICE finds a real path, net_udp_gns_route_found()
+			// swaps the sentinel out for it and traffic goes peer-to-peer.
+			//
+			// Only clients initiate, never the host. ICE glare (both ends
+			// calling ConnectP2PCustomSignaling at once) would have each
+			// side's OnConnectRequest reject the other's inbound attempt,
+			// since gns_bridge.cpp refuses a second connection for a player
+			// it already has one for. Clients dial, the host answers.
 			gns_bridge_connect_to_player(i);
 		}
 #endif

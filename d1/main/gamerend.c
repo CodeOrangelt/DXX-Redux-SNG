@@ -41,6 +41,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "newdemo.h"
 #include "text.h"
 #include "multi.h"
+#include "survival.h"
 #include "endlevel.h"
 #include "cntrlcen.h"
 #include "fuelcen.h"
@@ -511,6 +512,9 @@ void game_draw_hud_stuff()
 	// drawn last so it sits on top of everything else.
 	arcade_draw_superpower_labels();
 	arcade_draw_announcement();
+
+	// Survival - HP bar under any currently-alive boss robot.
+	show_survival_boss_bars();
 
 	if ( Player_is_dead )
 		player_dead_message();
