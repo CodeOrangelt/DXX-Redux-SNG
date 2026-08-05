@@ -231,6 +231,23 @@ static int relay_addr_participant(const struct sockaddr *addr, int *participant)
 	return 1;
 }
 
+// True if our current route to pnum runs through the relay -- i.e. the
+// address we hold for them is one of the synthetic sentinels above rather
+// than a real endpoint. Such a route works from anywhere, but every packet
+// takes an extra hop out to the relay server and back, so these are exactly
+// the connections worth handing to ICE for a direct upgrade. The relay is
+// meant to be a rendezvous point that lets peers find each other through
+// NAT, not the permanent carrier for gameplay traffic.
+int net_udp_player_is_relayed(int pnum)
+{
+	int participant;
+
+	if (pnum < 0 || pnum >= MAX_PLAYERS)
+		return 0;
+
+	return relay_addr_participant((const struct sockaddr *)&Netgame.players[pnum].protocol.udp.addr, &participant);
+}
+
 // Variables
 int UDP_num_sendto = 0, UDP_len_sendto = 0, UDP_num_recvfrom = 0, UDP_len_recvfrom = 0;
 UDP_mdata_info		UDP_MData;
@@ -1926,6 +1943,25 @@ int net_udp_list_join_poll( newmenu *menu, d_event *event, direct_join *dj )
 				dj->start_time = timer_query();
 				dj->last_time = 0;
 				memcpy((struct _sockaddr *)&dj->host_addr, (struct _sockaddr *)&Active_udp_games[(citem+(NLPage*UDP_NETGAMES_PPAGE))-4].game_addr, sizeof(struct _sockaddr));
+
+				// The address from the games list is whatever the tracker/LAN
+				// broadcast advertised -- the host's *public* IP:port. Connecting
+				// straight to it is what the relay exists to avoid: a host behind
+				// NAT with no forwarded port never receives it, and the join dies
+				// with "No response by host" even though the game is plainly
+				// listed. The manual-join path already redirects to the relay
+				// sentinel here; this path never did, so browser joins silently
+				// bypassed the relay entirely. Mirror manual_join_game_handler().
+				if (RelayActive && GameArg.MplRelayToken != 0)
+					net_udp_relay_set_sentinel_host_addr(&dj->host_addr);
+
+				{
+					struct sockaddr_in *dbg = (struct sockaddr_in *)&dj->host_addr;
+					con_printf(CON_NORMAL, "Join: connecting to %s:%d (relay %s)\n",
+						inet_ntoa(dbg->sin_addr), SWAPSHORT(dbg->sin_port),
+						(RelayActive && GameArg.MplRelayToken != 0) ? "VIA SENTINEL" : "off/direct");
+				}
+
 				memcpy((struct _sockaddr *)&Netgame.players[0].protocol.udp.addr, (struct _sockaddr *)&dj->host_addr, sizeof(struct _sockaddr));
 				dj->connecting = 1;
 				return 1;
@@ -4465,6 +4501,14 @@ int net_udp_start_poll( newmenu *menu, d_event *event, void *userdata )
 //       if (nitems > MAX_PLAYERS ) return; 
 	
 	n = Netgame.numplayers;
+	// Keep our relay registration alive while sitting in the lobby. This poll
+	// loop -- not net_udp_do_frame() -- is what runs during "waiting for
+	// players", which is precisely when clients attempt to join. Without this
+	// the host only ever announces itself to the *tracker* here, so the game
+	// shows up in the browser while the relay still has no host registered for
+	// our token, and every relayed join gets HELLO_CLIENT_NACK. Cheap to call
+	// every frame: it self-throttles to 1s until registered, 15s after.
+	net_udp_relay_host_frame(timer_query());
 	net_udp_listen();
 
 	if (n < Netgame.numplayers )
@@ -6231,6 +6275,7 @@ int net_udp_request_poll( newmenu *menu, d_event *event, void *userdata )
 	menu = menu;
 	userdata = userdata;
 	
+	net_udp_relay_host_frame(timer_query()); // see net_udp_start_poll() -- same reason
 	net_udp_listen();
 	net_udp_timeout_check(timer_query());
 
@@ -8208,12 +8253,22 @@ void net_udp_gns_route_found(int player_id, const void *addr, int addr_len)
 		return;
 
 	memcpy(&sa, addr, sizeof(sa));
+
+	{
+		// Worth calling out loudly: if this player was relayed, gameplay
+		// traffic stops paying the relay round-trip from here on.
+		int was_relayed = net_udp_player_is_relayed(player_id);
+		struct sockaddr_in *dbg = (struct sockaddr_in *)&sa;
+
+		con_printf(CON_NORMAL, "GNS: ICE route to player %d -> %s:%d%s\n",
+			player_id, inet_ntoa(dbg->sin_addr), SWAPSHORT(dbg->sin_port),
+			was_relayed ? "  (UPGRADED off relay -- now peer-to-peer)" : "");
+	}
+
 	update_address_for_player(player_id, sa);
 
 	connection_statuses[player_id].type = CONNT_DIRECT;
 	connection_statuses[player_id].last_direct_pong = timer_query();
-
-	con_printf(CON_DEBUG, "GNS: ICE found a route to player %d\n", player_id);
 }
 
 #endif /* USE_GNS */
@@ -8330,10 +8385,27 @@ void net_udp_p2p_ping_frame(fix64 time)
 			}
 		}
 #ifdef USE_GNS
-		else if (i != multi_who_is_master() && connection_statuses[i].type == CONNT_PROXY) {
+		else if ((i != multi_who_is_master() && connection_statuses[i].type == CONNT_PROXY)
+			 || (net_udp_player_is_relayed(i) && !multi_i_am_master())) {
 			// Our own simultaneous-send holepunch gave up -- let ICE take a
 			// shot at it. Common for symmetric NAT / CGNAT pairs the naive
 			// approach can't solve, but STUN-based candidate gathering can.
+			//
+			// The second clause covers the host link. Joining through the
+			// relay leaves us addressing the host by sentinel, which is
+			// marked CONNT_DIRECT (it *is* direct -- to the relay), so it
+			// never matched the proxy test above and the host connection
+			// could never be upgraded: every packet kept paying the extra
+			// hop out to the relay server for the whole match. The relay is
+			// only supposed to be the rendezvous that gets peers through
+			// NAT; once ICE finds a real path, net_udp_gns_route_found()
+			// swaps the sentinel out for it and traffic goes peer-to-peer.
+			//
+			// Only clients initiate, never the host. ICE glare (both ends
+			// calling ConnectP2PCustomSignaling at once) would have each
+			// side's OnConnectRequest reject the other's inbound attempt,
+			// since gns_bridge.cpp refuses a second connection for a player
+			// it already has one for. Clients dial, the host answers.
 			gns_bridge_connect_to_player(i);
 		}
 #endif

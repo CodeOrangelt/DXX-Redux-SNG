@@ -38,6 +38,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "vclip.h"
 #include "fireball.h"
 #include "polyobj.h"
+#include "collide.h"
 #include "robot.h"
 #include "weapon.h"
 #include "newdemo.h"

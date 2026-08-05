@@ -46,6 +46,19 @@ void udp_tracker_send_obs_message(const char *formatted_text);
 #define TRACKER2_ADDR_DEFAULT "tracker.dxxtracker.com"
 #define TRACKER2_PORT_DEFAULT 9999
 #endif
+// Relay server (tools/relay_server.py), which runs on the same host as the
+// dxxtracker above. On by default so players behind NAT that can't
+// port-forward or get a working UPnP mapping still connect -- previously the
+// relay only engaged if all three -relay_* args were passed by hand, so in
+// practice it was never on and every join fell back to a direct connection.
+#define RELAY_ADDR_DEFAULT "tracker.dxxtracker.com"
+#define RELAY_PORT_DEFAULT 42500
+// Session key on the relay: host registers under it, joiners ask for it.
+// A fixed default means one relayed game at a time across everyone using
+// this default -- a second host silently takes over the first's session.
+// Fine for a small group; pass -relay_token <n> (same value on both ends)
+// to run more than one relayed game concurrently.
+#define RELAY_TOKEN_DEFAULT 42424
 #define UDP_REQ_ID "D1XR" // ID string for a request packet
 #define UDP_MAX_NETGAMES 900
 #define UDP_NETGAMES_PPAGE 12 // Netgames on one page of Netlist

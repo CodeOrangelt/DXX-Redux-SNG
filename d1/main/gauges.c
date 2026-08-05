@@ -40,6 +40,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "powerup.h"
 #include "sounds.h"
 #include "multi.h"
+#include "survival.h"
 #include "endlevel.h"
 #include "wall.h"
 #include "text.h"
@@ -4187,6 +4188,79 @@ void show_HUD_names()
 	}
 }
 
+// Survival: draws a health bar under each currently-alive boss robot, same
+// screen-space-projected-rect technique the observer shield bar above uses
+// for players (see show_HUD_names()) -- just anchored on a robot object
+// instead of a player one.
+#define SURVIVAL_BOSS_BAR_WIDTH 120
+void show_survival_boss_bars(void)
+{
+	short boss_objnums[8];
+	fix boss_fracs[8];
+	int num_bosses, i;
+
+	if (!(Game_mode & GM_MULTI) || Netgame.gamemode != NETGAME_SURVIVAL)
+		return;
+
+	num_bosses = survival_get_active_bosses(boss_objnums, boss_fracs, 8);
+
+	for (i = 0; i < num_bosses; i++)
+	{
+		int objnum = boss_objnums[i];
+		g3s_point boss_point;
+		fix frac;
+		char s[8];
+		int w, h, aw;
+
+		g3_rotate_point(&boss_point, &Objects[objnum].pos);
+
+		if (boss_point.p3_codes != 0) // off screen
+			continue;
+
+		g3_project_point(&boss_point);
+
+		if (boss_point.p3_flags & PF_OVERFLOW)
+			continue;
+
+		fix x = boss_point.p3_sx;
+		fix y = boss_point.p3_sy;
+		fix dy = -fixmuldiv(fixmul(Objects[objnum].size, Matrix_scale.y), i2f(grd_curcanv->cv_bitmap.bm_h) / 2, boss_point.p3_z);
+
+		frac = boss_fracs[i];
+		if (frac < 0) frac = 0;
+		if (frac > F1_0) frac = F1_0;
+
+		gr_set_curfont(GAME_FONT);
+		gr_set_fontcolor(BM_XRGB(31, 8, 8), -1);
+		snprintf(s, sizeof(s), "BOSS");
+		gr_get_string_size(s, &w, &h, &aw);
+		int x1 = f2i(x) - w / 2;
+		int y1 = f2i(y - dy) + FSPACY(1);
+		gr_string(x1, y1, s);
+
+		int x2 = f2i(x) - SURVIVAL_BOSS_BAR_WIDTH / 2;
+		int y2 = f2i(y - dy) + FSPACY(6);
+		int fill_px = f2i(fixmul(i2f(SURVIVAL_BOSS_BAR_WIDTH), frac));
+
+#ifdef OGL
+		glLineWidth(1);
+#endif
+		// Filled portion (remaining shields)
+		gr_setcolor(BM_XRGB(28, 4, 4));
+		gr_urect(x2, y2, x2 + fill_px, y2 + 6);
+
+		// Empty portion
+		if (frac < F1_0)
+		{
+			gr_setcolor(BM_XRGB(6, 6, 6));
+			gr_urect(x2 + fill_px, y2, x2 + SURVIVAL_BOSS_BAR_WIDTH, y2 + 6);
+		}
+#ifdef OGL
+		glLineWidth(linedotscale);
+#endif
+	}
+}
+
 // Show bomb highlights in observer mode
 void observer_show_bomb_highlights()
 {
@@ -4455,6 +4529,9 @@ void draw_hud()
 			gr_printf(0x8000, grd_curcanv->cv_bitmap.bm_h - LINE_SPACING * 3, "Hunt the turkey: %s", Players[Turkey_target].callsign);
 		}
 	}
+
+	// Survival HUD - wave counter (top-left)
+	survival_draw_hud();
 
 	// Arcade HUD - countdown for the temporary infinite energy super power
 	if ((Game_mode & GM_ARCADE) && Arcade_infinite_energy_end > GameTime64)

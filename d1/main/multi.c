@@ -23,6 +23,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #include "game.h"
 #include "multi.h"
+#include "survival.h"
 #include "object.h"
 #include "laser.h"
 #include "fuelcen.h"
@@ -144,7 +145,8 @@ const char GMNames[MULTI_GAME_TYPE_COUNT][MULTI_GAME_NAME_LENGTH]={
 	"Bounty",
 	"Capture Flag",
 	"Turkey Shoot",
-	"Arcade"
+	"Arcade",
+	"Survival"
 };
 const char GMNamesShrt[MULTI_GAME_TYPE_COUNT][8]={
 	"ANRCHY",
@@ -157,7 +159,8 @@ const char GMNamesShrt[MULTI_GAME_TYPE_COUNT][8]={
 	"BOUNTY",
 	"CTF",
 	"TURKEY",
-	"ARCADE"
+	"ARCADE",
+	"SURVIVE"
 };
 
 int Current_obs_player = OBSERVER_PLAYER_ID; // Current player being observed. Defaults to the observer player ID.
@@ -1514,6 +1517,9 @@ void multi_do_frame(void)
 
 	// Arcade Mode handling - spawns super powers around the mine (spawner only)
 	multi_arcade_do_frame();
+
+	// Survival Mode handling - spawns robot waves and ammo drops (spawner only)
+	survival_do_frame();
 
 	multi_send_message(); // Send any waiting messages
 
@@ -4933,6 +4939,11 @@ multi_prep_level(void)
 	if (Game_mode & GM_ARCADE)
 		multi_arcade_init_level();
 
+	// Survival: the mine starts stripped of every author-placed powerup --
+	// robot drops are the only supply line. Must happen before the object
+	// checksum below, and before anyone can pick anything up.
+	survival_strip_level_powerups();
+
 	multi_consistency_error(1);
 
 	for (i=0;i<MAX_PLAYERS;i++)
@@ -6199,6 +6210,12 @@ multi_process_data(const ubyte *buf, int len)
 			if (!Endlevel_sequence) multi_do_arcade_powerup(buf); break;
 		case MULTI_ARCADE_ANNOUNCE:
 			if (!Endlevel_sequence) multi_do_arcade_announce(buf); break;
+		case MULTI_SURVIVAL_WAVE_STATE:
+			if (!Endlevel_sequence) multi_do_survival_wave_state(buf); break;
+		case MULTI_SURVIVAL_SPAWN_ROBOT:
+			if (!Endlevel_sequence) multi_do_survival_spawn_robot(buf); break;
+		case MULTI_SURVIVAL_ELIMINATED:
+			if (!Endlevel_sequence) multi_do_survival_eliminated(buf); break;
 		case MULTI_PLAY_SOUND:
 			if (!Endlevel_sequence) multi_do_play_sound(buf); break;
 		case MULTI_ROBOT_CLAIM:

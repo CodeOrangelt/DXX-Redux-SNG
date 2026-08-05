@@ -38,6 +38,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "powerup.h"
 #include "scores.h"
 #include "gauges.h"
+#include "survival.h"
 #include "fuelcen.h"
 #include "morph.h"
 #include "digi.h"
@@ -1286,9 +1287,19 @@ multi_drop_robot_powerups(int objnum)
 	robptr = &Robot_info[del_obj->id];
 
 	if(Game_mode & GM_MULTI_ROBOTS && !(Game_mode & GM_MULTI_COOP))
-		return; 
+		return;
 
 	Net_create_loc = 0;
+
+	// Survival mode: two independent drop rolls (weapon, and shield/ammo),
+	// replacing the robot type's own contains_prob table entirely -- see
+	// survival_robot_drops(). It does its own object_create_egg() and
+	// network sends per drop, so we're done here either way.
+	if (Netgame.gamemode == NETGAME_SURVIVAL)
+	{
+		survival_robot_drops(del_obj);
+		return;
+	}
 
 	if (del_obj->contains_count > 0) { 
 		//	If dropping a weapon that the player has, drop energy instead, unless it's vulcan, in which case drop vulcan ammo.
