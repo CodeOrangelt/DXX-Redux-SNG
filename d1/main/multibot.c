@@ -76,6 +76,19 @@ ubyte robot_fire_buf[MAX_ROBOTS_CONTROLLED][18+3];
 
 #define MULTI_ROBOT_PRIORITY(objnum, pnum) ((objnum + pnum) % (N_players - (Netgame.host_is_obs ? 1 : 0)))
 
+// See the comment on STOCK_ROBOTS_CONTROLLED in multibot.h. Everything else
+// in this file still sizes its loops off MAX_ROBOTS_CONTROLLED (the table
+// capacity) -- those loops only scan for/clean up already-claimed slots, and
+// unused slots hold -1 -- so this limit is applied at the one place that
+// matters: handing out a new slot.
+int multi_max_robots_controlled(void)
+{
+	if (Netgame.gamemode == NETGAME_SURVIVAL)
+		return MAX_ROBOTS_CONTROLLED;
+
+	return STOCK_ROBOTS_CONTROLLED;
+}
+
 int
 multi_can_move_robot(int objnum, int agitation)
 {
@@ -210,6 +223,7 @@ multi_add_controlled_robot(int objnum, int agitation)
 	int lowest_agitation = 0x7fffffff; // MAX POSITIVE INT
 	int lowest_agitated_bot = -1;
 	int first_free_robot = -1;
+	int max_controlled = multi_max_robots_controlled();
 
 	// Try to add a new robot to the controlled list, return 1 if added, 0 if not.
 
@@ -219,7 +233,7 @@ multi_add_controlled_robot(int objnum, int agitation)
 		return 0;
 	}
 
-	for (i = 0; i < MAX_ROBOTS_CONTROLLED; i++)
+	for (i = 0; i < max_controlled; i++)
 	{
 		if ((robot_controlled[i] == -1) || (Objects[robot_controlled[i]].type != OBJ_ROBOT)) {
 			first_free_robot = i;
@@ -849,7 +863,10 @@ multi_do_robot_explode(const ubyte *buf)
 	Players[0].num_kills_level++;
 	Players[0].num_kills_total++;
 	if (killer == Players[Player_num].objnum)
+	{
 		add_points_to_score(Robot_info[Objects[botnum].id].score_value);
+		survival_note_robot_kill(&Objects[botnum], Robot_info[Objects[botnum].id].score_value);
+	}
 
 	if(multi_i_am_master() && (Game_mode & GM_MULTI_ROBOTS)) {
 	    kill_respawnable_robot(Objects + botnum); 

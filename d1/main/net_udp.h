@@ -46,19 +46,6 @@ void udp_tracker_send_obs_message(const char *formatted_text);
 #define TRACKER2_ADDR_DEFAULT "tracker.dxxtracker.com"
 #define TRACKER2_PORT_DEFAULT 9999
 #endif
-// Relay server (tools/relay_server.py), which runs on the same host as the
-// dxxtracker above. On by default so players behind NAT that can't
-// port-forward or get a working UPnP mapping still connect -- previously the
-// relay only engaged if all three -relay_* args were passed by hand, so in
-// practice it was never on and every join fell back to a direct connection.
-#define RELAY_ADDR_DEFAULT "tracker.dxxtracker.com"
-#define RELAY_PORT_DEFAULT 42500
-// Session key on the relay: host registers under it, joiners ask for it.
-// A fixed default means one relayed game at a time across everyone using
-// this default -- a second host silently takes over the first's session.
-// Fine for a small group; pass -relay_token <n> (same value on both ends)
-// to run more than one relayed game concurrently.
-#define RELAY_TOKEN_DEFAULT 42424
 #define UDP_REQ_ID "D1XR" // ID string for a request packet
 #define UDP_MAX_NETGAMES 900
 #define UDP_NETGAMES_PPAGE 12 // Netgames on one page of Netlist
@@ -103,6 +90,9 @@ void udp_tracker_send_obs_message(const char *formatted_text);
 #ifdef USE_TRACKER
 #  define UPID_TRACKER_VERIFY			 21 // The tracker has successfully gotten a hold of us
 #  define UPID_TRACKER_INCGAME			 22 // The tracker is sending us some game info
+#  define UPID_TRACKER_HOLEPUNCH		 23 // NAT punch brokerage: tracker->peer with the other side's public address, or peer->peer as a throwaway probe. See "NAT hole punching" in net_udp.c.
+#  define UPID_TRACKER_HOLEPUNCH_SIZE		 12
+#  define UPID_TRACKER_SIGNAL			 32 // Tracker-relayed ICE signaling blob for the pre-join path. Client->tracker->host and host->tracker->client before a direct UDP route exists.
 #endif
 
 #define UPID_P2P_PING	25

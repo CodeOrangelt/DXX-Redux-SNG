@@ -81,12 +81,6 @@ typedef struct Arg
 	// Self-hosted relay server, for players who can't port-forward or use a
 	// VPN: transparently tunnels the UDP session through a server both
 	// sides can reach outbound. See tools/relay_server.py.
-	// MplRelayToken is a shared "room code" agreed out-of-band (chat, etc.)
-	// between host and joiner -- unrelated to the game's own per-session
-	// netgame_token, which the joiner can't know until after connecting.
-	const char *MplRelayAddr; // empty/NULL = relay disabled
-	int MplRelayPort;
-	int MplRelayToken; // 0 = relay not used this session
 	char *EdiAutoLoad;
 	int EdiSaveHoardData;
 	int EdiMacData; // also used for some read routines in non-editor build

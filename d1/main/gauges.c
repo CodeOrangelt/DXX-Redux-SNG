@@ -1326,6 +1326,22 @@ void hud_show_shield(void)
 		newdemo_record_player_shields(f2ir(Players[pnum].shields));
 }
 
+// Survival: banked extra lives, sitting directly above the shield readout in
+// the same bottom-left text stack (shield is at *6, energy at *5, cruise
+// speed at *10, so *7 is free). Drawn alongside the other survival-relevant
+// numbers rather than off in a corner of its own.
+void hud_show_survival_extra_lives(void)
+{
+	if (Netgame.gamemode != NETGAME_SURVIVAL)
+		return;
+	if (PlayerCfg.HudMode >= 2)
+		return; // player has the text HUD turned off
+
+	gr_set_curfont( GAME_FONT );
+	gr_set_fontcolor(BM_XRGB(31,31,0),-1 );
+	gr_printf(FSPACX(1), (grd_curcanv->cv_bitmap.bm_h-(LINE_SPACING*7)), "EL: %d", survival_extra_lives());
+}
+
 //draw the icons for number of lives
 void hud_show_lives()
 {
@@ -2485,8 +2501,13 @@ void hud_show_kill_list()
 				gr_printf(x1,y,"%3d",team_kills[i]);
 
 
-		} else if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) )
-			gr_printf(x1,y,"%-6d",Players[player_num].score);
+		} else if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) ) {
+			// In Survival, replace the score column with EL for local player.
+			if (Netgame.gamemode == NETGAME_SURVIVAL && player_num == Player_num && Show_kill_list != 3)
+				gr_printf(x1, y, "EL: %d", survival_extra_lives());
+			else
+				gr_printf(x1,y,"%-6d",Players[player_num].score);
+		}
 
 		else {
 
@@ -2501,7 +2522,6 @@ void hud_show_kill_list()
 				gr_printf(x1,y,"%3d",Players[player_num].net_kills_total);
 
 		}
-
 
 		if((Show_network_stats && !is_observer()) && player_num != Player_num && Players[player_num].connected && Show_kill_list != 3) {
 			int lag = -1;
@@ -3975,6 +3995,13 @@ int see_object(int objnum)
 	return (hit_type == HIT_OBJECT && hit_data.hit_object == objnum);
 }
 
+// Survival's mini hull/energy bars under a player's name -- a glance-level
+// cue, not the observer's full 198px segmented readout. Hull on top, energy
+// directly beneath it.
+#define SURVIVAL_MINIBAR_WIDTH  56
+#define SURVIVAL_MINIBAR_HEIGHT 4
+#define SURVIVAL_MINIBAR_GAP    1
+
 void show_HUD_names()
 {
 	int is_friend = 0, show_friend_name = 0, show_enemy_name = 0, show_name = 0, show_name_through_walls = 0,
@@ -4073,6 +4100,61 @@ void show_HUD_names()
 						x1 = f2i(x)-w/2;
 						y1 = f2i(y-dy)+FSPACY(1);
 						gr_string (x1, y1, s);
+
+						// Survival: a mini hull bar tucked under the name, so
+						// you can see at a glance which teammate is in
+						// trouble. Only meaningful here because Survival
+						// broadcasts everyone's shields (see
+						// multi_do_survival_shields()); no other mode tells
+						// ordinary clients that, which is why this is scoped
+						// to Survival rather than added to every co-op game.
+						// Observers keep their own richer bar below.
+						if (Netgame.gamemode == NETGAME_SURVIVAL && !is_observer())
+						{
+							int bx = f2i(x) - SURVIVAL_MINIBAR_WIDTH / 2;
+							int by = y1 + h + 1;
+							int hull = f2i(Players[pnum].shields); // 100 == full bar
+							int nrg = f2i(Players[pnum].energy);
+							int fill;
+
+							if (hull < 0) hull = 0;
+							if (hull > 100) hull = 100;
+							if (nrg < 0) nrg = 0;
+							if (nrg > 100) nrg = 100;
+
+							// Hull: green when healthy, amber when hurt, red
+							// when nearly out -- readable without a number.
+							fill = (SURVIVAL_MINIBAR_WIDTH * hull) / 100;
+							if (hull > 60)
+								gr_setcolor(BM_XRGB(0, 28, 0));
+							else if (hull > 25)
+								gr_setcolor(BM_XRGB(28, 24, 0));
+							else
+								gr_setcolor(BM_XRGB(31, 4, 4));
+
+							if (fill > 0)
+								gr_urect(bx, by, bx + fill, by + SURVIVAL_MINIBAR_HEIGHT);
+							if (fill < SURVIVAL_MINIBAR_WIDTH)
+							{
+								gr_setcolor(BM_XRGB(6, 6, 6));
+								gr_urect(bx + fill, by, bx + SURVIVAL_MINIBAR_WIDTH, by + SURVIVAL_MINIBAR_HEIGHT);
+							}
+
+							// Energy, directly underneath. Always the same
+							// blue so the two bars can't be confused at a
+							// glance -- only the hull bar changes color.
+							by += SURVIVAL_MINIBAR_HEIGHT + SURVIVAL_MINIBAR_GAP;
+							fill = (SURVIVAL_MINIBAR_WIDTH * nrg) / 100;
+
+							gr_setcolor(BM_XRGB(0, 16, 31));
+							if (fill > 0)
+								gr_urect(bx, by, bx + fill, by + SURVIVAL_MINIBAR_HEIGHT);
+							if (fill < SURVIVAL_MINIBAR_WIDTH)
+							{
+								gr_setcolor(BM_XRGB(6, 6, 6));
+								gr_urect(bx + fill, by, bx + SURVIVAL_MINIBAR_WIDTH, by + SURVIVAL_MINIBAR_HEIGHT);
+							}
+						}
 					}
 					if (is_observer() && PlayerCfg.ObsShowShieldBar[get_observer_game_mode()] &&
 						(!is_observing_player() || Obs_at_distance || Current_obs_player != pnum)) {
@@ -4490,6 +4572,7 @@ void draw_hud()
 			if (PlayerCfg.CurrentCockpitMode==CM_FULL_SCREEN) {
 				hud_show_energy();
 				hud_show_shield();
+				hud_show_survival_extra_lives();
 				hud_show_weapons();
 				if (!PCSharePig)
 					hud_show_keys();

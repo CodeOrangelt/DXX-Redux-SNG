@@ -1266,14 +1266,24 @@ void DoPlayerDead()
 			init_player_stats_new_ship(Player_num);
 			StartLevel(1);
 #ifdef NETWORK
-			if ((Game_mode & GM_MULTI) && Netgame.gamemode == NETGAME_SURVIVAL)
+			// Note the survival_is_eliminated() test: survival_player_died()
+			// can decline to put the player down at all by spending a banked
+			// extra life, in which case this really is a plain respawn and
+			// the spectator flagging below must not happen.
+			if ((Game_mode & GM_MULTI) && Netgame.gamemode == NETGAME_SURVIVAL && survival_is_eliminated(Player_num))
+			{
 				// Down but the match continues: this fresh ship is a
-				// spectator shell, not a combatant -- untouchable and
-				// blocked from firing (see survival_is_eliminated() call
-				// sites in game.c), and ghosted on every other machine so
-				// nobody can see it. Cleared again by survival_revive_all()
-				// when the team clears the wave.
-				Players[Player_num].flags |= PLAYER_FLAGS_INVULNERABLE;
+				// spectator shell, not a combatant -- untouchable, cloaked
+				// so the robot AI ignores it too, and blocked from firing
+				// (see survival_is_eliminated() call sites in game.c). It's
+				// also ghosted on every other machine so nobody can see it.
+				// The cloak is held open frame by frame in
+				// survival_hold_spectator_cloak(); all of it is cleared
+				// again by survival_revive_all() when the team clears the
+				// wave, via init_player_stats_new_ship().
+				Players[Player_num].flags |= PLAYER_FLAGS_INVULNERABLE | PLAYER_FLAGS_CLOAKED;
+				Players[Player_num].cloak_time = GameTime64;
+			}
 #endif
 		}
 	}

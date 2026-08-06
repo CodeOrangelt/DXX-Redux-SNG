@@ -6216,6 +6216,8 @@ multi_process_data(const ubyte *buf, int len)
 			if (!Endlevel_sequence) multi_do_survival_spawn_robot(buf); break;
 		case MULTI_SURVIVAL_ELIMINATED:
 			if (!Endlevel_sequence) multi_do_survival_eliminated(buf); break;
+		case MULTI_SURVIVAL_SHIELDS:
+			if (!Endlevel_sequence) multi_do_survival_shields(buf); break;
 		case MULTI_PLAY_SOUND:
 			if (!Endlevel_sequence) multi_do_play_sound(buf); break;
 		case MULTI_ROBOT_CLAIM:

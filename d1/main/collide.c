@@ -60,6 +60,7 @@ extern int Turkey_target;
 #include "effects.h"
 #include "textures.h"
 #include "multi.h"
+#include "survival.h"
 #include "cntrlcen.h"
 #include "newdemo.h"
 #include "endlevel.h"
@@ -161,7 +162,10 @@ void apply_force_damage(object *obj,fix force,object *other_obj)
 			}
 
 			if (result && (other_obj->ctype.laser_info.parent_signature == ConsoleObject->signature))
+			{
 				add_points_to_score(Robot_info[obj->id].score_value);
+				survival_note_robot_kill(obj, Robot_info[obj->id].score_value);
+			}
 			break;
 
 		case OBJ_PLAYER:
@@ -1000,6 +1004,7 @@ void collide_robot_and_weapon( object * robot, object * weapon, vms_vector *coll
 				bump_two_objects(robot, weapon, 0);		//only bump if not dead. no damage from bump
 			else if (weapon->ctype.laser_info.parent_signature == ConsoleObject->signature) {
 				add_points_to_score(Robot_info[robot->id].score_value);
+				survival_note_robot_kill(robot, Robot_info[robot->id].score_value);
 			}
 		}
 
