@@ -506,18 +506,6 @@ int player_is_visible_from_object(object *objp, vms_vector *pos, fix field_of_vi
 	fix			dot;
 	fvi_query	fq;
 
-#ifdef NETWORK
-	// Survival: robots hunt the player through walls -- skip the raycast
-	// and field-of-view gate entirely and report "visible, dead ahead"
-
-	// an attack. Everything downstream of this (pursuit path, awareness
-	// timers) is untouched, so once "seen" they behave exactly like any
-	// other alerted robot -- they just never lose track of the player
-	// behind a wall.
-	if ((Game_mode & GM_MULTI) && Netgame.gamemode == NETGAME_SURVIVAL)
-		return 2;
-#endif
-
 	fq.p0						= pos;
 	if ((pos->x != objp->pos.x) || (pos->y != objp->pos.y) || (pos->z != objp->pos.z)) {
 		int	segnum = find_point_seg(pos, objp->segnum);
@@ -549,6 +537,24 @@ int player_is_visible_from_object(object *objp, vms_vector *pos, fix field_of_vi
 			return 1;
 		}
 	} else {
+#ifdef NETWORK
+		// Survival: the horde never loses track of you through geometry, so
+		// a blocked line of sight still reports 1 ("visible, but the robot
+		// isn't lined up on you") rather than 0 ("can't see you"). Every
+		// behaviour gated on `if (player_visibility)` -- pursuit, pathing,
+		// turning to face you -- therefore keeps running through walls,
+		// which is the point of the mode.
+		//
+		// What it deliberately never reports through an obstruction is 2.
+		// That is the value ai_do_actual_firing_stuff() requires before it
+		// will create a laser, so robots can no longer shoot you through
+		// closed doors and walls; they have to come and find you first.
+		// (An earlier version returned 2 unconditionally and skipped the
+		// raycast altogether, which is exactly what let them fire through
+		// doors.)
+		if ((Game_mode & GM_MULTI) && Netgame.gamemode == NETGAME_SURVIVAL)
+			return 1;
+#endif
 		return 0;
 	}
 }

@@ -516,6 +516,11 @@ void game_draw_hud_stuff()
 	// Survival - HP bar under any currently-alive boss robot.
 	show_survival_boss_bars();
 
+	// Survival - floating "+points" over each kill, and the arrow that
+	// points at the nearest robot. Same post-3D pass as the boss bars,
+	// since both project world positions into screen space.
+	survival_draw_kill_feedback();
+
 	if ( Player_is_dead )
 		player_dead_message();
 }

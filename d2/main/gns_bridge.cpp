@@ -142,6 +142,14 @@ extern "C" void gns_bridge_set_callbacks(gns_bridge_send_signal_fn send_signal, 
 
 static bool g_initialized = false;
 
+// Public STUN servers, needed for ICE to gather server-reflexive candidates
+// (i.e. to learn what our own public IP:port looks like from outside the NAT).
+// GameNetworkingSockets ships no default for these in the open-source build.
+const char *const k_stun_servers =
+	"stun.l.google.com:19302,"
+	"stun1.l.google.com:19302,"
+	"stun2.l.google.com:19302";
+
 extern "C" int gns_bridge_init(void)
 {
 	if (g_initialized)
@@ -156,6 +164,17 @@ extern "C" int gns_bridge_init(void)
 		fprintf(stderr, "GNS bridge: init failed: %s\n", errMsg);
 		return 0;
 	}
+
+	// Without these, ICE gathers host candidates only and cannot traverse
+	// NAT: the open-source build defaults P2P_STUN_ServerList to "", and GNS
+	// then logs "Reflexive candidates enabled ... but P2P_STUN_ServerList is
+	// empty" and gathers nothing usable. ICE_Enable already defaults to "All"
+	// here, but it is set explicitly so a future GNS bump can't silently turn
+	// P2P off underneath us.
+	SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, k_stun_servers);
+	SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable,
+		k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_All);
+	SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Penalty, 0);
 
 	SteamNetworkingUtils()->SetGlobalCallback_SteamNetConnectionStatusChanged(OnConnectionStatusChanged);
 	g_initialized = true;

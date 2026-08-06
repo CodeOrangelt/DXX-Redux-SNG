@@ -118,7 +118,15 @@ void net_udp_do_refuse_stuff (UDP_sequence_packet *their);
 void net_udp_read_sync_packet( ubyte * data, int data_len, struct _sockaddr sender_addr );
 void net_udp_read_object_packet( ubyte *data );
 void net_udp_ping_frame(fix64 time);
-void net_udp_p2p_ping_frame(fix64 time); 
+void net_udp_p2p_ping_frame(fix64 time);
+#ifdef USE_TRACKER
+void net_udp_punch_set_target(fix gameid);
+void net_udp_punch_host_frame(fix64 time);
+void net_udp_punch_client_frame(void);
+int  net_udp_punch_take_host_addr(struct _sockaddr *out);
+void net_udp_process_holepunch(ubyte *data, int data_len, struct _sockaddr sender_addr);
+static int tracker_index_for_addr(struct _sockaddr addr);
+#endif 
 void net_udp_process_ping(ubyte *data, int data_len, struct _sockaddr sender_addr);
 void net_udp_process_pong(ubyte *data, int data_len, struct _sockaddr sender_addr);
 int  net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_addr, int lite_info, ubyte is_sync);
@@ -185,68 +193,6 @@ int   observer_message_lengths[MAX_OBS_MESSAGES];
 int   observer_message_needack[MAX_OBS_MESSAGES];
 int   cur_obs_msg = 0;
 int   next_obs_msg_to_send = 0;
-
-// Relay server support -- see tools/relay_server.py. Transparently tunnels
-// the UDP session through a server both sides can reach outbound, for
-// players who can neither port-forward nor use a VPN. Everything above
-// dxx_sendto()/dxx_recvfrom() is unaware this is happening: a "relayed"
-// peer is addressed using a synthetic struct _sockaddr (the relay server's
-// real IP, with a port in the reserved RELAY_SYNTH_PORT_BASE.. range that
-// encodes which peer it stands in for), and those two functions rewrap/
-// unwrap packets to/from the real relay protocol transparently.
-#define RELAY_SYNTH_PORT_BASE 60000 // + 0 = "the host" (client's view), + 1..MAX_PLAYERS = "participant N" (host's view)
-
-#define RELAY_MSG_HELLO_HOST        0x01
-#define RELAY_MSG_HELLO_HOST_ACK    0x81
-#define RELAY_MSG_HELLO_CLIENT      0x02
-#define RELAY_MSG_HELLO_CLIENT_ACK  0x82
-#define RELAY_MSG_HELLO_CLIENT_NACK 0x83
-#define RELAY_MSG_DATA_UNTAGGED     0x10 // DATA_TO_HOST (client->relay) / DATA_FROM_HOST (relay->client)
-#define RELAY_MSG_DATA_TAGGED       0x11 // DATA_TO_PART (host->relay) / DATA_FROM_PART (relay->host)
-
-static struct _sockaddr RelayServerAddr;
-static int RelayActive = 0;          // 1 once GameArg.MplRelayAddr resolved successfully
-static int RelayHostRegistered = 0;  // 1 once the relay has ACK'd our HELLO_HOST
-static int RelayClientJoined = 0;    // 0 = not yet, 1 = ACK'd, -1 = NACK'd (no such host on the relay)
-
-// Returns 1 and sets *participant if addr is a relay-sentinel address
-// (see comment above). *participant is 0 for "the host" or 1..MAX_PLAYERS
-// for a specific relayed client.
-static int relay_addr_participant(const struct sockaddr *addr, int *participant)
-{
-	if (!RelayActive || !addr || addr->sa_family != AF_INET)
-		return 0;
-
-	const struct sockaddr_in *sin = (const struct sockaddr_in *)addr;
-	const struct sockaddr_in *relay_sin = (const struct sockaddr_in *)&RelayServerAddr;
-
-	if (sin->sin_addr.s_addr != relay_sin->sin_addr.s_addr)
-		return 0;
-
-	int port = ntohs(sin->sin_port);
-	if (port < RELAY_SYNTH_PORT_BASE || port > RELAY_SYNTH_PORT_BASE + MAX_PLAYERS)
-		return 0;
-
-	*participant = port - RELAY_SYNTH_PORT_BASE;
-	return 1;
-}
-
-// True if our current route to pnum runs through the relay -- i.e. the
-// address we hold for them is one of the synthetic sentinels above rather
-// than a real endpoint. Such a route works from anywhere, but every packet
-// takes an extra hop out to the relay server and back, so these are exactly
-// the connections worth handing to ICE for a direct upgrade. The relay is
-// meant to be a rendezvous point that lets peers find each other through
-// NAT, not the permanent carrier for gameplay traffic.
-int net_udp_player_is_relayed(int pnum)
-{
-	int participant;
-
-	if (pnum < 0 || pnum >= MAX_PLAYERS)
-		return 0;
-
-	return relay_addr_participant((const struct sockaddr *)&Netgame.players[pnum].protocol.udp.addr, &participant);
-}
 
 // Variables
 int UDP_num_sendto = 0, UDP_len_sendto = 0, UDP_num_recvfrom = 0, UDP_len_recvfrom = 0;
@@ -454,42 +400,6 @@ void net_log_comment(char* comment) {
 /* General UDP functions - START */
 ssize_t dxx_sendto(int sockfd, const void *msg, int len, unsigned int flags, const struct sockaddr *to, socklen_t tolen)
 {
-	int participant;
-
-	if (sockfd == UDP_Socket[0] && relay_addr_participant(to, &participant))
-	{
-		ubyte relaybuf[UPID_MAX_SIZE + 16];
-		int rlen = 0;
-		uint32_t token_be = htonl((uint32_t)GameArg.MplRelayToken);
-		ssize_t rv;
-
-		if (len < 0 || (size_t)len > UPID_MAX_SIZE)
-			return -1;
-
-		if (participant == 0)
-		{
-			relaybuf[rlen++] = RELAY_MSG_DATA_UNTAGGED;
-			memcpy(relaybuf + rlen, &token_be, 4); rlen += 4;
-		}
-		else
-		{
-			relaybuf[rlen++] = RELAY_MSG_DATA_TAGGED;
-			memcpy(relaybuf + rlen, &token_be, 4); rlen += 4;
-			relaybuf[rlen++] = (ubyte)participant;
-		}
-
-		memcpy(relaybuf + rlen, msg, len);
-
-		net_log_log(1, msg, len, to, tolen);
-		rv = sendto(sockfd, relaybuf, rlen + len, flags, (struct sockaddr *)&RelayServerAddr, sizeof(struct _sockaddr));
-
-		UDP_num_sendto++;
-		if (rv > 0)
-			UDP_len_sendto += len; // count payload bytes only, not the relay envelope
-
-		return (rv > 0) ? len : rv; // report the caller's own byte count, matching non-relay semantics
-	}
-
 	net_log_log(1, msg, len, to, tolen);
 
 	ssize_t rv = sendto(sockfd, msg, len, flags, to, tolen);
@@ -503,73 +413,6 @@ ssize_t dxx_sendto(int sockfd, const void *msg, int len, unsigned int flags, con
 
 ssize_t dxx_recvfrom(int sockfd, void *buf, int len, unsigned int flags, struct sockaddr *from, socklen_t *fromlen)
 {
-	if (sockfd == UDP_Socket[0] && RelayActive)
-	{
-		ubyte relaybuf[UPID_MAX_SIZE + 16];
-		struct sockaddr_in raw_from;
-		socklen_t raw_fromlen = sizeof(raw_from);
-		const struct sockaddr_in *relay_sin = (const struct sockaddr_in *)&RelayServerAddr;
-		ssize_t rv = recvfrom(sockfd, relaybuf, sizeof(relaybuf), flags, (struct sockaddr *)&raw_from, &raw_fromlen);
-
-		if (rv <= 0)
-			return rv;
-
-		if (raw_from.sin_addr.s_addr == relay_sin->sin_addr.s_addr && raw_from.sin_port == relay_sin->sin_port)
-		{
-			int msg_type, rlen, participant = 0, payload_len;
-			struct sockaddr_in *synth;
-
-			if (rv < 5)
-				return 0; // malformed relay envelope
-
-			msg_type = relaybuf[0];
-			rlen = 5;
-
-			if (msg_type == RELAY_MSG_HELLO_HOST_ACK) { RelayHostRegistered = 1; return 0; }
-			if (msg_type == RELAY_MSG_HELLO_CLIENT_ACK) { RelayClientJoined = 1; return 0; }
-			if (msg_type == RELAY_MSG_HELLO_CLIENT_NACK) { RelayClientJoined = -1; return 0; }
-
-			if (msg_type == RELAY_MSG_DATA_TAGGED)
-			{
-				if (rv < 6)
-					return 0;
-				participant = relaybuf[5];
-				rlen = 6;
-			}
-			else if (msg_type != RELAY_MSG_DATA_UNTAGGED)
-			{
-				return 0; // unknown control message
-			}
-
-			synth = (struct sockaddr_in *)from;
-			memset(synth, 0, sizeof(*synth));
-			synth->sin_family = AF_INET;
-			synth->sin_addr = relay_sin->sin_addr;
-			synth->sin_port = htons(RELAY_SYNTH_PORT_BASE + participant);
-			*fromlen = sizeof(struct sockaddr_in);
-
-			payload_len = rv - rlen;
-			if (payload_len > len) payload_len = len;
-			if (payload_len < 0) payload_len = 0;
-			memcpy(buf, relaybuf + rlen, payload_len);
-
-			net_log_log(0, buf, payload_len, from, *fromlen);
-			UDP_num_recvfrom++;
-			UDP_len_recvfrom += payload_len;
-			return payload_len;
-		}
-
-		// Not from the relay -- pass a direct packet straight through.
-		if (rv > len) rv = len;
-		memcpy(buf, relaybuf, rv);
-		memcpy(from, &raw_from, raw_fromlen);
-		*fromlen = raw_fromlen;
-		net_log_log(0, buf, rv, from, *fromlen);
-		UDP_num_recvfrom++;
-		UDP_len_recvfrom += rv;
-		return rv;
-	}
-
 	ssize_t rv = recvfrom(sockfd, buf, len, flags, from, fromlen);
 
 	net_log_log(0, buf, rv, from, *fromlen);
@@ -1011,6 +854,207 @@ int udp_tracker_process_game( ubyte *data, int data_len )
 	return 0;
 }
 
+/* NAT hole punching, brokered by the tracker. Begin!
+ *
+ * This is what replaced the relay tunnel, and it exists because of a specific
+ * bug: every other tracker message in this file goes out UDP_Socket[2], a
+ * separate socket on its own random port, while gameplay uses UDP_Socket[0].
+ * A NAT gives those two sockets *different* external mappings, so the address
+ * the tracker observed for a host was never the address anyone could reach
+ * their game on. Registration advertises the host's LAN game port (see
+ * udp_tracker_register()), which is correct only if that port is forwarded or
+ * UPnP mapped it. For everyone else the game appeared in the browser and then
+ * every join died with "No response by host" -- the listing works regardless
+ * of reachability, so it looked like the host was simply ignoring people.
+ *
+ * The fix is that these packets, and only these, go out UDP_Socket[0]. Now the
+ * tracker sees the mapping gameplay actually arrives on, and -- just as
+ * importantly -- the host's keepalive holds that NAT binding open, so the
+ * tracker can reach back through it to broker a punch.
+ *
+ * The exchange, once a host is registered:
+ *
+ *   host   --> tracker   HOLEPUNCH(role=HOST_KEEPALIVE, gameid)  every 15s
+ *   client --> tracker   HOLEPUNCH(role=CLIENT_REQUEST, gameid)  every 1s while joining
+ *   tracker --> host     HOLEPUNCH_IN(CLIENT_ADDR, client's public addr)
+ *   tracker --> client   HOLEPUNCH_IN(HOST_ADDR,   host's public addr)
+ *
+ * Both sides then fire datagrams at each other at essentially the same moment.
+ * Whichever one leaves first punches its own NAT outbound and is dropped by
+ * the peer's; the reply comes back through the hole it just made. That is the
+ * whole trick, and it works on full-cone, restricted-cone and port-restricted
+ * NATs -- the overwhelming majority of home routers.
+ *
+ * It does NOT work when both peers are behind symmetric NAT, because each
+ * predicts a port the other's NAT will not honor. Nothing punches that; it is
+ * why TURN exists. Those pairs fall through to ICE (gns_bridge), which has
+ * more candidate types to try, and if that fails too the join fails honestly
+ * instead of quietly costing everyone 300ms.
+ */
+#define TRACKER_PKT_HOLEPUNCH		6	/* Game -> Tracker, from UDP_Socket[0] */
+
+#define PUNCH_ROLE_HOST_KEEPALIVE	0
+#define PUNCH_ROLE_CLIENT_REQUEST	1
+
+#define PUNCH_IN_HOST_ADDR		0	/* Tracker -> client: here is the host */
+#define PUNCH_IN_CLIENT_ADDR		1	/* Tracker -> host: punch toward this client */
+#define PUNCH_IN_PROBE			2	/* Peer -> peer: exists only to open a NAT binding */
+
+#define PUNCH_PKT_SIZE			12	/* [op][role][gameid:4][ipv4:4][port:2] */
+
+static fix Punch_join_gameid = 0;		/* which game we're trying to punch into */
+static struct _sockaddr Punch_host_addr;	/* the host's real public address, once brokered */
+static int Punch_host_addr_valid = 0;
+
+/* Tell the punch layer which game we're joining. Clears any address brokered
+ * for a previous attempt so a stale one can't be adopted. */
+void net_udp_punch_set_target(fix gameid)
+{
+	Punch_join_gameid = gameid;
+	Punch_host_addr_valid = 0;
+	memset(&Punch_host_addr, 0, sizeof(Punch_host_addr));
+}
+
+static void net_udp_punch_to_tracker(ubyte role, fix gameid)
+{
+	ubyte buf[7];
+	int i;
+
+	if (TrackerCount == 0 || gameid == 0)
+		return;
+
+	buf[0] = TRACKER_PKT_HOLEPUNCH;
+	buf[1] = TRACKER_SYS_VERSION;
+	buf[2] = role;
+	PUT_INTEL_INT(buf + 3, gameid);
+
+	// UDP_Socket[0] deliberately -- see the comment above. Sending this from
+	// the tracker socket would broker the wrong mapping entirely.
+	for (i = 0; i < TrackerCount; i++)
+		dxx_sendto(UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&TrackerSockets[i], sizeof(TrackerSockets[i]));
+}
+
+/* Fire a few throwaway datagrams at a peer purely to punch our own NAT open
+ * toward them. The peer discards these on arrival; the outbound binding they
+ * create is the entire point. Sent in a small burst because the first one
+ * often crosses the peer's still-closed NAT and dies. */
+static void net_udp_punch_probe(const struct _sockaddr *addr)
+{
+	ubyte buf[PUNCH_PKT_SIZE];
+	int i;
+
+	memset(buf, 0, sizeof(buf));
+	buf[0] = UPID_TRACKER_HOLEPUNCH;
+	buf[1] = PUNCH_IN_PROBE;
+
+	for (i = 0; i < 4; i++)
+		dxx_sendto(UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)addr, sizeof(struct _sockaddr));
+}
+
+/* Host side: keep our game-socket NAT binding alive on the tracker so it can
+ * broker punches to us. Self-throttling, safe to call every frame. */
+void net_udp_punch_host_frame(fix64 time)
+{
+	static fix64 last_keepalive = 0;
+
+	if (!multi_i_am_master() || TrackerCount == 0)
+		return;
+
+	// 15s: comfortably inside the ~30s UDP binding timeout of the stingiest
+	// consumer NATs, and cheap enough at 7 bytes to not care.
+	if (time < last_keepalive + F1_0 * 15)
+		return;
+
+	last_keepalive = time;
+	net_udp_punch_to_tracker(PUNCH_ROLE_HOST_KEEPALIVE, Netgame.protocol.udp.GameID);
+}
+
+/* Client side: ask the tracker to broker a punch to the host we're joining.
+ * Called from the join retry loop, which already runs about once a second. */
+void net_udp_punch_client_frame(void)
+{
+	static fix64 last_request = 0;
+	fix64 now = timer_query();
+
+	if (Punch_join_gameid == 0)
+		return;
+	if (now < last_request + F1_0)
+		return;
+
+	last_request = now;
+	net_udp_punch_to_tracker(PUNCH_ROLE_CLIENT_REQUEST, Punch_join_gameid);
+}
+
+/* If the tracker has brokered a host address that differs from the one we're
+ * currently trying, hand it back so the join can retarget. Returns 1 if *out
+ * was updated. */
+int net_udp_punch_take_host_addr(struct _sockaddr *out)
+{
+	if (!Punch_host_addr_valid)
+		return 0;
+	if (!memcmp(out, &Punch_host_addr, sizeof(struct _sockaddr)))
+		return 0; // already using it
+
+	memcpy(out, &Punch_host_addr, sizeof(struct _sockaddr));
+	return 1;
+}
+
+void net_udp_process_holepunch(ubyte *data, int data_len, struct _sockaddr sender_addr)
+{
+	struct _sockaddr peer;
+	struct sockaddr_in *sin;
+	ubyte role;
+
+	if (data_len < PUNCH_PKT_SIZE)
+		return;
+
+	role = data[1];
+
+	// A probe has already done its job by arriving: our NAT now has an
+	// inbound binding for that peer. Nothing to process.
+	if (role == PUNCH_IN_PROBE)
+		return;
+
+	// Brokerage is only trustworthy from a tracker we configured. Without
+	// this check any peer could redirect a join to an address of its choosing.
+	if (tracker_index_for_addr(sender_addr) < 0)
+		return;
+
+	memset(&peer, 0, sizeof(peer));
+	sin = (struct sockaddr_in *)&peer;
+	sin->sin_family = AF_INET;
+	memcpy(&sin->sin_addr, data + 6, 4);
+	memcpy(&sin->sin_port, data + 10, 2); // already network byte order on the wire
+
+	if (role == PUNCH_IN_CLIENT_ADDR)
+	{
+		if (!multi_i_am_master())
+			return;
+
+		con_printf(CON_NORMAL, "Punch: tracker says %s:%d wants in -- punching toward them\n",
+			inet_ntoa(sin->sin_addr), SWAPSHORT(sin->sin_port));
+		net_udp_punch_probe(&peer);
+	}
+	else if (role == PUNCH_IN_HOST_ADDR)
+	{
+		if (multi_i_am_master())
+			return;
+
+		if (!Punch_host_addr_valid || memcmp(&Punch_host_addr, &peer, sizeof(peer)))
+			con_printf(CON_NORMAL, "Punch: host's real address is %s:%d\n",
+				inet_ntoa(sin->sin_addr), SWAPSHORT(sin->sin_port));
+
+		memcpy(&Punch_host_addr, &peer, sizeof(peer));
+		Punch_host_addr_valid = 1;
+
+		// Punch our side open toward them too. Both ends probing at once is
+		// what makes the simultaneous open work.
+		net_udp_punch_probe(&peer);
+	}
+}
+
+/* NAT hole punching, end! */
+
 /* Game-event forwarding to the tracker(s), begin!
  *
  * These are called only by the host (multi_i_am_master() checked at every
@@ -1236,114 +1280,6 @@ void net_udp_upnp_unmap_port(int port)
 
 #endif /* USE_UPNP */
 
-/* Relay server stuff, begin! (see tools/relay_server.py) */
-
-// Resolve the configured relay server address, if any. Safe to call even
-// when relay isn't configured -- RelayActive just stays 0.
-void net_udp_relay_init(void)
-{
-	RelayActive = 0;
-	RelayHostRegistered = 0;
-	RelayClientJoined = 0;
-
-	if (!GameArg.MplRelayAddr || !GameArg.MplRelayAddr[0] || GameArg.MplRelayPort == 0 || GameArg.MplRelayToken == 0)
-		return;
-
-	// The synthetic sentinel addresses relay_addr_participant() recognizes
-	// reuse the relay server's own IP with a port in
-	// [RELAY_SYNTH_PORT_BASE, RELAY_SYNTH_PORT_BASE+MAX_PLAYERS]. If the
-	// relay's *real* port were ever configured inside that same range,
-	// dxx_sendto()'s raw control sends (which target that real port
-	// directly) would get misidentified as a synthetic address and silently
-	// double-wrapped, corrupting the relay protocol. Refuse rather than
-	// fail in a way that's hard to diagnose.
-	if (GameArg.MplRelayPort >= RELAY_SYNTH_PORT_BASE && GameArg.MplRelayPort <= RELAY_SYNTH_PORT_BASE + MAX_PLAYERS)
-	{
-		con_printf(CON_NORMAL, "Relay: -relay_hostport %d conflicts with the reserved sentinel port range (%d-%d), refusing to enable relay. Configure the relay server on a different port.\n", GameArg.MplRelayPort, RELAY_SYNTH_PORT_BASE, RELAY_SYNTH_PORT_BASE + MAX_PLAYERS);
-		return;
-	}
-
-	if (udp_dns_filladdr((char *)GameArg.MplRelayAddr, GameArg.MplRelayPort, &RelayServerAddr) < 0)
-	{
-		con_printf(CON_NORMAL, "Relay: could not resolve %s:%d\n", GameArg.MplRelayAddr, GameArg.MplRelayPort);
-		return;
-	}
-
-	RelayActive = 1;
-	con_printf(CON_NORMAL, "Relay: enabled, server %s:%d, token %d\n", GameArg.MplRelayAddr, GameArg.MplRelayPort, GameArg.MplRelayToken);
-}
-
-static void net_udp_relay_send_control(ubyte msg_type)
-{
-	ubyte buf[5];
-	uint32_t token_be;
-
-	if (!RelayActive)
-		return;
-
-	buf[0] = msg_type;
-	token_be = htonl((uint32_t)GameArg.MplRelayToken);
-	memcpy(buf + 1, &token_be, 4);
-
-	// Sent directly to RelayServerAddr's real port -- not a synthetic
-	// sentinel -- so this bypasses dxx_sendto()'s relay-wrap logic and goes
-	// out as a raw control message, exactly as it should.
-	dxx_sendto(UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&RelayServerAddr, sizeof(struct _sockaddr));
-}
-
-// Periodic registration/keepalive while hosting via the relay. Call once
-// per frame; no-ops unless we're both the master and relay is configured.
-void net_udp_relay_host_frame(fix64 time)
-{
-	static fix64 last_hello = 0;
-
-	if (!RelayActive || !multi_i_am_master())
-		return;
-
-	if (time > last_hello + (RelayHostRegistered ? F1_0 * 15 : F1_0))
-	{
-		net_udp_relay_send_control(RELAY_MSG_HELLO_HOST);
-		last_hello = time;
-	}
-}
-
-// Periodic registration while attempting to join via the relay -- resent
-// alongside net_udp_game_connect()'s own retry loop until we see an ACK/NACK.
-// net_udp_game_connect() runs every idle tick of the connect menu (tens of
-// times per second), so this throttles to once a second itself rather than
-// flooding the relay with a HELLO_CLIENT per frame.
-void net_udp_relay_client_frame(void)
-{
-	static fix64 last_hello = 0;
-	fix64 now;
-
-	if (!RelayActive || RelayClientJoined != 0)
-		return;
-
-	now = timer_query();
-	if (now < last_hello + F1_0)
-		return;
-
-	last_hello = now;
-	net_udp_relay_send_control(RELAY_MSG_HELLO_CLIENT);
-}
-
-// Point host_addr at the relay's "the host" sentinel instead of resolving a
-// real address -- used in place of udp_dns_filladdr() when joining via
-// -relay_token instead of a manual IP.
-void net_udp_relay_set_sentinel_host_addr(struct _sockaddr *host_addr)
-{
-	struct sockaddr_in *sin = (struct sockaddr_in *)host_addr;
-	const struct sockaddr_in *relay_sin = (const struct sockaddr_in *)&RelayServerAddr;
-
-	memset(sin, 0, sizeof(*sin));
-	sin->sin_family = AF_INET;
-	sin->sin_addr = relay_sin->sin_addr;
-	sin->sin_port = htons(RELAY_SYNTH_PORT_BASE); // participant 0 == "the host"
-}
-
-/* Relay server stuff, end! */
-
 typedef struct direct_join
 {
 	struct _sockaddr host_addr;
@@ -1503,6 +1439,9 @@ int valid_size(ubyte *data, int data_len, struct _sockaddr sender_addr) {
 		case UPID_P2P_PING: 			if(data_len != UPID_P2P_PING_SIZE          )  { rv = 0; }  break;
 		case UPID_P2P_PONG: 			if(data_len != UPID_P2P_PONG_SIZE          )  { rv = 0; }  break;
 		case UPID_REATTEMPT_DIRECT: 	if(data_len != UPID_REATTEMPT_DIRECT_SIZE  )  { rv = 0; }  break;
+#ifdef USE_TRACKER
+		case UPID_TRACKER_HOLEPUNCH:	if(data_len != UPID_TRACKER_HOLEPUNCH_SIZE )  { rv = 0; }  break;
+#endif
 #ifdef USE_GNS
 		case UPID_GNS_SIGNAL: 			if(data_len < UPID_GNS_SIGNAL_HEADER_SIZE  )  { rv = 0; }  break;
 #endif
@@ -1629,9 +1568,9 @@ int net_udp_game_connect(direct_join *dj)
 	// Get full game info so we can show it.
 
 	// Timeout after 10 seconds
-	if (timer_query() >= dj->start_time + (F1_0*10))
+	if (timer_query() >= dj->start_time + (F1_0*20))
 	{
-		nm_messagebox(TXT_ERROR,1,TXT_OK,"No response by host.\n\nPossible reasons:\n* No game on this IP (anymore)\n* Port of Host not open\n  or different\n* Host uses a game version\n  I do not understand");
+		nm_messagebox(TXT_ERROR,1,TXT_OK,"No response by host.\n\nCould not reach the host directly and NAT\npunch-through did not succeed.\n\nPossible reasons:\n* No game on this IP (anymore)\n* Host has no forwarded port and no UPnP,\n  and both of you are behind strict NAT\n* Host uses a game version\n  I do not understand");
 		dj->connecting = 0;
 		return 0;
 	}
@@ -1643,14 +1582,28 @@ int net_udp_game_connect(direct_join *dj)
 		return 0;
 	}
 	
-	if (RelayActive && RelayClientJoined == -1)
-	{
-		nm_messagebox(TXT_ERROR,1,TXT_OK,"Relay server says no host is registered for this token.\nDouble check the token and that they're actually hosting.");
-		dj->connecting = 0;
-		return 0;
-	}
+#ifdef USE_TRACKER
+	// Ask the tracker to broker a punch, and adopt the host's real public
+	// address the moment it tells us one. The advertised address from the
+	// game list is the host's *declared* port, reachable only if they
+	// forwarded it; the brokered one is the mapping their NAT actually
+	// assigned, held open by their keepalive.
+	net_udp_punch_client_frame();
 
-	net_udp_relay_client_frame();
+	// Only retarget once the advertised address has plainly failed. On a LAN
+	// -- or anywhere the host really is directly reachable -- the address the
+	// tracker brokers is the *public* one, and plenty of routers won't hairpin
+	// a packet sent from inside back to their own external IP. Adopting it
+	// eagerly would break the joins that already work in order to fix the ones
+	// that don't. Three seconds is far longer than a direct handshake needs
+	// and far shorter than the 20s join timeout.
+	if (timer_query() >= dj->start_time + F1_0*3 &&
+	    net_udp_punch_take_host_addr(&dj->host_addr))
+	{
+		memcpy(&Netgame.players[0].protocol.udp.addr, &dj->host_addr, sizeof(struct _sockaddr));
+		dj->last_time = 0; // retry immediately against the new address
+	}
+#endif
 
 	if (timer_query() >= dj->last_time + F1_0)
 	{
@@ -1741,13 +1694,7 @@ static int manual_join_game_handler(newmenu *menu, d_event *event, direct_join *
 				return 1;
 			}
 			
-			// Resolve address -- via the relay's sentinel if a relay token
-			// is configured (see -relay_token), otherwise the normal way.
-			if (RelayActive && GameArg.MplRelayToken != 0)
-			{
-				net_udp_relay_set_sentinel_host_addr(&dj->host_addr);
-			}
-			else if (udp_dns_filladdr(dj->addrbuf, atoi(dj->portbuf), &dj->host_addr) < 0)
+			if (udp_dns_filladdr(dj->addrbuf, atoi(dj->portbuf), &dj->host_addr) < 0)
 			{
 				return 1;
 			}
@@ -1944,22 +1891,21 @@ int net_udp_list_join_poll( newmenu *menu, d_event *event, direct_join *dj )
 				dj->last_time = 0;
 				memcpy((struct _sockaddr *)&dj->host_addr, (struct _sockaddr *)&Active_udp_games[(citem+(NLPage*UDP_NETGAMES_PPAGE))-4].game_addr, sizeof(struct _sockaddr));
 
-				// The address from the games list is whatever the tracker/LAN
-				// broadcast advertised -- the host's *public* IP:port. Connecting
-				// straight to it is what the relay exists to avoid: a host behind
-				// NAT with no forwarded port never receives it, and the join dies
-				// with "No response by host" even though the game is plainly
-				// listed. The manual-join path already redirects to the relay
-				// sentinel here; this path never did, so browser joins silently
-				// bypassed the relay entirely. Mirror manual_join_game_handler().
-				if (RelayActive && GameArg.MplRelayToken != 0)
-					net_udp_relay_set_sentinel_host_addr(&dj->host_addr);
+#ifdef USE_TRACKER
+				// The GameID is what the tracker keys the punch brokerage on,
+				// and the game list is the only place a joining client can
+				// learn it before it has talked to the host at all.
+				net_udp_punch_set_target(Active_udp_games[(citem+(NLPage*UDP_NETGAMES_PPAGE))-4].GameID);
+#endif
 
+				// The address here is whatever the tracker/LAN broadcast
+				// advertised -- the host's public IP:port. It works directly
+				// when the host has a forwarded port or UPnP; when they don't,
+				// the tracker-brokered NAT punch below is what reaches them.
 				{
 					struct sockaddr_in *dbg = (struct sockaddr_in *)&dj->host_addr;
-					con_printf(CON_NORMAL, "Join: connecting to %s:%d (relay %s)\n",
-						inet_ntoa(dbg->sin_addr), SWAPSHORT(dbg->sin_port),
-						(RelayActive && GameArg.MplRelayToken != 0) ? "VIA SENTINEL" : "off/direct");
+					con_printf(CON_NORMAL, "Join: connecting to %s:%d\n",
+						inet_ntoa(dbg->sin_addr), SWAPSHORT(dbg->sin_port));
 				}
 
 				memcpy((struct _sockaddr *)&Netgame.players[0].protocol.udp.addr, (struct _sockaddr *)&dj->host_addr, sizeof(struct _sockaddr));
@@ -2283,7 +2229,6 @@ void net_udp_init()
 	gns_bridge_init();
 #endif
 
-	net_udp_relay_init();
 }
 
 void net_udp_close()
@@ -4298,6 +4243,10 @@ void net_udp_process_packet(ubyte *data, struct _sockaddr sender_addr, int lengt
 		case UPID_TRACKER_INCGAME:
 			udp_tracker_process_game( data, length );
 			break;
+
+		case UPID_TRACKER_HOLEPUNCH:
+			net_udp_process_holepunch( data, length, sender_addr );
+			break;
 #endif
 		case UPID_P2P_PING:
 			net_udp_process_p2p_ping( data, sender_addr, length);
@@ -4432,7 +4381,13 @@ int net_udp_sync_poll( newmenu *menu, d_event *event, void *userdata )
 	
 	menu = menu;
 	userdata = userdata;
-	
+
+#ifdef USE_TRACKER
+	// Hold the NAT binding open while sitting in the lobby -- this poll loop,
+	// not net_udp_do_frame(), is what runs during "waiting for players",
+	// which is exactly when clients are trying to punch in.
+	net_udp_punch_host_frame(timer_query());
+#endif
 	net_udp_listen();
 
 	// Leave if Host disconnects
@@ -4501,14 +4456,6 @@ int net_udp_start_poll( newmenu *menu, d_event *event, void *userdata )
 //       if (nitems > MAX_PLAYERS ) return; 
 	
 	n = Netgame.numplayers;
-	// Keep our relay registration alive while sitting in the lobby. This poll
-	// loop -- not net_udp_do_frame() -- is what runs during "waiting for
-	// players", which is precisely when clients attempt to join. Without this
-	// the host only ever announces itself to the *tracker* here, so the game
-	// shows up in the browser while the relay still has no host registered for
-	// our token, and every relayed join gets HELLO_CLIENT_NACK. Cheap to call
-	// every frame: it self-throttles to 1s until registered, 15s after.
-	net_udp_relay_host_frame(timer_query());
 	net_udp_listen();
 
 	if (n < Netgame.numplayers )
@@ -6168,7 +6115,7 @@ int net_udp_start_game(void)
 		newmenu *wait_menu;
 
 		m[0].type = NM_TYPE_TEXT;
-		m[0].text = "Establish connection to relay server/tracker\n\nPlease wait...";
+		m[0].text = "Setting up peer-to-peer hosting\n\nPlease wait...";
 
 		wait_menu = newmenu_do3(NULL, NULL, 1, m, NULL, NULL, 0, NULL);
 		timer_delay(F1_0 / 4);
@@ -6275,7 +6222,9 @@ int net_udp_request_poll( newmenu *menu, d_event *event, void *userdata )
 	menu = menu;
 	userdata = userdata;
 	
-	net_udp_relay_host_frame(timer_query()); // see net_udp_start_poll() -- same reason
+#ifdef USE_TRACKER
+	net_udp_punch_host_frame(timer_query()); // see net_udp_wait_for_sync() -- same reason
+#endif
 	net_udp_listen();
 	net_udp_timeout_check(timer_query());
 
@@ -6625,6 +6574,10 @@ void net_udp_do_frame(int force, int listen)
 
 	net_udp_noloss_process_queue(time);
 
+#ifdef USE_TRACKER
+	net_udp_punch_host_frame(time);
+#endif
+
 	if (VerifyPlayerJoined!=-1 && time >= last_resync_time+F1_0)
 	{
 		last_resync_time = time;
@@ -6723,7 +6676,6 @@ void net_udp_do_frame(int force, int listen)
 	}
 #endif
 
-	net_udp_relay_host_frame(time);
 
 	if(Netgame.RetroProtocol) {
 		net_udp_p2p_ping_frame(time); 
@@ -8255,14 +8207,10 @@ void net_udp_gns_route_found(int player_id, const void *addr, int addr_len)
 	memcpy(&sa, addr, sizeof(sa));
 
 	{
-		// Worth calling out loudly: if this player was relayed, gameplay
-		// traffic stops paying the relay round-trip from here on.
-		int was_relayed = net_udp_player_is_relayed(player_id);
 		struct sockaddr_in *dbg = (struct sockaddr_in *)&sa;
 
-		con_printf(CON_NORMAL, "GNS: ICE route to player %d -> %s:%d%s\n",
-			player_id, inet_ntoa(dbg->sin_addr), SWAPSHORT(dbg->sin_port),
-			was_relayed ? "  (UPGRADED off relay -- now peer-to-peer)" : "");
+		con_printf(CON_NORMAL, "GNS: ICE route to player %d -> %s:%d\n",
+			player_id, inet_ntoa(dbg->sin_addr), SWAPSHORT(dbg->sin_port));
 	}
 
 	update_address_for_player(player_id, sa);
@@ -8385,21 +8333,11 @@ void net_udp_p2p_ping_frame(fix64 time)
 			}
 		}
 #ifdef USE_GNS
-		else if ((i != multi_who_is_master() && connection_statuses[i].type == CONNT_PROXY)
-			 || (net_udp_player_is_relayed(i) && !multi_i_am_master())) {
+		else if (!multi_i_am_master()
+			 && (i == multi_who_is_master() || connection_statuses[i].type == CONNT_PROXY)) {
 			// Our own simultaneous-send holepunch gave up -- let ICE take a
 			// shot at it. Common for symmetric NAT / CGNAT pairs the naive
 			// approach can't solve, but STUN-based candidate gathering can.
-			//
-			// The second clause covers the host link. Joining through the
-			// relay leaves us addressing the host by sentinel, which is
-			// marked CONNT_DIRECT (it *is* direct -- to the relay), so it
-			// never matched the proxy test above and the host connection
-			// could never be upgraded: every packet kept paying the extra
-			// hop out to the relay server for the whole match. The relay is
-			// only supposed to be the rendezvous that gets peers through
-			// NAT; once ICE finds a real path, net_udp_gns_route_found()
-			// swaps the sentinel out for it and traffic goes peer-to-peer.
 			//
 			// Only clients initiate, never the host. ICE glare (both ends
 			// calling ConnectP2PCustomSignaling at once) would have each
