@@ -199,7 +199,7 @@ void nm_draw_background(int x1, int y1, int x2, int y2 )
 void nm_string( int w1,int x, int y, char * s, int tabs_flag)
 {
 	int w,h,aw,tx=0,t=0,i;
-	char *p,*s1,*s2,measure[2];
+	char *p,*s1,*s2,measure[3];
 	int XTabs[]={18,90,127,165,231,256};
 
 	p=s1=NULL;
@@ -210,7 +210,7 @@ void nm_string( int w1,int x, int y, char * s, int tabs_flag)
 		XTabs[i]+=x;
 	}
 
-	measure[1]=0;
+	measure[2]=0;
 
 	if (!tabs_flag) {
 		p = strchr( s2, '\t' );
@@ -232,7 +232,22 @@ void nm_string( int w1,int x, int y, char * s, int tabs_flag)
 				t++;
 				continue;
 			}
+			if ((unsigned char)s2[i] == CC_COLOR || (unsigned char)s2[i] == CC_LSPACING) {
+				if (!s2[i+1]) break;
+				measure[0] = s2[i];
+				measure[1] = s2[++i];
+				measure[2] = '\0';
+				gr_string(x,y,measure);
+				continue;
+			}
+			if ((unsigned char)s2[i] >= 0x04 && (unsigned char)s2[i] <= 0x06) {
+				measure[0] = s2[i];
+				measure[1] = '\0';
+				gr_string(x,y,measure);
+				continue;
+			}
 			measure[0]=s2[i];
+			measure[1]='\0';
 			gr_get_string_size(measure,&tx,&h,&aw);
 			gr_string(x,y,measure);
 			x+=tx;
