@@ -2336,15 +2336,14 @@ void multi_do_message(const ubyte* cbuf)
 {
 	const char *buf = (const char *)cbuf;
 
-#ifdef USE_TRACKER
 	// Forward every chat message the host receives, ahead of the
 	// team-addressing filter below -- that filter decides what to *display*
 	// locally, not what the tracker should see. buf[1] != Player_num guards
 	// against double-logging in case the host ever receives its own
 	// broadcast back (multi_send_message() already forwards its own chat).
-	if (multi_i_am_master() && Netgame.Tracker && (ubyte)buf[1] != Player_num)
+	// The host/tracker-enabled test lives inside udp_tracker_send_message().
+	if ((ubyte)buf[1] != Player_num)
 		udp_tracker_send_message((ubyte)buf[1], buf + 2);
-#endif
 
 	if (is_observer() && !PlayerCfg.ObsPlayerChat[get_observer_game_mode()]) {
 		multi_sending_message[(int)buf[1]] = 0;
@@ -2426,13 +2425,10 @@ void multi_do_message(const ubyte* cbuf)
 
 void multi_do_obs_message(const ubyte* cbuf)
 {
-#ifdef USE_TRACKER
 	// A remote observer sent this (the host's own observer chat is already
 	// forwarded directly from multi_send_obs_message() -- it never loops
 	// back through here).
-	if (multi_i_am_master() && Netgame.Tracker)
-		udp_tracker_send_obs_message(((const char*)cbuf) + 2);
-#endif
+	udp_tracker_send_obs_message(((const char*)cbuf) + 2);
 
 	if (!PlayerCfg.ObsChat[get_observer_game_mode()]) {
 		return;
@@ -2648,10 +2644,8 @@ multi_do_kill(const ubyte *buf)
 
 		multi_send_data(multibuf, 7, 2);
 
-#ifdef USE_TRACKER
-		if (Netgame.Tracker)
-			udp_tracker_send_kill(multibuf[1], GET_INTEL_SHORT(multibuf + 2), multibuf[4], multibuf[5], multibuf[6]);
-#endif
+		// A client's death, just relayed by me. Forward the exact bytes.
+		udp_tracker_send_kill(multibuf[1], GET_INTEL_SHORT(multibuf + 2), multibuf[4], multibuf[5], multibuf[6]);
 	}
 
 	killed = Players[pnum].objnum;
@@ -3920,13 +3914,10 @@ multi_send_message(void)
 		multibuf[loc-1] = '\0';
 		multi_send_data(multibuf, loc, 0);
 		con_printf(CON_NORMAL, "Gamelog: %s: %s\n", Players[Player_num].callsign, Network_message);
-#ifdef USE_TRACKER
 		// I am the host sending my own chat -- I already know what I said,
 		// no need to wait to receive it back the way multi_do_message()
 		// would for someone else's message.
-		if (multi_i_am_master() && Netgame.Tracker)
-			udp_tracker_send_message(Player_num, (const char*)multibuf + 2);
-#endif
+		udp_tracker_send_message(Player_num, (const char*)multibuf + 2);
 		Network_message_reciever = -1;
 	}
 }
@@ -3946,10 +3937,7 @@ void multi_send_obs_message(void)
 
 	if (multi_i_am_master()) {
 		HUD_init_message(HM_MULTI, "%c%c%s: %s", (char)CC_COLOR, (char)BM_XRGB(8, 8, 32), Players[Player_num].callsign, Network_message);
-#ifdef USE_TRACKER
-		if (Netgame.Tracker)
-			udp_tracker_send_obs_message((const char*)multibuf + 2);
-#endif
+		udp_tracker_send_obs_message((const char*)multibuf + 2);
 	}
 }
 
@@ -4044,10 +4032,9 @@ multi_send_kill(int objnum)
 	{
 		multi_send_data(multibuf, count, 2);
 
-#ifdef USE_TRACKER
-		if (Netgame.Tracker)
-			udp_tracker_send_kill(multibuf[1], GET_INTEL_SHORT(multibuf + 2), multibuf[4], multibuf[5], multibuf[6]);
-#endif
+		// My own death as host -- forward before multi_compute_kill() below,
+		// which trashes multibuf.
+		udp_tracker_send_kill(multibuf[1], GET_INTEL_SHORT(multibuf + 2), multibuf[4], multibuf[5], multibuf[6]);
 
 		multi_compute_kill(killer_objnum, objnum); // THIS TRASHES THE MULTIBUF!!!
 	}
@@ -6347,26 +6334,20 @@ void multi_send_damage(fix damage, fix shields, ubyte killer_type, ubyte killer_
 
 	multi_send_data_direct( multibuf, 14, multi_who_is_master(), 2 );
 
-#ifdef USE_TRACKER
 	// I am the host taking damage myself -- this packet is addressed to
 	// myself, so it never comes back around through multi_do_damage() the
 	// way another player's damage packet would. Forward it from here
 	// instead, using the exact bytes just sent.
-	if (multi_i_am_master() && Netgame.Tracker)
-		udp_tracker_send_damage(multibuf[1], GET_INTEL_INT(multibuf + 2), GET_INTEL_INT(multibuf + 6), multibuf[10], multibuf[11], multibuf[12], multibuf[13]);
-#endif
+	udp_tracker_send_damage(multibuf[1], GET_INTEL_INT(multibuf + 2), GET_INTEL_INT(multibuf + 6), multibuf[10], multibuf[11], multibuf[12], multibuf[13]);
 }
 
 void multi_do_damage( const ubyte *buf )
 {
-#ifdef USE_TRACKER
 	// I am the host receiving another player's damage packet -- this is
 	// the same reliably-delivered data observer mode uses below, just not
 	// gated on is_observer() since the tracker wants it regardless of
 	// whether anyone is spectating.
-	if (multi_i_am_master() && Netgame.Tracker)
-		udp_tracker_send_damage(buf[1], GET_INTEL_INT(buf + 2), GET_INTEL_INT(buf + 6), buf[10], buf[11], buf[12], buf[13]);
-#endif
+	udp_tracker_send_damage(buf[1], GET_INTEL_INT(buf + 2), GET_INTEL_INT(buf + 6), buf[10], buf[11], buf[12], buf[13]);
 
 	if (is_observer())
 	{
