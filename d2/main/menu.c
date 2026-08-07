@@ -35,6 +35,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "vecmat.h"
 #include "effects.h"
 #include "slew.h"
+#include "dxma.h"
 #include "gamemine.h"
 #include "gamesave.h"
 #include "palette.h"
@@ -106,6 +107,7 @@ enum MENUS
     MENU_START_UDP_NETGAME,
     MENU_JOIN_MANUAL_UDP_NETGAME,
     MENU_JOIN_LIST_UDP_NETGAME,
+    MENU_DXMA_MISSIONS,
     #endif
     #ifndef RELEASE
     MENU_SANDBOX
@@ -612,6 +614,9 @@ int do_option ( int select)
 		case MENU_JOIN_LIST_UDP_NETGAME:
 			multi_protocol = MULTI_PROTO_UDP;
 			net_udp_list_join_game();
+			break;
+		case MENU_DXMA_MISSIONS:
+			dxma_missions_menu();
 			break;
 #endif
 #if defined(USE_UDP)
@@ -2522,11 +2527,13 @@ void do_multi_player_menu()
 	newmenu_item *m;
 	int num_options = 0;
 
-	MALLOC(menu_choice, int, 3);
+	// 4 possible entries: HOST GAME, FIND LAN(/ONLINE) GAMES, JOIN GAME
+	// MANUALLY, DXMA MISSIONS.
+	MALLOC(menu_choice, int, 4);
 	if (!menu_choice)
 		return;
 
-	MALLOC(m, newmenu_item, 3);
+	MALLOC(m, newmenu_item, 4);
 	if (!m)
 	{
 		d_free(menu_choice);
@@ -2541,6 +2548,7 @@ void do_multi_player_menu()
 	m[num_options].type=NM_TYPE_MENU; m[num_options].text="FIND LAN GAMES"; menu_choice[num_options]=MENU_JOIN_LIST_UDP_NETGAME; num_options++;
 #endif
 	m[num_options].type=NM_TYPE_MENU; m[num_options].text="JOIN GAME MANUALLY"; menu_choice[num_options]=MENU_JOIN_MANUAL_UDP_NETGAME; num_options++;
+	m[num_options].type=NM_TYPE_MENU; m[num_options].text="DXMA MISSIONS"; menu_choice[num_options]=MENU_DXMA_MISSIONS; num_options++;
 #endif
 
 	newmenu_do3( NULL, TXT_MULTIPLAYER, num_options, m, (int (*)(newmenu *, d_event *, void *))multi_player_menu_handler, menu_choice, 0, NULL );

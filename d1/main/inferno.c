@@ -52,6 +52,7 @@ char copyright[] = "DESCENT   COPYRIGHT (C) 1994,1995 PARALLAX SOFTWARE CORPORAT
 #include "screens.h"
 #include "texmerge.h"
 #include "menu.h"
+#include "dxma.h"
 #include "digi.h"
 #include "palette.h"
 #include "args.h"
@@ -421,6 +422,12 @@ int main(int argc, char *argv[])
 
 	con_printf( CON_DEBUG, "\nRunning game...\n" );
 	init_game();
+
+	// Load the DXMA mission database (embedded baseline, plus a cached
+	// refresh if one exists) so both the mission browser and the join-time
+	// "you're missing this map" lookup work without the player having to
+	// open the browser first.
+	dxma_load();
 
 	Players[Player_num].callsign[0] = '\0';
 
