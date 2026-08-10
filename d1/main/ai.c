@@ -49,6 +49,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "cntrlcen.h"
 #include "multibot.h"
 #include "multi.h"
+#include "survival.h"
 #include "gameseq.h"
 #include "key.h"
 #include "powerup.h"
@@ -757,6 +758,38 @@ if (Ai_animation_test) {
 
 }
 
+// Survival's tracked boss robots reload faster and turn quicker than a normal instance of the same
+// type -- both applied as a per-instance scale computed at the point of use (set_next_fire_time()
+// and survival_boss_turn_time() below), never by mutating robptr itself. robptr points at a
+// Robot_info[] entry shared by every instance of that robot type in every game mode; writing a scale
+// into it the moment one robot happens to become this wave's tracked boss would silently speed up
+// every *other* live instance of the same type too -- including, worse, any future non-boss spawn of
+// it in a later wave, since the mutation would outlive this one boss entirely.
+//
+// Both scales escalate with survival_boss_tier() (survival.c: 1 at wave 10, 2 at wave 20, ...), so
+// the fifth boss genuinely fights harder than the first rather than every boss playing identically
+// with only more shields to grind through. Floored well short of 0 either way -- an unbounded scale
+// eventually means a boss that fires and turns instantly, which reads as broken rather than hard.
+static fix survival_boss_scale(fix base_scale, fix step_per_tier, fix floor_scale)
+{
+	int tier = survival_boss_tier();
+	fix scale;
+
+	if (tier <= 1)
+		return base_scale;
+
+	scale = base_scale - (tier - 1) * step_per_tier;
+	return (scale < floor_scale) ? floor_scale : scale;
+}
+
+// First pass at these (2/3, i.e. 33% shorter) was too timid: against a robot whose own base
+// firing_wait is already several seconds, cutting a third off it barely moved the felt rate of fire.
+// Halved outright for the first boss instead, with a much steeper per-tier ramp and a floor that lets
+// a late-match boss fire up to 6x the stock rate.
+#define SURVIVAL_BOSS_FIRE_RATE_SCALE       (F1_0 / 2)        // wave 10: fires twice as often
+#define SURVIVAL_BOSS_FIRE_RATE_STEP        (F1_0 / 10)       // -10% more per boss wave after that
+#define SURVIVAL_BOSS_FIRE_RATE_FLOOR       (F1_0 / 6)        // never faster than 6x the stock rate
+
 // ----------------------------------------------------------------------------------
 void set_next_fire_time(ai_local *ailp, robot_info *robptr)
 {
@@ -768,6 +801,26 @@ void set_next_fire_time(ai_local *ailp, robot_info *robptr)
 		ailp->rapidfire_count = 0;
 		ailp->next_fire = robptr->firing_wait[Difficulty_level];
 	}
+
+	// ailp points directly into the global Ai_local_info[] array everywhere this is called from, so
+	// this recovers the object's index without needing it threaded through as a parameter.
+	if (survival_robot_is_boss(ailp - Ai_local_info))
+		ailp->next_fire = fixmul(ailp->next_fire,
+			survival_boss_scale(SURVIVAL_BOSS_FIRE_RATE_SCALE, SURVIVAL_BOSS_FIRE_RATE_STEP, SURVIVAL_BOSS_FIRE_RATE_FLOOR));
+}
+
+#define SURVIVAL_BOSS_TURN_TIME_SCALE       (F1_0 * 2 / 3)   // wave 10: 33% faster turning (smaller = quicker facing)
+#define SURVIVAL_BOSS_TURN_TIME_STEP        (F1_0 / 20)      // -5% more per boss wave after that
+#define SURVIVAL_BOSS_TURN_TIME_FLOOR       (F1_0 / 4)       // never faster than quartering the stock turn time
+
+static fix survival_boss_turn_time(int objnum, robot_info *robptr)
+{
+	fix t = robptr->turn_time[Difficulty_level];
+
+	if (survival_robot_is_boss(objnum))
+		t = fixmul(t, survival_boss_scale(SURVIVAL_BOSS_TURN_TIME_SCALE, SURVIVAL_BOSS_TURN_TIME_STEP, SURVIVAL_BOSS_TURN_TIME_FLOOR));
+
+	return t;
 }
 
 // ----------------------------------------------------------------------------------
@@ -2096,6 +2149,205 @@ void ai_do_actual_firing_stuff(object *obj, ai_static *aip, ai_local *ailp, robo
 }
 
 // --------------------------------------------------------------------------------------------------------------------
+//	Survival's robots hunt the player down across the whole level instead of reacting to one wandering
+//	past. Everything keyed off this is additive -- it turns extra pursuit on, it never takes stock
+//	behaviour away from any other mode.
+//
+//	NOTE, and this is the trap this mode fell into once already: none of it works by writing to
+//	Ai_local_info[].player_awareness_type. Pinning that high looks like the obvious way to stop robots
+//	losing interest, and it instead freezes them solid -- do_ai_frame() responds to that awareness
+//	level by forcing ailp->mode = AIM_CHASE_OBJECT every single frame (see the "Make sure that if this
+//	guy got hit or bumped" block), which permanently clobbers the AIM_FOLLOW_PATH that all of the
+//	pathing below depends on, so a robot can never route around anything. Drive pathing directly, as
+//	here, and leave awareness alone.
+int survival_horde_hunts(void)
+{
+#ifdef NETWORK
+	return (Game_mode & GM_MULTI) && (Netgame.gamemode == NETGAME_SURVIVAL);
+#else
+	return 0;
+#endif
+}
+
+//	Inside this, a hunting robot is considered to have arrived, and is handed back to the stock
+//	AIM_CHASE_OBJECT handling that does the actual fighting -- circling, firing, flinching. Sits above
+//	the largest circle_distance in the robot tables so pursuit can't interrupt a robot mid-attack.
+#define	SURVIVAL_HUNT_CLOSE_DIST	(F1_0*80)
+
+//	Ticks (of 50ms) between rebuilds of the shared flow field. This is the mode's entire navigation
+//	cost: four breadth-first sweeps a second, total, for the whole horde.
+#define	SURVIVAL_FLOW_REBUILD_TICKS	5
+
+// --------------------------------------------------------------------------------------------------------------------
+//	Survival's pursuit is a flow field -- the same structure zombie-wave games use, and for the same
+//	reason: it makes "every robot in the level knows the way to the nearest player" cost about the
+//	same as one robot knowing it.
+//
+//	Once per SURVIVAL_FLOW_REBUILD_TICKS, breadth-first out from *every* live player's segment at once
+//	(a multi-source sweep, so each segment ends up labelled with its hop-distance to whichever player
+//	is nearest) and store that in Flow_depth. A robot then navigates by reading one number: the
+//	neighbouring segment whose depth is one lower is the way to go, and it steers at the middle of the
+//	opening into it. No search, no stored route, no per-robot state at all.
+//
+//	The cost difference against per-robot pathing is the point. Stock's create_path_to_player() runs a
+//	breadth-first search *per robot*, then stores the result in the shared Point_segs pool, which then
+//	needs garbage collecting (ai_path_garbage_collect() sorts every robot's path to compact them).
+//	Doing that for a wave of robots means a couple of dozen searches a second plus allocation churn
+//	against a 2500-point pool -- and when that pool fills, maybe_ai_path_garbage_collect() calls
+//	ai_reset_all_paths(), which throws away every robot's route at once and parks the horde. Here it
+//	is four sweeps a second no matter how many robots there are, a handful of integer comparisons per
+//	robot per frame, and nothing allocated, so none of that failure mode exists to begin with.
+//
+//	It also fixes targeting, not just cost. The stock AI is built around one player -- Believed_player
+//	_pos is always the local ConsoleObject -- so robots on each machine could only ever path towards
+//	that machine's own player. Seeding the sweep from every live player instead means robots genuinely
+//	flow towards whoever is nearest, which is what makes a wave split up and converge on a group.
+static short	Flow_depth[MAX_SEGMENTS];
+static short	Flow_queue[MAX_SEGMENTS];
+static fix64	Flow_built_time = 0;
+static int		Flow_built = 0;		//	Has a field been built at all yet?
+static int		Flow_valid = 0;		//	Did the last build find anyone to seed from?
+
+#define	FLOW_UNREACHABLE	32767
+
+//	Connectivity is deliberately just WID_FLY_FLAG, with no ai_door_is_openable() term. That matches
+//	what an ordinary robot can actually fly through: only ROBOT_BRAIN and AIB_RUN_FROM robots open
+//	doors for pathing purposes (see ai_door_is_openable()), and Survival spawns neither. Keeping the
+//	test object-independent is also what lets one field serve every robot.
+static void survival_build_flow_field(void)
+{
+	int	qhead = 0, qtail = 0;
+	int	i;
+
+	for (i = 0; i <= Highest_segment_index; i++)
+		Flow_depth[i] = FLOW_UNREACHABLE;
+
+	//	Seed from every player who is actually in the mine, up to the full MAX_PLAYERS of 8. Being
+	//	multi-source is what makes this scale to a full lobby for free: the sweep costs the same for
+	//	eight players as for one (each segment is still visited exactly once -- it is the seeding that
+	//	grows, not the search), and every robot ends up flowing towards whichever player is nearest to
+	//	it rather than all of them converging on one. That is the behaviour a wave should have, and it
+	//	is not something the stock AI can express at all -- Believed_player_pos is singular.
+	//
+	//	Who is deliberately excluded, and why each would misbehave if left in:
+	//		not CONNECT_PLAYING	-- disconnected or between lives; their objnum still holds a stale
+	//							   segment, so seeding it drags the whole horde to where they died.
+	//		survival_is_eliminated	-- downed players are spectating (see survival_hold_spectator_
+	//							   cloak(), survival.c). Robots converging on a spectator is both
+	//							   wrong and, since they can't be hurt, permanent.
+	//	Observers need no test: they are not in Players[] at all, they live in Netgame.observers[].
+	for (i = 0; i < N_players && i < MAX_PLAYERS; i++) {
+		int	objnum, segnum;
+
+		if ((Game_mode & GM_MULTI) && (Players[i].connected != CONNECT_PLAYING))
+			continue;
+		if (!(Game_mode & GM_MULTI) && (i != Player_num))
+			continue;
+		if (survival_is_eliminated(i))
+			continue;
+
+		objnum = Players[i].objnum;
+		if ((objnum < 0) || (objnum > Highest_object_index))
+			continue;
+		if (Objects[objnum].type != OBJ_PLAYER)
+			continue;
+
+		segnum = Objects[objnum].segnum;
+		if ((segnum < 0) || (segnum > Highest_segment_index))
+			continue;
+		if (Flow_depth[segnum] == 0)		//	Two players already sharing a segment.
+			continue;
+
+		Flow_depth[segnum] = 0;
+		Flow_queue[qtail++] = segnum;
+	}
+
+	Flow_valid = (qtail > 0);
+
+	while (qhead < qtail) {
+		int		segnum = Flow_queue[qhead++];
+		segment	*segp = &Segments[segnum];
+		int		sidenum;
+
+		for (sidenum = 0; sidenum < MAX_SIDES_PER_SEGMENT; sidenum++) {
+			int	child;
+
+			if (!(WALL_IS_DOORWAY(segp, sidenum) & WID_FLY_FLAG))
+				continue;
+
+			child = segp->children[sidenum];
+			if ((child < 0) || (child > Highest_segment_index))
+				continue;
+
+			if (Flow_depth[child] != FLOW_UNREACHABLE)
+				continue;
+
+			Flow_depth[child] = Flow_depth[segnum] + 1;
+			Flow_queue[qtail++] = child;
+		}
+	}
+
+	Flow_built_time = GameTime64;
+	Flow_built = 1;
+}
+
+//	Where should this robot head next? Fills goal_point with the centre of the opening into the
+//	neighbouring segment that is one hop closer to a player, and returns 1.
+//
+//	Returns 0 when there is nothing to follow: the robot is already in a player's segment (segments
+//	get large, so that is not at all the same as having arrived), or it is walled off, or no player is
+//	in the mine. Callers should chase directly on a 0 rather than stand still -- standing still is
+//	precisely the bug this shape of answer exists to avoid.
+//
+//	Aiming at the middle of the connecting side rather than at the neighbour's centre is what keeps
+//	robots off the corners of doorways; it is the same trick insert_center_points() (aipath.c) plays
+//	on stock paths.
+static int survival_flow_goal(object *objp, vms_vector *goal_point)
+{
+	int		segnum = objp->segnum;
+	segment	*segp;
+	int		sidenum;
+
+	//	Rebuilt lazily, on the first robot to ask in a given interval, so it is always fresh for the
+	//	frame that uses it and is never built on a frame that has no robots to steer. The
+	//	GameTime64 < Flow_built_time half catches a level change resetting the clock, which would
+	//	otherwise leave a field built against the previous level's segment numbering in place.
+	//	Keyed off Flow_built rather than Flow_valid on purpose. A build that found nobody to seed from
+	//	(everyone dead between waves, say) is still a build, and must still start the interval -- gating
+	//	the rebuild on validity instead would re-sweep the whole level for every robot on every frame
+	//	for exactly as long as there was no one to sweep towards.
+	if (!Flow_built || (GameTime64 < Flow_built_time) ||
+		(GameTime64 - Flow_built_time > SURVIVAL_FLOW_REBUILD_TICKS * F1_0 / 20))
+		survival_build_flow_field();
+
+	if (!Flow_valid)
+		return 0;
+	if ((segnum < 0) || (segnum > Highest_segment_index))
+		return 0;
+	if ((Flow_depth[segnum] == FLOW_UNREACHABLE) || (Flow_depth[segnum] == 0))
+		return 0;
+
+	segp = &Segments[segnum];
+
+	for (sidenum = 0; sidenum < MAX_SIDES_PER_SEGMENT; sidenum++) {
+		int	child;
+
+		if (!(WALL_IS_DOORWAY(segp, sidenum) & WID_FLY_FLAG))
+			continue;
+
+		child = segp->children[sidenum];
+		if ((child < 0) || (child > Highest_segment_index))
+			continue;
+
+		if (Flow_depth[child] == Flow_depth[segnum] - 1) {
+			compute_center_point_on_side(goal_point, segp, sidenum);
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
 void do_ai_frame(object *obj)
 {
 	int			objnum = obj-Objects;
@@ -2203,14 +2455,7 @@ void do_ai_frame(object *obj)
 
 	//	- -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -
 	//	Occasionally make non-still robots make a path to the player.  Based on agitation and distance from player.
-	// Survival: real pathing is normally off in all multiplayer modes (see
-	// the retry-count block below too) -- fine for stock modes, which don't
-	// force "sees through walls" and so rarely get robots wedged against
-	// geometry chasing a straight-line target they can't reach. Surviving
-	// robots do exactly that (see player_is_visible_from_object()), so they
-	// need this stuck-recovery pathing turned back on or they lock up
-	// pushing on a wall forever instead of routing around it.
-	if ((aip->behavior != AIB_RUN_FROM) && (aip->behavior != AIB_STILL) && (!(Game_mode & GM_MULTI) || Netgame.gamemode == NETGAME_SURVIVAL))
+	if ((aip->behavior != AIB_RUN_FROM) && (aip->behavior != AIB_STILL) && !(Game_mode & GM_MULTI))
 		if (Overall_agitation > 70) {
                         if ((dist_to_player < F1_0*200) && (d_rand() < FrameTime/4)) {
                                 if (d_rand() * (Overall_agitation - 40) > F1_0*5) {
@@ -2222,11 +2467,75 @@ void do_ai_frame(object *obj)
 		}
 
 	//	- -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -
+	//	Survival's horde replaces the block above outright rather than reusing it, because every gate
+	//	in it is wrong for a mode where the robots are supposed to come to you:
+	//
+	//		Overall_agitation > 70	-- agitation is earned by the player making noise, so a player who
+	//								   parks and waits is the exact case that never trips it.
+	//		dist_to_player < 200	-- anything further away than that never paths at all.
+	//		the two d_rand() rolls	-- even once both of the above hold, a given robot re-plans rarely.
+	//
+	//	Instead the robot is steered straight off the shared flow field, every frame, with no path
+	//	stored anywhere and no search per robot. See survival_flow_goal() above.
+	//
+	//	This runs only while the robot is still travelling. Inside SURVIVAL_HUNT_CLOSE_DIST it falls
+	//	through to the stock mode handling below, which is what actually fights -- circling at the
+	//	robot type's circle_distance, firing, flinching. Pursuit gets the robot to you; stock D1 robot
+	//	behaviour is what happens once it arrives, and that is worth preserving rather than replacing.
+	if (survival_horde_hunts() && (aip->behavior != AIB_RUN_FROM) && (aip->behavior != AIB_STILL) && (obj->id != ROBOT_BRAIN)) {
+		if (dist_to_player > SURVIVAL_HUNT_CLOSE_DIST) {
+			vms_vector	flow_goal;
+
+			if (survival_flow_goal(obj, &flow_goal)) {
+				//	Gated the same way stock path following is, at the same anger level AIM_FOLLOW_PATH
+				//	uses, so only the machine that owns this robot drives it and the others take its
+				//	broadcast position instead of fighting over it.
+				if (!ai_multiplayer_awareness(obj, 65))
+					return;
+
+				compute_vis_and_vec(obj, &vis_vec_pos, ailp, &vec_to_player, &player_visibility, robptr, &visibility_and_vec_computed);
+
+				ai_path_set_orient_and_vel(obj, &flow_goal);
+
+				//	Keep the robot shooting on the way in, exactly as AIM_FOLLOW_PATH would. Note this
+				//	still cannot fire through walls: player_is_visible_from_object() only ever reports
+				//	1 through geometry, never the 2 that firing requires.
+				if (aip->GOAL_STATE != AIS_FLIN)
+					aip->GOAL_STATE = AIS_LOCK;
+				else if (aip->CURRENT_STATE == AIS_FLIN)
+					aip->GOAL_STATE = AIS_LOCK;
+
+				do_firing_stuff(obj, player_visibility, &vec_to_player);
+
+				ai_multi_send_robot_position(objnum, -1);
+				return;
+			}
+
+			//	Nothing to follow -- already in a player's segment, or cut off. Chase directly rather
+			//	than stand still, and fall through to the mode handling so the robot still gets a full
+			//	AI frame out of this.
+			ailp->mode = AIM_CHASE_OBJECT;
+		} else if (ailp->mode != AIM_CHASE_OBJECT) {
+			//	Arrived. Hand the robot to AIM_CHASE_OBJECT explicitly rather than leaving it in
+			//	whatever mode it happened to be in while travelling -- which is normally AIM_STILL,
+			//	since flow steering returns before the mode switch and so never changes it. AIM_STILL
+			//	at this range turns and shoots but never closes, so a robot that arrived would stop
+			//	dead at the edge of its approach and plink at you instead of engaging.
+			ailp->mode = AIM_CHASE_OBJECT;
+		}
+	}
+
+	//	- -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -
 	//	If retry count not 0, then add it into consecutive_retries.
 	//	If it is 0, cut down consecutive_retries.
 	//	This is largely a hack to speed up physics and deal with stupid AI.  This is low level
 	//	communication between systems of a sort that should not be done.
-	if ((ailp->retry_count) && (!(Game_mode & GM_MULTI) || Netgame.gamemode == NETGAME_SURVIVAL)) {
+	//	Survival: stuck-recovery pathing is normally off in all multiplayer modes -- fine for stock
+	//	modes, which don't force "sees through walls" and so rarely get robots wedged against geometry
+	//	chasing a straight-line target they can't reach. Surviving robots do exactly that (see
+	//	player_is_visible_from_object()), so they need it turned back on or they lock up pushing on a
+	//	wall forever instead of routing around it.
+	if ((ailp->retry_count) && (!(Game_mode & GM_MULTI) || survival_horde_hunts())) {
 		ailp->consecutive_retries += ailp->retry_count;
 		ailp->retry_count = 0;
 		if (ailp->consecutive_retries > 3) {
@@ -2239,7 +2548,7 @@ void do_ai_frame(object *obj)
 						attempt_to_resume_path(obj);
 					break;
 				case AIM_FOLLOW_PATH:
-					if (Game_mode & GM_MULTI && Netgame.gamemode != NETGAME_SURVIVAL)
+					if ((Game_mode & GM_MULTI) && !survival_horde_hunts())
 						ailp->mode = AIM_STILL;
 					else
 						attempt_to_resume_path(obj);
@@ -2405,7 +2714,15 @@ void do_ai_frame(object *obj)
 	//	- -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -
 	// Time-slice, don't process all the time, purely an efficiency hack.
 	// Guys whose behavior is station and are not at their hide segment get processed anyway.
-	if (ailp->player_awareness_type < PA_WEAPON_ROBOT_COLLISION-1) { // If robot got hit, he gets to attack player always!
+	//	Survival opts out of the time-slicing entirely, and it is the single biggest reason the horde
+	//	used to have to be gone looking for. The thresholds below are tuned for a single-player level
+	//	where a robot 250 units away is scenery: it gets one frame of AI every two seconds, so it
+	//	effectively does not travel. In a mode whose robots are supposed to cross the level to reach a
+	//	stationary player, that is precisely backwards -- the robots that most need to move are the
+	//	ones this switches off. The cost of dropping it is bounded and small: Survival caps a wave at
+	//	SURVIVAL_MAX_ACTIVE_ROBOTS (24, survival.c), well under what stock single-player runs unsliced
+	//	at close range anyway.
+	if (!survival_horde_hunts() && (ailp->player_awareness_type < PA_WEAPON_ROBOT_COLLISION-1)) { // If robot got hit, he gets to attack player always!
 		#ifndef NDEBUG
 		if (Break_on_object != objnum) {    // don't time slice if we're interested in this object.
 		#endif
@@ -2537,7 +2854,7 @@ void do_ai_frame(object *obj)
 
 				if ((obj_ref & 1) && ((aip->GOAL_STATE == AIS_SRCH) || (aip->GOAL_STATE == AIS_LOCK))) {
 					if (player_visibility) // == 2)
-						ai_turn_towards_vector(&vec_to_player, obj, robptr->turn_time[Difficulty_level]);
+						ai_turn_towards_vector(&vec_to_player, obj, survival_boss_turn_time(objnum, robptr));
 					else
 						ai_turn_randomly(&vec_to_player, obj, robptr->turn_time[Difficulty_level], previous_visibility);
 				}
@@ -2681,7 +2998,7 @@ void do_ai_frame(object *obj)
 							ai_do_actual_firing_stuff(obj, aip, ailp, robptr, &vec_to_player, dist_to_player, &gun_point, player_visibility, object_animates);
 						return;
 					}
-					ai_turn_towards_vector(&vec_to_player, obj, robptr->turn_time[Difficulty_level]);
+					ai_turn_towards_vector(&vec_to_player, obj, survival_boss_turn_time(objnum, robptr));
 					ai_multi_send_robot_position(objnum, -1);
 				}
 
@@ -2827,7 +3144,7 @@ void do_ai_frame(object *obj)
 				compute_vis_and_vec(obj, &vis_vec_pos, ailp, &vec_to_player, &player_visibility, robptr, &visibility_and_vec_computed);
 
 				if (player_visibility) {
-					ai_turn_towards_vector(&vec_to_player, obj, robptr->turn_time[Difficulty_level]);
+					ai_turn_towards_vector(&vec_to_player, obj, survival_boss_turn_time(objnum, robptr));
 					ai_multi_send_robot_position(objnum, -1);
 				} else if (!(Game_mode & GM_MULTI))
 					ai_turn_randomly(&vec_to_player, obj, robptr->turn_time[Difficulty_level], previous_visibility);
@@ -2840,7 +3157,7 @@ void do_ai_frame(object *obj)
 						return;
 
 					if (player_visibility) {
-						ai_turn_towards_vector(&vec_to_player, obj, robptr->turn_time[Difficulty_level]);
+						ai_turn_towards_vector(&vec_to_player, obj, survival_boss_turn_time(objnum, robptr));
 						ai_multi_send_robot_position(objnum, -1);
 					} else if (!(Game_mode & GM_MULTI))
 						ai_turn_randomly(&vec_to_player, obj, robptr->turn_time[Difficulty_level], previous_visibility);
@@ -2857,7 +3174,7 @@ void do_ai_frame(object *obj)
 							return;
 						}
 					}
-					ai_turn_towards_vector(&vec_to_player, obj, robptr->turn_time[Difficulty_level]);
+					ai_turn_towards_vector(&vec_to_player, obj, survival_boss_turn_time(objnum, robptr));
 					ai_multi_send_robot_position(objnum, -1);
 				} else if (!(Game_mode & GM_MULTI)) {
 					ai_turn_randomly(&vec_to_player, obj, robptr->turn_time[Difficulty_level], previous_visibility);
@@ -2873,7 +3190,7 @@ void do_ai_frame(object *obj)
 					if (player_visibility) {
 						if (!ai_multiplayer_awareness(obj, 69))
 							return;
-						ai_turn_towards_vector(&vec_to_player, obj, robptr->turn_time[Difficulty_level]);
+						ai_turn_towards_vector(&vec_to_player, obj, survival_boss_turn_time(objnum, robptr));
 						ai_multi_send_robot_position(objnum, -1);
 					} else if (!(Game_mode & GM_MULTI)) {
 						ai_turn_randomly(&vec_to_player, obj, robptr->turn_time[Difficulty_level], previous_visibility);

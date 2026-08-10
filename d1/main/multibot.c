@@ -782,8 +782,6 @@ multi_explode_robot_sub(int botnum, int killer,char isthief)
 {
 	object *robot;
 
-	killer = killer;
-
 	if ((botnum < 0) || (botnum > Highest_object_index)) { // Objnum in range?
 		Int3(); // See rob
 		return 0;
@@ -827,8 +825,14 @@ multi_explode_robot_sub(int botnum, int killer,char isthief)
 			start_boss_death_sequence(robot);
 		else
 			return 0;
-	} else
+	} else {
+		// Survival elites go up harder than the rest. No-op for everything else, and never reached
+		// for bosses -- they have their own death sequence above, which this would fight. killer is
+		// passed through unmodified from this function's own parameter -- it's the BOUNTY kind's
+		// only way to know whether *this* player was the one who earned the score bonus.
+		survival_robot_death_blast(robot, killer);
 		explode_object(robot, STANDARD_EXPL_DELAY);
+	}
 	return 1;
 }
 

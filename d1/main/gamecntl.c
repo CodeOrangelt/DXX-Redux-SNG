@@ -78,6 +78,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "scores.h"
 
 #include "multi.h"
+#include "survival.h"
 #include "cntrlcen.h"
 #include "fuelcen.h"
 #include "pcx.h"
@@ -1440,6 +1441,17 @@ int ReadControls(d_event *event)
 		{
 			return multi_message_input_sub(key);
 		}
+
+		if ( (Game_mode & GM_MULTI) && survival_shop_blocks_input() )
+		{
+			// Menu takes priority: every key is swallowed here regardless of
+			// what survival_shop_handle_key() actually does with it (it may
+			// have nothing left to do once the local player's readied up --
+			// see its comment), same as multi_message_input_sub() above
+			// unconditionally owning the keyboard while chat is open.
+			survival_shop_handle_key(key);
+			return 1;
+		}
 #endif
 
 #ifndef RELEASE
@@ -1487,9 +1499,16 @@ int ReadControls(d_event *event)
 	#ifdef NETWORK
 	if((Game_mode & GM_NETWORK) && (Netgame.SpawnStyle == SPAWN_STYLE_PREVIEW) && Player_is_dead && Player_exploded) {
 		if (!Endlevel_sequence && (Newdemo_state != ND_STATE_PLAYBACK)) {
-			should_read_controls = 1; 
+			should_read_controls = 1;
 		}
 	}
+
+	// Survival's shop takes priority over the SPAWN_STYLE_PREVIEW override
+	// above too: browsing (or waiting on teammates in) the shop should never
+	// let thrust, turning, firing, or weapon-select leak through just
+	// because a death-preview respawn happened to also be in flight.
+	if ((Game_mode & GM_MULTI) && survival_shop_blocks_input())
+		should_read_controls = 0;
 	#endif
 
 	if (should_read_controls)

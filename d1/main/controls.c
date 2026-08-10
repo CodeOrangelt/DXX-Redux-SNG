@@ -33,6 +33,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "mouse.h"
 #include "kconfig.h"
 #include "playsave.h" // CED -- OSM 2.0
+#include "survival.h"
 
 //look at keyboard, mouse, joystick, CyberMan, whatever, and set 
 //physics vars rotvel, velocity
@@ -41,7 +42,23 @@ void read_flying_controls( object * obj )
 {
 	Assert(FrameTime > 0); 		//Get MATT if hit this!
 
-	int no_thrust = 0; 
+#ifdef NETWORK
+	// Menu takes priority: while the shop blocks input, kconfig_read_
+	// controls() never runs (see the should_read_controls gate in
+	// gamecntl.c's ReadControls()), so Controls.* below would otherwise
+	// just keep holding whatever value they had the instant the shop
+	// opened -- if the player was mid-thrust or mid-turn right then, the
+	// ship would keep drifting/spinning on that stale input for the whole
+	// time the menu is up. Zero and bail before any of it gets read.
+	if ((Game_mode & GM_MULTI) && survival_shop_blocks_input())
+	{
+		vm_vec_zero(&obj->mtype.phys_info.thrust);
+		vm_vec_zero(&obj->mtype.phys_info.rotthrust);
+		return;
+	}
+#endif
+
+	int no_thrust = 0;
 #ifdef NETWORK
 	if((Game_mode & GM_NETWORK) && (Netgame.SpawnStyle == SPAWN_STYLE_PREVIEW) && Player_is_dead && Player_exploded) {
 		no_thrust = 1; 
@@ -91,6 +108,10 @@ void read_flying_controls( object * obj )
 		}
 
 		vm_vec_scale( &obj->mtype.phys_info.thrust, fixdiv(Player_ship->max_thrust,ft) );
+
+		// Survival shop: a purchased speed tier scales thrust only, not
+		// rotation -- a faster ship, not a twitchier one.
+		vm_vec_scale( &obj->mtype.phys_info.thrust, survival_speed_multiplier() );
 
 		if ((ft < F1_0/2) && (ft << 15 <= Player_ship->max_rotthrust)) {
 			ft = (Player_ship->max_thrust >> 15) + 1;

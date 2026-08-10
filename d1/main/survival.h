@@ -67,6 +67,14 @@ void survival_do_frame(void);
 // ends on a full team wipe within a single wave.
 int survival_player_died(int pnum);
 
+// Call right after a Survival respawn's init_player_stats_new_ship()/
+// StartLevel(1) (gameseq.c), whether or not this particular respawn was an
+// extra-life save -- no-op unless survival_player_died() actually spent one
+// on this death. Grants a few seconds of invulnerability so a robot sitting
+// on the spawn point can't erase the revive on the very next frame; see
+// SURVIVAL_REVIVE_INVULN_DURATION in survival.c.
+void survival_maybe_grant_revive_invulnerability(int pnum);
+
 // True if pnum is currently down (spectating, awaiting revive at wave clear).
 int survival_is_eliminated(int pnum);
 
@@ -85,6 +93,69 @@ void survival_add_extra_life(void);
 // position. No-op outside Survival mode.
 void survival_note_robot_kill(object *robot, int points);
 
+// "Elite" robots -- an occasional spawn, drawn with a colored 3D outline and a name readout under
+// the model, that plays differently from a normal robot of its type for as long as it's alive:
+//   BOUNTY   worth a large score bonus on top of its normal kill value -- a priority target, not a
+//            mechanical twist on how it fights.
+//   BRUTE    extra shields on top of the normal wave/difficulty scaling.
+//   SWARMER  splits into fast little fragments on death. The fragments are plain, non-elite copies
+//            of the swarmer's own type, so a fragment can never itself be a swarmer -- no chain
+//            reaction is possible by construction, not by having to mark them as some other kind.
+// Every kind also gets a harder death blast than a normal robot. Which robots are elite, and which
+// kind, is decided once by the spawner and shipped in the spawn packet, so every machine agrees;
+// nothing here re-rolls locally.
+//
+// A RUNNER kind (outran the speed cap) used to be here instead of BOUNTY -- pulled after a match
+// made clear that, with every Survival robot already hunting at the mode's shared max speed
+// (SURVIVAL_ROBOT_SPEED_SCALE, survival.c), "2x that" wasn't a distinct enough read in practice to be
+// worth a whole kind's outline slot. BOUNTY reuses its old id (1) and its yellow/gold outline color.
+#define SURVIVAL_ELITE_NONE            0
+#define SURVIVAL_ELITE_BOUNTY          1
+#define SURVIVAL_ELITE_BRUTE           2
+#define SURVIVAL_ELITE_SWARMER         3
+
+// survival_robot_is_elite() takes an objnum (not an object *) because the renderer works in objnums,
+// and is safe to call on anything -- it returns SURVIVAL_ELITE_NONE outside Survival and for
+// non-robots. No-op cost either way.
+int survival_robot_is_elite(int objnum);
+
+// Outline/label color for a kind returned by survival_robot_is_elite() above. -1 for
+// SURVIVAL_ELITE_NONE, matching g3d_interp_outline_color's own "leave the model's own colour" value.
+int survival_robot_elite_color(int kind);
+
+// True while objnum is one of this wave's tracked boss robots (see show_survival_boss_bars()'s
+// Survival_bosses[] tracking). Used by ai.c's boss-only AI hooks -- faster fire rate, quicker turning
+// -- so a Survival boss plays noticeably differently from a normal robot of the same type, not just
+// tougher. Safe to call on anything: 0 outside Survival.
+int survival_robot_is_boss(int objnum);
+
+// 1 for the first boss wave (wave 10), 2 for the second (wave 20), and so on -- 0 outside a boss
+// wave or outside Survival. Feeds ai.c's escalating boss-only AI hooks (survival_boss_scale() there),
+// so each successive boss fights harder than the last rather than every boss playing identically.
+int survival_boss_tier(void);
+
+// Label text ("BOUNTY"/"BRUTE"/"SWARMER") for a kind returned by survival_robot_is_elite() above.
+// "" for SURVIVAL_ELITE_NONE.
+const char *survival_robot_elite_name(int kind);
+
+// Lays an area-damage blast over a dying elite's normal explosion (every kind); for a SWARMER,
+// scatters its fragments too; for a BOUNTY, pays out a score bonus. Call from wherever a robot is
+// actually destroyed, on every machine (multi_explode_robot_sub(), multibot.c) -- it is driven off
+// the synced kind rather than a packet of its own; the fragment spawn re-uses spawner authority
+// internally, so this needs no such gate at the call site. `killer` is that robot's killer objnum
+// (same value multi_explode_robot_sub() receives) -- needed so the BOUNTY bonus lands on the one
+// player who actually got the kill rather than on every machine that processes the death. No-op for
+// non-elites.
+void survival_robot_death_blast(object *robot, int killer);
+
+// Call from collide_player_and_powerup() (collide.c) right after do_powerup() returns 0 for a
+// pickup attempt that was otherwise legitimate: the player already has/holds whatever it offers, so
+// stock behaviour leaves it sitting on the floor uncollected. Converts it into a small amount of
+// score and reports 1 (as if it had been used) so the caller destroys and syncs it exactly like a
+// normal pickup. Returns 0 (does nothing) outside Survival, for an observer, or for any powerup kind
+// Survival's own tables don't produce. No-op cost outside Survival.
+int survival_convert_wasted_pickup(object *powerup);
+
 // Draws the floating "+points" popups and the nearest-robot direction
 // arrow, both in the configured reticle color. Uses 3D projection like
 // show_survival_boss_bars(), so it belongs in the same post-render pass in
@@ -101,6 +172,11 @@ void survival_draw_hud(void);
 // in gamerend.c. No-op outside Survival mode.
 void show_survival_boss_bars(void);
 
+// Draws the shield-count readout under each elite robot's model -- same projection, same
+// post-3D-render pass, called right alongside show_survival_boss_bars() in gamerend.c.
+// No-op outside Survival mode.
+void survival_draw_elite_labels(void);
+
 // Fills out_objnums/out_fracs (parallel arrays, up to max_out entries) with
 // the objnums and remaining-shields fraction (0..F1_0) of currently-alive
 // boss robots, pruning any that have died since the last call. Returns the
@@ -113,5 +189,44 @@ void multi_do_survival_wave_state(const ubyte *buf);
 void multi_do_survival_spawn_robot(const ubyte *buf);
 void multi_do_survival_eliminated(const ubyte *buf);
 void multi_do_survival_shields(const ubyte *buf);
+void multi_do_survival_shop_ready(const ubyte *buf);
+
+// Shop: opens after every 5th wave clears. Waits for every currently-
+// connected player to hit ESC (readiness is synced via MULTI_SURVIVAL_SHOP_
+// READY), up to a SURVIVAL_SHOP_DURATION hard cap (survival.c), then runs a
+// 5s voice countdown into the next wave.
+
+// True while the local player's buy list should be interactive and its
+// keys/mouse diverted away from normal ship controls -- narrower than
+// survival_shop_blocks_input() below, which also covers the readied-and-
+// waiting and countdown stretches where there's nothing left to buy but
+// flight control still shouldn't return early.
+int survival_shop_is_open(void);
+
+// True for the whole shop experience: buying, readied-but-waiting-on-others,
+// and the trailing voice countdown. This is the one to gate flight control,
+// weapon firing, other key handlers, and mouse capture on -- see the
+// should_read_controls gate in gamecntl.c's ReadControls() and
+// survival_shop_do_mouse() (survival.c).
+int survival_shop_blocks_input(void);
+
+// Routes a key event to the shop (buy an item, or ESC to ready up). Call
+// site (ReadControls(), gamecntl.c) should call this whenever survival_shop_
+// blocks_input() is true and swallow the key unconditionally either way --
+// this has nothing left to do once the local player has readied up, but the
+// key still shouldn't fall through to any other handler.
+void survival_shop_handle_key(int key);
+
+// Draws the shop panel (buy list or, once readied/waiting, a compact status
+// panel) and its countdown banner. No-op outside survival_shop_blocks_
+// input(). Call from the same post-3D HUD pass as survival_draw_hud().
+void survival_shop_draw(void);
+
+// Thrust/damage multipliers from purchased physics upgrades, applied to the
+// local player only. F1_0 = no change (outside Survival, or before any
+// purchase). See read_flying_controls() (controls.c) and
+// apply_damage_to_player() (collide.c) for the call sites.
+fix survival_speed_multiplier(void);
+fix survival_damage_multiplier(void);
 
 #endif /* _SURVIVAL_H */

@@ -725,6 +725,16 @@ int allowed_to_fire_laser(void)
 		return 0;
 	}
 
+	// Menu takes priority: don't let a fire button that was already held
+	// down when the shop opened keep firing every frame just because
+	// nothing's re-reading Controls.fire_primary_state while it's up (see
+	// the should_read_controls gate in gamecntl.c's ReadControls()).
+	if ((Game_mode & GM_MULTI) && survival_shop_blocks_input()) {
+		Global_laser_firing_count = 0;
+		Global_missile_firing_count = 0;
+		return 0;
+	}
+
 	//	Make sure enough time has elapsed to fire laser
 	if (Next_laser_fire_time > GameTime64)
 		return 0;

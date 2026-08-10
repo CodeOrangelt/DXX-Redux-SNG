@@ -2502,9 +2502,13 @@ void hud_show_kill_list()
 
 
 		} else if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) ) {
-			// In Survival, replace the score column with EL for local player.
+			// Survival: score and EL count are one printf, not two separate
+			// ones at x1 and lagx -- a wide score (several digits once
+			// you've been playing a while) printed left-justified from x1
+			// could run right into whatever sat at lagx. One string that
+			// flows left-to-right can't overlap itself.
 			if (Netgame.gamemode == NETGAME_SURVIVAL && player_num == Player_num && Show_kill_list != 3)
-				gr_printf(x1, y, "EL: %d", survival_extra_lives());
+				gr_printf(x1,y,"%d  EL:%d",Players[player_num].score, survival_extra_lives());
 			else
 				gr_printf(x1,y,"%-6d",Players[player_num].score);
 		}
@@ -4340,6 +4344,57 @@ void show_survival_boss_bars(void)
 #ifdef OGL
 		glLineWidth(linedotscale);
 #endif
+	}
+}
+
+// Kind-name readout under each elite robot's model ("BOUNTY"/"BRUTE"/"SWARMER"), the same way BOSS's
+// label sits under its health bar above -- projected with the identical g3_rotate_point()/g3_project
+// _point() pair so it tracks the model in screen space frame to frame, and skipped the same way on
+// an off-screen or degenerate projection. Colored per kind (survival_robot_elite_color()) so the
+// label reinforces the outline rather than repeating information the outline color already gave.
+//
+// Scans every object rather than keeping a tracked list the way bosses do (Survival_bosses[],
+// survival.c): a boss is worth tracking because its max_shields needs to be remembered separately
+// from its current shields for the bar's fill fraction, but an elite has no second number to carry,
+// so there is nothing a tracked list would save.
+void survival_draw_elite_labels(void)
+{
+	int i;
+
+	if (!(Game_mode & GM_MULTI) || Netgame.gamemode != NETGAME_SURVIVAL)
+		return;
+
+	gr_set_curfont(GAME_FONT);
+
+	for (i = 0; i <= Highest_object_index; i++)
+	{
+		object *obj = &Objects[i];
+		int kind = survival_robot_is_elite(i);
+		g3s_point pt;
+		fix dy;
+		const char *s;
+		int w, h, aw;
+
+		if (kind == SURVIVAL_ELITE_NONE)
+			continue;
+		if (obj->flags & (OF_SHOULD_BE_DEAD | OF_EXPLODING))
+			continue;
+
+		g3_rotate_point(&pt, &obj->pos);
+		if (pt.p3_codes != 0) // off screen
+			continue;
+
+		g3_project_point(&pt);
+		if (pt.p3_flags & PF_OVERFLOW)
+			continue;
+
+		dy = -fixmuldiv(fixmul(obj->size, Matrix_scale.y), i2f(grd_curcanv->cv_bitmap.bm_h) / 2, pt.p3_z);
+
+		s = survival_robot_elite_name(kind);
+		gr_get_string_size(s, &w, &h, &aw);
+
+		gr_set_fontcolor(survival_robot_elite_color(kind), -1);
+		gr_string(f2i(pt.p3_sx) - w / 2, f2i(pt.p3_sy - dy) + FSPACY(1), s);
 	}
 }
 

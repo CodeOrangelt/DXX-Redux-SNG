@@ -1407,6 +1407,9 @@ void apply_damage_to_player(object *player, object *killer, fix damage, ubyte po
 
 
 	if (player->id == Player_num) {		//is this the local player?
+		// Survival shop: a purchased armor tier scales down incoming damage.
+		damage = fixmul(damage, survival_damage_multiplier());
+
 		Players[Player_num].shields -= damage;
 		PALETTE_FLASH_ADD(f2i(damage)*4,-f2i(damage/2),-f2i(damage/2));	//flash red
 
@@ -1718,6 +1721,14 @@ void collide_player_and_powerup( object * player, object * powerup, vms_vector *
 		int powerup_used;
 
 		powerup_used = do_powerup(powerup);
+
+#ifdef NETWORK
+		// Survival: nothing left to give (ammo/shields full, primary already owned, cloak/invuln
+		// already active, laser already maxed) converts to scrap points instead of sitting
+		// uncollectible on the floor. No-op outside Survival.
+		if (!powerup_used)
+			powerup_used = survival_convert_wasted_pickup(powerup);
+#endif
 
 		if (powerup_used)	{
 			powerup->flags |= OF_SHOULD_BE_DEAD;
