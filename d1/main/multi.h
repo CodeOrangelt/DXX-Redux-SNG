@@ -70,7 +70,7 @@ extern int multi_protocol; // set and determinate used protocol
 // bump matters: an old peer would happily relay gameplay that a new peer
 // now discards, which would look like a totally broken game rather than the
 // version mismatch it is.
-#define MULTI_PROTO_VERSION 30083 // SNG 1.7 + Arcade mode + Survival
+#define MULTI_PROTO_VERSION 30084 // SNG 1.7 + Arcade mode + Survival (+ shop ready-check)
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -141,6 +141,7 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_SURVIVAL_SPAWN_ROBOT , 24)  \
 	VALUE(MULTI_SURVIVAL_ELIMINATED  , 2)   \
 	VALUE(MULTI_SURVIVAL_SHIELDS     , 10)  \
+	VALUE(MULTI_SURVIVAL_SHOP_READY  , 2)   \
 	AFTER
 for_each_multiplayer_command(enum {, define_multiplayer_command, });
 

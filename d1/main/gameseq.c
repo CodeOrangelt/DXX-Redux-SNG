@@ -1284,6 +1284,11 @@ void DoPlayerDead()
 				Players[Player_num].flags |= PLAYER_FLAGS_INVULNERABLE | PLAYER_FLAGS_CLOAKED;
 				Players[Player_num].cloak_time = GameTime64;
 			}
+			else if ((Game_mode & GM_MULTI) && Netgame.gamemode == NETGAME_SURVIVAL)
+				// Not eliminated -- either a fresh spawn or an extra life
+				// just saved us. survival_maybe_grant_revive_invulnerability()
+				// no-ops unless it was the latter.
+				survival_maybe_grant_revive_invulnerability(Player_num);
 #endif
 		}
 	}

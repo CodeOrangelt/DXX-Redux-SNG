@@ -73,6 +73,15 @@ extern int ai_behavior_to_mode(int behavior);
 //	max_length is maximum depth of path to create.
 //	If -1, use default:	MAX_DEPTH_TO_SEARCH_FOR_PLAYER
 extern void create_path_to_player(object *objp, int max_length, int safety_flag);
+
+//	True while Survival's horde should hunt players across the whole level rather than react to one
+//	wandering past. Defined in ai.c, where the full note on what it does and does not change lives.
+extern int survival_horde_hunts(void);
+
+//	Steer an object towards a point. Exposed so Survival's flow-field pursuit can reuse the same
+//	movement primitive stock path-following uses, rather than a second one that feels different.
+extern void ai_path_set_orient_and_vel(object *objp, vms_vector *goal_point);
+
 extern void attempt_to_resume_path(object *objp);
 
 //	When a robot and a player collide, some robots attack!
