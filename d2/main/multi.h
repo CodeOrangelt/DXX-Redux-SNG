@@ -147,6 +147,7 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_REPAIR               , 11)  \
 	VALUE(MULTI_SHIP_STATUS          , 43)  \
 	VALUE(MULTI_CREATE_EXPLOSION2    , 24)  \
+	VALUE(MULTI_RACE_UPDATE          , 5)  \
 	AFTER
 for_each_multiplayer_command(enum {, define_multiplayer_command, });
 
@@ -162,6 +163,7 @@ for_each_multiplayer_command(enum {, define_multiplayer_command, });
 #define NETGAME_HOARD           5
 #define NETGAME_TEAM_HOARD      6
 #define NETGAME_BOUNTY		7
+#define NETGAME_RACE		8
 
 #define CTF_VARIANT_VANILLA    0   // D2's native flag-object CTF
 #define CTF_VARIANT_SNG        1   // D1 SNG-style CTF: key powerups double as flags, scored at your fuelcen
@@ -240,7 +242,7 @@ enum { for_each_netflag_value(define_netflag_bit_enum) };
 enum { for_each_netflag_value(define_netflag_bit_mask) };
 enum { NETFLAG_DOPOWERUP = 0 for_each_netflag_value(define_netflag_powerup_mask) };
 
-#define MULTI_GAME_TYPE_COUNT	8
+#define MULTI_GAME_TYPE_COUNT	9
 #define MULTI_GAME_NAME_LENGTH	17
 #define MULTI_ALLOW_POWERUP_MAX 27
 extern char *multi_allow_powerup_text[MULTI_ALLOW_POWERUP_MAX];

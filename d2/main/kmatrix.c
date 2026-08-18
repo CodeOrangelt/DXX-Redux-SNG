@@ -45,6 +45,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "text.h"
 #include "rbaudio.h"
 #include "multi.h"
+#include "race.h"
 #include "kmatrix.h"
 #include "gauges.h"
 #include "pcx.h"
@@ -60,6 +61,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #define KMATRIX_VIEW_SEC 7 // Time after reactor explosion until new level - in seconds
 void kmatrix_phallic ();
 void kmatrix_redraw_coop();
+void kmatrix_redraw_race();
 fix64 StartAbortMenuTime;
 
 void kmatrix_draw_item( int  i, int *sorted )
@@ -221,6 +223,10 @@ void kmatrix_redraw(kmatrix_screen *km)
 	{
 		kmatrix_redraw_coop();
 	}
+	else if (Game_mode & GM_RACE)
+	{
+		kmatrix_redraw_race();
+	}
 	else
 	{
 		multi_sort_kill_list();
@@ -251,6 +257,73 @@ void kmatrix_redraw(kmatrix_screen *km)
 
 			kmatrix_draw_item( i, sorted );
 		}
+	}
+
+	gr_palette_load(gr_palette);
+}
+
+void kmatrix_draw_race_names(int *sorted)
+{
+	sorted=sorted;
+
+	gr_set_fontcolor( BM_XRGB(63,31,31),-1 );
+	gr_string( CENTERSCREEN-FSPACX(15), FSPACY(40), "LAPS");
+	gr_set_fontcolor( BM_XRGB(63,31,31),-1 );
+	gr_string( CENTERSCREEN+FSPACX(40), FSPACY(40), "TIME");
+}
+
+void kmatrix_draw_race_item(int i, int *sorted)
+{
+	int x, y, pnum = sorted[i];
+	race_player_info *rp = &Race_player[pnum];
+	char buf[16];
+	char name[16];
+
+	y = FSPACY(50+i*9);
+	sprintf(name, "%d. %s", i+1, Players[pnum].callsign);
+	gr_printf( FSPACX(CENTERING_OFFSET(N_players)), y, "%s", name );
+
+	x = CENTERSCREEN-FSPACX(15);
+	gr_set_fontcolor( BM_XRGB(60,40,10),-1 );
+	gr_printf( x, y, "%d/%d", rp->laps_completed, Race_laps_to_win );
+
+	x = CENTERSCREEN+FSPACX(40);
+	if (rp->finished)
+	{
+		int secs = f2i(rp->finish_time);
+		sprintf(buf, "%d:%02d", secs/60, secs%60);
+	}
+	else
+		strcpy(buf, "--:--");
+	gr_set_fontcolor( BM_XRGB(60,40,10),-1 );
+	gr_printf( x, y, "%s", buf );
+}
+
+void kmatrix_redraw_race()
+{
+	int i, color;
+	int sorted[MAX_PLAYERS];
+
+	grd_curcanv->cv_font = MEDIUM3_FONT;
+	gr_string( 0x8000, FSPACY(10), "RACE RESULTS");
+	grd_curcanv->cv_font = GAME_FONT;
+
+	race_get_positions(sorted);
+	kmatrix_draw_race_names(sorted);
+
+	for (i=0; i<N_players; i++ )
+	{
+		if (Game_mode & GM_TEAM)
+			color = get_color_for_team(sorted[i]);
+		else
+			color = get_color_for_player(sorted[i], 0);
+
+		if (Players[sorted[i]].connected==CONNECT_DISCONNECTED)
+			gr_set_fontcolor(gr_find_closest_color(31,31,31),-1);
+		else
+			gr_set_fontcolor(BM_XRGB(selected_player_rgb[color].r,selected_player_rgb[color].g,selected_player_rgb[color].b),-1 );
+
+		kmatrix_draw_race_item( i, sorted );
 	}
 
 	gr_palette_load(gr_palette);

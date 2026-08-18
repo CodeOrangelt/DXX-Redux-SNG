@@ -42,6 +42,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "sounds.h"
 #ifdef NETWORK
 #include "multi.h"
+#include "race.h"
 #endif
 #include "endlevel.h"
 #include "cntrlcen.h"
@@ -753,6 +754,115 @@ void hud_show_timer_count()
 	}
 #endif
 }
+
+#ifdef NETWORK
+// Ordinal suffix for a 1-based rank ("1st", "2nd", "3rd", "4th", ...).
+static const char *race_rank_suffix(int rank)
+{
+	if (rank % 100 < 11 || rank % 100 > 13)
+	{
+		switch (rank % 10)
+		{
+			case 1: return "st";
+			case 2: return "nd";
+			case 3: return "rd";
+		}
+	}
+	return "th";
+}
+
+void race_draw_hud()
+{
+	char buf[64];
+	int w, h, aw;
+	int y = LINE_SPACING*2 + FSPACY(1);
+
+	if (HUD_toolong)
+		return;
+
+	gr_set_curfont(GAME_FONT);
+	if (Color_0_31_0 == -1)
+		Color_0_31_0 = BM_XRGB(0,31,0);
+	gr_set_fontcolor(Color_0_31_0, -1);
+
+	if (race_countdown_active())
+	{
+		int secs = race_countdown_seconds_left();
+
+		gr_set_curfont(MEDIUM3_FONT);
+		if (secs > 0)
+			sprintf(buf, "%d", secs);
+		else
+			strcpy(buf, "GO!");
+		gr_get_string_size(buf, &w, &h, &aw);
+		gr_string(0x8000, GHEIGHT/3, buf);
+		gr_set_curfont(GAME_FONT);
+		return;
+	}
+
+	{
+		char banner[32];
+
+		if (race_get_banner(banner, sizeof(banner)))
+		{
+			gr_set_curfont(MEDIUM3_FONT);
+			gr_get_string_size(banner, &w, &h, &aw);
+			gr_string(0x8000, GHEIGHT/3, banner);
+			gr_set_curfont(GAME_FONT);
+		}
+	}
+
+	{
+		race_player_info *rp = &Race_player[Player_num];
+
+		if (rp->finished)
+			strcpy(buf, "FINISHED");
+		else
+			sprintf(buf, "Lap %d/%d", min(rp->laps_completed+1, Race_laps_to_win), Race_laps_to_win);
+
+		gr_get_string_size(buf, &w, &h, &aw);
+		gr_string(grd_curcanv->cv_bitmap.bm_w-w-FSPACX(1), y, buf);
+		y += LINE_SPACING;
+
+		{
+			int rank = race_get_rank(Player_num);
+
+			if (rank > 0)
+			{
+				sprintf(buf, "Position: %d%s", rank, race_rank_suffix(rank));
+				gr_get_string_size(buf, &w, &h, &aw);
+				gr_string(grd_curcanv->cv_bitmap.bm_w-w-FSPACX(1), y, buf);
+				y += LINE_SPACING;
+			}
+		}
+
+		{
+			vms_vector dir;
+			fix dist;
+
+			if (!rp->finished && race_get_next_checkpoint_vec(&dir, &dist))
+			{
+				fixang ang = vm_vec_delta_ang(&ConsoleObject->orient.fvec, &dir, &ConsoleObject->orient.uvec);
+				double degrees = (double)ang * 360.0 / 65536.0;
+				const char *arrow;
+
+				if (degrees > -25 && degrees < 25)
+					arrow = "^";
+				else if (degrees >= 25 && degrees < 155)
+					arrow = ">";
+				else if (degrees <= -25 && degrees > -155)
+					arrow = "<";
+				else
+					arrow = "v";
+
+				sprintf(buf, "Checkpoint %s  %d", arrow, f2i(dist));
+				gr_get_string_size(buf, &w, &h, &aw);
+				gr_string(grd_curcanv->cv_bitmap.bm_w-w-FSPACX(1), y, buf);
+			}
+		}
+	}
+}
+#endif
 
 void hud_show_score_added()
 {
@@ -4613,6 +4723,11 @@ void draw_hud()
 
 	if ( !Rear_view && PlayerCfg.CurrentCockpitMode!=CM_REAR_VIEW)
 		hud_show_timer_count();
+
+#ifdef NETWORK
+	if ( !Rear_view && PlayerCfg.CurrentCockpitMode!=CM_REAR_VIEW && (Game_mode & GM_RACE))
+		race_draw_hud();
+#endif
 
 	//	Show other stuff if not in rearview or letterbox.
 	if (!Rear_view && PlayerCfg.CurrentCockpitMode!=CM_REAR_VIEW)
