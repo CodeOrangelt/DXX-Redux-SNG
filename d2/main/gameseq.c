@@ -458,6 +458,11 @@ void init_player_stats_new_ship(ubyte pnum)
 	Players[pnum].secondary_ammo[0] = 2 + NDL - Difficulty_level;
 	Players[pnum].primary_weapon_flags = HAS_LASER_FLAG;
 	Players[pnum].secondary_weapon_flags = HAS_CONCUSSION_FLAG;
+
+	// Race mode starts you empty -- no laser, no concussions. Everything you
+	// fire comes out of a mystery box and evaporates on a timer.
+	if (Game_mode & GM_RACE)
+		race_strip_loadout(pnum);
 	Players[pnum].afterburner_charge = 0;
 	Players[pnum].flags &= ~( PLAYER_FLAGS_QUAD_LASERS | PLAYER_FLAGS_AFTERBURNER | PLAYER_FLAGS_CLOAKED | PLAYER_FLAGS_INVULNERABLE | PLAYER_FLAGS_MAP_ALL | PLAYER_FLAGS_CONVERTER | PLAYER_FLAGS_AMMO_RACK | PLAYER_FLAGS_HEADLIGHT | PLAYER_FLAGS_HEADLIGHT_ON | PLAYER_FLAGS_FLAG);
 	Players[pnum].cloak_time = 0;
@@ -1958,34 +1963,7 @@ void InitPlayerPosition(int random_flag)
 #ifdef NETWORK	
 	else if ((Game_mode & GM_MULTI) && (Netgame.SpawnStyle == SPAWN_STYLE_PREVIEW) && Dead_player_camera != NULL)
 		NewPlayer = previewed_spawn_point; 
-	else if ((Game_mode & GM_RACE) && Race_num_checkpoints > 0 && random_flag == 1 &&
-		Player_num >= 0 && Player_num < MAX_PLAYERS &&
-		Race_player[Player_num].next_checkpoint < Race_num_checkpoints &&
-		RobotCenters[Race_player[Player_num].next_checkpoint].segnum >= 0 &&
-		RobotCenters[Race_player[Player_num].next_checkpoint].segnum <= Highest_segment_index)
-	{
-		// Race mode: respawn at whichever start position is closest (by
-		// in-mine path distance) to the checkpoint the player is still
-		// trying to reach, instead of a random spawn point, so dying
-		// mid-race doesn't cost a lap's worth of progress.
-		int target_segnum = RobotCenters[Race_player[Player_num].next_checkpoint].segnum;
-		vms_vector target_pos;
-		fix closest_dist = 0x7fffffff, dist;
-		int i;
-
-		compute_segment_center(&target_pos, &Segments[target_segnum]);
-
-		for (i = 0; i < NumNetPlayerPositions; i++)
-		{
-			dist = find_connected_distance(&target_pos, target_segnum, &Player_init[i].pos, Player_init[i].segnum, 30, WID_FLY_FLAG);
-			if (dist >= 0 && dist < closest_dist)
-			{
-				closest_dist = dist;
-				NewPlayer = i;
-			}
-		}
-	}
-#endif	
+#endif
 	else if (random_flag == 1)
 	{
 		int i, trys=0;
@@ -2020,7 +1998,28 @@ void InitPlayerPosition(int random_flag)
 	Assert(NewPlayer < NumNetPlayerPositions);
 	ConsoleObject->pos = Player_init[NewPlayer].pos;
 	ConsoleObject->orient = Player_init[NewPlayer].orient;
-#ifdef NETWORK	
+#ifdef NETWORK
+	{
+		// Race mode: come back at the last checkpoint captured, facing the
+		// next one, rather than at a level-editor start position. Falls
+		// through to the normal spawn until the first checkpoint is crossed.
+		vms_vector race_pos;
+		vms_matrix race_orient;
+		int race_segnum;
+
+		if ((Game_mode & GM_RACE) && random_flag == 1 && !is_observer() &&
+			race_get_respawn(&race_pos, &race_orient, &race_segnum))
+		{
+			ConsoleObject->pos = race_pos;
+			ConsoleObject->orient = race_orient;
+			Dead_player_camera = NULL;
+			obj_relink(ConsoleObject-Objects, race_segnum);
+			reset_player_object();
+			reset_cruise();
+			return;
+		}
+	}
+
 	if ((Game_mode & GM_MULTI) && (Netgame.SpawnStyle == SPAWN_STYLE_PREVIEW) && Dead_player_camera != NULL) {
 		ConsoleObject->orient = Dead_player_camera->orient;  
 		Dead_player_camera = NULL; 

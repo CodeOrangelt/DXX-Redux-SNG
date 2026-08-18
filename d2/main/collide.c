@@ -59,6 +59,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "textures.h"
 #ifdef NETWORK
 #include "multi.h"
+#include "race.h"
 #endif
 #include "cntrlcen.h"
 #include "newdemo.h"
@@ -1882,6 +1883,12 @@ void drop_player_eggs(object *playerobj) {
 
 void drop_player_eggs_remote(object *playerobj, ubyte remote)
 {
+	// Race mode: a wreck must not scatter permanent pickups, or dying while
+	// holding a mega would leave one on the track for the rest of the race.
+	// Everything a racer carries came from a mystery box on a fuse.
+	if (Game_mode & GM_RACE)
+		return;
+
 	if ((playerobj->type == OBJ_PLAYER) || (playerobj->type == OBJ_GHOST)) {
 		int	rthresh;
 		int	pnum = playerobj->id;
@@ -2576,6 +2583,14 @@ void collide_player_and_powerup( object * playerobj, object * powerup, vms_vecto
 
 	if (!Endlevel_sequence && !Player_is_dead && (playerobj->id == Player_num )) {
 		int powerup_used;
+
+#ifdef NETWORK
+		// Mystery boxes aren't networked objects -- every client spawns its
+		// own copy at the same map-authored spot -- so they must not go
+		// through multi_send_remobj()'s objnum mapping.
+		if ((Game_mode & GM_RACE) && race_box_hit(powerup))
+			return;
+#endif
 
 		powerup_used = do_powerup(powerup);
 

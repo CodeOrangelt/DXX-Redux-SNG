@@ -51,6 +51,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "text.h"
 #include "render.h"
 #include "piggy.h"
+#include "vclip.h"
 #include "laser.h"
 #include "playsave.h"
 #include "rle.h"
@@ -771,96 +772,432 @@ static const char *race_rank_suffix(int rank)
 	return "th";
 }
 
+// The only game font that honours gr_set_fontcolor() is GAME_FONT; the bigger
+// fonts are FT_COLOR bitmaps that always draw in their own baked palette,
+// which is why anything drawn in them comes out the same washed-out grey. So
+// the race HUD draws everything in GAME_FONT and gets its sizes by scaling the
+// font instead. FNTScaleX/Y feed FONTSCALE_*, gr_get_string_size() and the
+// FSPACX/FSPACY macros alike, so measurement stays consistent while pushed.
+static float Race_font_save_x = 1, Race_font_save_y = 1;
+
+static void race_font_push(float scale)
+{
+	Race_font_save_x = FNTScaleX;
+	Race_font_save_y = FNTScaleY;
+	FNTScaleX *= scale;
+	FNTScaleY *= scale;
+}
+
+static void race_font_pop(void)
+{
+	FNTScaleX = Race_font_save_x;
+	FNTScaleY = Race_font_save_y;
+}
+
+// Text with a one-pixel drop shadow, so the readouts stay legible against
+// bright mine walls without needing a heavy plate behind them.
+static void race_string(int x, int y, const char *s, int color)
+{
+	// Scale the shadow off the rendered glyph height, not off FNTScaleY
+	// directly: at 1080p with the placing pushed to 4.5x that came out around
+	// fifteen pixels, which hung the shadow down over the framerate counter.
+	int off = (int)(FNTScaleY * grd_curcanv->cv_font->ft_h) / 12;
+
+	if (off < 1)
+		off = 1;
+	else if (off > 5)
+		off = 5;
+
+	gr_set_fontcolor(BM_XRGB(0,0,0), -1);
+	gr_string(x + off, y + off, s);
+	gr_set_fontcolor(color, -1);
+	gr_string(x, y, s);
+}
+
+// Horizontally centred race_string(). gr_string()'s own 0x8000 centring
+// rounds each glyph's advance down before summing, so it lands a few pixels
+// away from what gr_get_string_size() reports -- which is what we measure
+// everything else against. Centre it ourselves so the two always agree.
+static void race_string_centered(int y, const char *s, int color)
+{
+	int w, h, aw;
+
+	gr_get_string_size(s, &w, &h, &aw);
+	race_string((GWIDTH - w)/2, y, s, color);
+}
+
+// Right-aligned label/value pair, as used by the lap timer block.
+static void race_string_right(int right, int y, const char *s, int color)
+{
+	int w, h, aw;
+
+	gr_get_string_size(s, &w, &h, &aw);
+	race_string(right - w, y, s, color);
+}
+
+// Floating labels sitting in the mine over checkpoints, the finish line and
+// boost pads, so a track reads without having to memorise it. Drawn from the
+// HUD pass, which still runs inside the 3D frame, so the g3 projection of a
+// world point is valid here.
+static void race_draw_track_labels()
+{
+	const race_label *labels;
+	int n = race_get_labels(&labels);
+	int i;
+	race_player_info *rp = &Race_player[Player_num];
+
+	for (i = 0; i < n; i++)
+	{
+		const race_label *rl = &labels[i];
+		g3s_point p;
+		char text[32];
+		int color, w, h, aw;
+		int is_next;
+
+		g3_rotate_point(&p, (vms_vector *)&rl->pos);
+
+		if (p.p3_codes)				// off screen
+			continue;
+		if (p.p3_z > i2f(500))		// too far to be worth the clutter
+			continue;
+
+		g3_project_point(&p);
+		if (p.p3_flags & PF_OVERFLOW)
+			continue;
+
+		if (!race_label_visible(i))	// behind geometry the renderer never walked
+			continue;
+
+		// Anything still owed on this lap is called out in cyan; whatever has
+		// already been collected sits back in muted green. Order doesn't
+		// matter, so every outstanding checkpoint lights up at once.
+		//
+		// Boost pads are never a target. They used to be tested here too, and
+		// since their label carries no checkpoint number they inherited
+		// checkpoint 0's state -- which is why they kept changing colour.
+		if (rp->finished || rl->kind == RACE_LABEL_BOOST)
+			is_next = 0;
+		else if (rl->kind == RACE_LABEL_FINISH)
+			is_next = race_finish_is_target();
+		else
+			is_next = race_checkpoint_is_target(rl->number);
+
+		switch (rl->kind)
+		{
+			case RACE_LABEL_FINISH:
+				// The same line is the lap line every time round and only
+				// becomes the finish on the last lap, so don't call it the
+				// finish until crossing it actually ends the race.
+				if (rp->laps_completed + 1 >= Race_laps_to_win)
+					strcpy(text, "FINISH");
+				else
+					strcpy(text, "LAP LINE");
+				color = BM_XRGB(31, 28, 8);
+				break;
+			case RACE_LABEL_BOOST:
+				strcpy(text, "BOOST");
+				color = BM_XRGB(31, 18, 0);
+				break;
+			default:
+				// No number: checkpoints are a set to collect in any
+				// order, not a sequence to follow.
+				strcpy(text, "CHECKPOINT");
+				color = BM_XRGB(8, 24, 8);
+				break;
+		}
+
+		if (is_next)
+			color = BM_XRGB(6, 28, 31);
+
+		// Close markers get drawn bigger so they read as physically there
+		// rather than as a flat HUD overlay.
+		race_font_push(p.p3_z < i2f(120) ? 1.5f : 1.0f);
+		gr_get_string_size(text, &w, &h, &aw);
+		race_string(f2i(p.p3_sx) - w/2, f2i(p.p3_sy) - h/2, text, color);
+		race_font_pop();
+	}
+}
+
+// Mario-Kart-style clock: running total, current lap, best lap so far, then
+// the completed splits underneath.
+// One row of the clock: the value right-aligned at `right` in a fixed-width
+// column, the label right-aligned just left of it. A single column width for
+// every row keeps the times in a straight line despite the proportional font.
+static void race_timer_line(int right, int y, const char *label, const char *value, int color)
+{
+	int w, h, aw, colw;
+
+	gr_get_string_size("0:00.00", &colw, &h, &aw);
+
+	gr_get_string_size(value, &w, &h, &aw);
+	race_string(right - w, y, value, color);
+
+	gr_get_string_size(label, &w, &h, &aw);
+	race_string(right - colw - FSPACX(3) - w, y, label, color);
+}
+
+// Mario-Kart-style clock: running total, current lap, best lap so far, then
+// every completed lap underneath. Returns the y just past the last row.
+static int race_draw_timer(int right, int y)
+{
+	char label[16];
+	char time[16];
+	const fix64 *splits;
+	fix64 best;
+	int n = race_get_splits(&splits, &best);
+	int i;
+	int line = LINE_SPACING;
+
+	race_format_time(time, sizeof(time), race_get_total_time());
+	race_timer_line(right, y, "TOTAL", time, BM_XRGB(28, 28, 31));
+	y += line;
+
+	if (!Race_player[Player_num].finished)
+	{
+		race_format_time(time, sizeof(time), race_get_lap_time());
+		race_timer_line(right, y, "THIS LAP", time, BM_XRGB(6, 31, 6));
+		y += line;
+	}
+
+	if (best)
+	{
+		race_format_time(time, sizeof(time), best);
+		race_timer_line(right, y, "BEST LAP", time, BM_XRGB(31, 24, 4));
+		y += line;
+	}
+
+	// Completed laps, oldest first, with the best one picked out.
+	for (i = 0; i < n; i++)
+	{
+		race_format_time(time, sizeof(time), splits[i]);
+		snprintf(label, sizeof(label), "LAP %d", i + 1);
+		race_timer_line(right, y, label, time,
+						(splits[i] == best) ? BM_XRGB(31, 24, 4) : BM_XRGB(18, 18, 20));
+		y += line;
+	}
+
+	return y;
+}
+
+// Weapons currently in the rack out of a mystery box: powerup icon, name,
+// count and the fuse left on each. Centred vertically down the left edge,
+// clear of the HUD messages at the top and the kill list at the bottom.
+static void race_draw_items(void)
+{
+	struct { int wclass, index, bitmap, w; } held[MAX_PRIMARY_WEAPONS + MAX_SECONDARY_WEAPONS];
+	int n = 0;
+	int pass, i;
+	int icon_h, col_w = 0, row, text_x, x, y;
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		int wclass = pass ? CLASS_SECONDARY : CLASS_PRIMARY;
+		int count = pass ? MAX_SECONDARY_WEAPONS : MAX_PRIMARY_WEAPONS;
+
+		for (i = 0; i < count && n < (int)(sizeof(held)/sizeof(held[0])); i++)
+			if (race_get_item_remaining(wclass, i))
+			{
+				held[n].wclass = wclass;
+				held[n].index = i;
+				held[n].bitmap = -1;
+				held[n].w = 0;
+				n++;
+			}
+	}
+
+	if (!n)
+		return;
+
+	race_font_push(1.5f);
+
+	icon_h = LINE_SPACING * 2;
+
+	// Measure first. Powerup bitmaps are not square, so each one is scaled by
+	// its own aspect ratio instead of being forced into a box, and the widest
+	// sets a single column so the names line up in a straight edge.
+	for (i = 0; i < n; i++)
+	{
+		int powerup = race_item_powerup(held[i].wclass, held[i].index);
+		int vclip = Powerup_info[powerup].vclip_num;
+		bitmap_index bi;
+		grs_bitmap *bm;
+
+		if (vclip < 0 || Vclip[vclip].num_frames <= 0)
+			continue;
+
+		bi = Vclip[vclip].frames[0];
+		PIGGY_PAGE_IN(bi);
+		bm = &GameBitmaps[bi.index];
+
+		if (bm->bm_h <= 0)
+			continue;
+
+		held[i].bitmap = bi.index;
+		held[i].w = (icon_h * bm->bm_w) / bm->bm_h;
+
+		if (held[i].w > col_w)
+			col_w = held[i].w;
+	}
+
+	col_w = (col_w * 108) / 100;			// a little air around the widest icon
+	row = icon_h + FSPACY(3);				// and between the rows
+	x = FSPACX(2);
+	text_x = x + col_w + FSPACX(4);
+	y = GHEIGHT/2 - (n * row)/2;
+
+	for (i = 0; i < n; i++)
+	{
+		fix64 left = race_get_item_remaining(held[i].wclass, held[i].index);
+		char buf[48];
+		int ammo, color;
+
+		// Runs amber, then red over the last few seconds so the player can
+		// see a weapon about to evaporate.
+		if (left < i2f(3))
+			color = BM_XRGB(31, 6, 6);
+		else if (left < i2f(6))
+			color = BM_XRGB(31, 20, 0);
+		else
+			color = BM_XRGB(26, 26, 28);
+
+		if (held[i].bitmap >= 0)
+			hud_bitblt_free(x + (col_w - held[i].w)/2, y, held[i].w, icon_h,
+							&GameBitmaps[held[i].bitmap]);
+
+		ammo = race_get_item_ammo(held[i].wclass, held[i].index);
+
+		if (ammo > 1)
+			snprintf(buf, sizeof(buf), "%s x%d", race_item_name(held[i].wclass, held[i].index), ammo);
+		else
+			snprintf(buf, sizeof(buf), "%s", race_item_name(held[i].wclass, held[i].index));
+
+		race_string(text_x, y, buf, color);
+
+		snprintf(buf, sizeof(buf), "%d.%d", (int)(left >> 16), (int)(((left & 0xffff) * 10) >> 16));
+		race_string(text_x, y + LINE_SPACING, buf, color);
+
+		y += row;
+	}
+
+	race_font_pop();
+}
+
 void race_draw_hud()
 {
 	char buf[64];
-	int w, h, aw;
-	int y = LINE_SPACING*2 + FSPACY(1);
+	int right, top;
+	race_player_info *rp = &Race_player[Player_num];
 
 	if (HUD_toolong)
 		return;
 
 	gr_set_curfont(GAME_FONT);
-	if (Color_0_31_0 == -1)
-		Color_0_31_0 = BM_XRGB(0,31,0);
-	gr_set_fontcolor(Color_0_31_0, -1);
+
+	if (PlayerCfg.RaceTrackLabels)
+		race_draw_track_labels();
+
+	// LINE_SPACING is relative to the current font scale, so pin that down
+	// before measuring anything.
+	right = GWIDTH - FSPACX(3);
+	top = LINE_SPACING*2 + FSPACY(2);
+
+	//	--- centre of screen: countdown, then event banners ---
 
 	if (race_countdown_active())
 	{
 		int secs = race_countdown_seconds_left();
+		int color;
 
-		gr_set_curfont(MEDIUM3_FONT);
+		switch (secs)
+		{
+			case 3:  color = BM_XRGB(31, 6, 6);  break;		// red
+			case 2:  color = BM_XRGB(31, 20, 0); break;		// amber
+			case 1:  color = BM_XRGB(31, 31, 0); break;		// yellow
+			default: color = BM_XRGB(4, 31, 4);  break;		// green: GO
+		}
+
 		if (secs > 0)
 			sprintf(buf, "%d", secs);
 		else
 			strcpy(buf, "GO!");
-		gr_get_string_size(buf, &w, &h, &aw);
-		gr_string(0x8000, GHEIGHT/3, buf);
-		gr_set_curfont(GAME_FONT);
+
+		race_font_push(4.0f);
+		race_string_centered(GHEIGHT/3, buf, color);
+		race_font_pop();
 		return;
 	}
 
 	{
 		char banner[32];
+		int style = RACE_BANNER_NORMAL;
 
-		if (race_get_banner(banner, sizeof(banner)))
+		if (race_get_banner(banner, sizeof(banner), &style))
 		{
-			gr_set_curfont(MEDIUM3_FONT);
-			gr_get_string_size(banner, &w, &h, &aw);
-			gr_string(0x8000, GHEIGHT/3, banner);
-			gr_set_curfont(GAME_FONT);
+			int color;
+
+			switch (style)
+			{
+				case RACE_BANNER_WARNING: color = BM_XRGB(31, 5, 5);  break;
+				case RACE_BANNER_FINISH:  color = BM_XRGB(31, 28, 8); break;
+				default:                  color = BM_XRGB(6, 31, 6);  break;
+			}
+
+			race_font_push(2.0f);
+			race_string_centered(GHEIGHT/3, banner, color);
+			race_font_pop();
 		}
 	}
 
+	//	--- top right: lap counter, the clock, then the placing ---
+
+	// Pushed up a size: at 1080p the base HUD font is close to unreadable
+	// from normal viewing distance. `top` is measured first, at the unscaled
+	// size, so the block still clears the score line above it.
 	{
-		race_player_info *rp = &Race_player[Player_num];
+		int y;
 
-		if (rp->finished)
-			strcpy(buf, "FINISHED");
-		else
-			sprintf(buf, "Lap %d/%d", min(rp->laps_completed+1, Race_laps_to_win), Race_laps_to_win);
+		race_font_push(1.75f);
+		{
+			int scaled_right = GWIDTH - FSPACX(2);
 
-		gr_get_string_size(buf, &w, &h, &aw);
-		gr_string(grd_curcanv->cv_bitmap.bm_w-w-FSPACX(1), y, buf);
-		y += LINE_SPACING;
+			if (rp->finished)
+				strcpy(buf, "FINISHED");
+			else
+				sprintf(buf, "LAP %d/%d", min(rp->laps_completed+1, Race_laps_to_win), Race_laps_to_win);
+
+			race_string_right(scaled_right, top, buf, rp->finished ? BM_XRGB(31, 28, 8) : BM_XRGB(6, 31, 6));
+
+			y = race_draw_timer(scaled_right, top + LINE_SPACING + FSPACY(1));
+		}
+		race_font_pop();
 
 		{
 			int rank = race_get_rank(Player_num);
 
 			if (rank > 0)
 			{
-				sprintf(buf, "Position: %d%s", rank, race_rank_suffix(rank));
-				gr_get_string_size(buf, &w, &h, &aw);
-				gr_string(grd_curcanv->cv_bitmap.bm_w-w-FSPACX(1), y, buf);
-				y += LINE_SPACING;
-			}
-		}
+				char place[16];
+				const char *suffix = race_rank_suffix(rank);
+				int color = BM_XRGB(24, 24, 26);		// silver, for 2nd and back
+				int w, h, aw;
 
-		{
-			vms_vector dir;
-			fix dist;
+				if (rank == 1)
+					color = BM_XRGB(31, 27, 4);			// gold
+				else if (rank == 3)
+					color = BM_XRGB(28, 16, 4);			// bronze
 
-			if (!rp->finished && race_get_next_checkpoint_vec(&dir, &dist))
-			{
-				fixang ang = vm_vec_delta_ang(&ConsoleObject->orient.fvec, &dir, &ConsoleObject->orient.uvec);
-				double degrees = (double)ang * 360.0 / 65536.0;
-				const char *arrow;
+				snprintf(place, sizeof(place), "%d%c%c", rank,
+						 toupper((unsigned char)suffix[0]), toupper((unsigned char)suffix[1]));
 
-				if (degrees > -25 && degrees < 25)
-					arrow = "^";
-				else if (degrees >= 25 && degrees < 155)
-					arrow = ">";
-				else if (degrees <= -25 && degrees > -155)
-					arrow = "<";
-				else
-					arrow = "v";
-
-				sprintf(buf, "Checkpoint %s  %d", arrow, f2i(dist));
-				gr_get_string_size(buf, &w, &h, &aw);
-				gr_string(grd_curcanv->cv_bitmap.bm_w-w-FSPACX(1), y, buf);
+				race_font_push(4.5f);
+				gr_get_string_size(place, &w, &h, &aw);
+				race_string(right - w, y + FSPACY(2), place, color);
+				race_font_pop();
 			}
 		}
 	}
+
+	race_draw_items();
 }
 #endif
 
@@ -2750,6 +3087,8 @@ void hud_show_kill_list()
 		lagx = x1 + FSPACX(15);
 		if (Netgame.KillGoal || Netgame.PlayTimeAllowed)
 				lagx+=FSPACX(18);
+		if (Game_mode & GM_RACE)
+				lagx+=FSPACX(16);	// "1st 2/3" needs more room than a kill count
 
 		loss_upx = lagx + FSPACX(15);
 		if(Netgame.RetroProtocol) {
@@ -2808,6 +3147,21 @@ void hud_show_kill_list()
 			else
 				gr_printf(x1,y,"%3d",team_kills[i]);
 
+
+		} else if (Game_mode & GM_RACE) {
+			// Standing beats a kill count in a race: where they are, and how
+			// far round they've got.
+			int place = race_get_rank(player_num);
+
+			if (Race_player[player_num].finished)
+				gr_printf(x1, y, "%d%s DONE", place, race_rank_suffix(place));
+			else
+				// Lap they are ON, matching the top-right counter exactly --
+				// showing laps COMPLETED here read as a different number for
+				// the same player.
+				gr_printf(x1, y, "%d%s %d/%d", place, race_rank_suffix(place),
+						  min(Race_player[player_num].laps_completed + 1, Race_laps_to_win),
+						  Race_laps_to_win);
 
 		} else if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) )
 			gr_printf(x1,y,"%-6d",Players[player_num].score);
@@ -4634,7 +4988,11 @@ void draw_hud()
 		newdemo_record_secondary_ammo(Players[pnum].secondary_ammo[Players[pnum].secondary_weapon]);
 	}
 
-	n_players = multi_get_kill_list(player_list);
+	// In a race the list is ranked by track position, not by kills.
+	if (Game_mode & GM_RACE)
+		n_players = race_get_positions(player_list);
+	else
+		n_players = multi_get_kill_list(player_list);
 
 	if (is_observer()) {
 		// Show HUD names

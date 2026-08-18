@@ -192,7 +192,9 @@ void kmatrix_status_msg (fix time, int reactor)
 	grd_curcanv->cv_font = GAME_FONT;
 	gr_set_fontcolor(gr_find_closest_color(255,255,255),-1);
 
-	if (reactor)
+	if (Game_mode & GM_RACE)
+		gr_printf(0x8000, SHEIGHT-LINE_SPACING, "You have finished. Standings update as the rest of the field comes in -- ESC to leave.");
+	else if (reactor)
 		gr_printf(0x8000, SHEIGHT-LINE_SPACING, "Waiting for players to finish level. Reactor time: T-%d", time);
 	else
 		gr_printf(0x8000, SHEIGHT-LINE_SPACING, "Level finished. Wait (%d) to proceed or ESC to Quit.", time);
@@ -288,13 +290,7 @@ void kmatrix_draw_race_item(int i, int *sorted)
 	gr_printf( x, y, "%d/%d", rp->laps_completed, Race_laps_to_win );
 
 	x = CENTERSCREEN+FSPACX(40);
-	if (rp->finished)
-	{
-		int secs = f2i(rp->finish_time);
-		sprintf(buf, "%d:%02d", secs/60, secs%60);
-	}
-	else
-		strcpy(buf, "--:--");
+	race_format_time(buf, sizeof(buf), race_get_finish_elapsed(pnum));
 	gr_set_fontcolor( BM_XRGB(60,40,10),-1 );
 	gr_printf( x, y, "%s", buf );
 }
@@ -400,7 +396,12 @@ int kmatrix_handler(window *wind, d_event *event, kmatrix_screen *km)
 
 			if (km->network)
 				multi_do_protocol_frame(0, 1);
-			
+
+			// Keep the host's race broadcast going while it sits here, or the
+			// players still driving stop hearing authoritative standings.
+			if (km->network && (Game_mode & GM_RACE))
+				race_multi_frame();
+
 			km->playing = 0;
 
 			// Check if all connected players are also looking at this screen ...

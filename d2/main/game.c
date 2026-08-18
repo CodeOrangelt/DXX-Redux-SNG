@@ -77,6 +77,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "gamepal.h"
 
 #include "multi.h"
+#include "race.h"
 #include "cntrlcen.h"
 #include "pcx.h"
 #include "state.h"
@@ -1351,6 +1352,18 @@ void GameProcessFrame(void)
 #endif
 
 #ifdef NETWORK
+	// Countdown, boost timer and mystery box respawns. Driven from here (and
+	// not from object_move_one) so it keeps ticking while the player is dead.
+	if (Game_mode & GM_RACE)
+	{
+		race_frame();
+
+		// Crossing the line for the last time drops the player into the
+		// standings, which keep updating as the rest of the field comes in.
+		if (race_take_summary_pending())
+			race_show_summary();
+	}
+
 	if (Game_mode & GM_MULTI)
 	{
 		multi_do_frame();

@@ -148,6 +148,8 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_SHIP_STATUS          , 43)  \
 	VALUE(MULTI_CREATE_EXPLOSION2    , 24)  \
 	VALUE(MULTI_RACE_UPDATE          , 5)  \
+	VALUE(MULTI_RACE_STATE           , 2 + 3*MAX_PLAYERS)  \
+	VALUE(MULTI_RACE_BOX             , 3)  \
 	AFTER
 for_each_multiplayer_command(enum {, define_multiplayer_command, });
 
