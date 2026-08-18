@@ -174,7 +174,29 @@ void read_flying_controls( object * obj )
 	}
 
 #ifdef NETWORK
-	if ((Game_mode & GM_RACE) && race_countdown_active())
+	if (Game_mode & GM_RACE)
+	{
+		fix boost;
+
+		// Reverse thrust drops the boost on the spot, so a pad never commits
+		// you to three seconds you don't want.
+		if (Controls.forward_thrust_time < 0)
+			race_cancel_boost();
+
+		boost = race_get_boost_scale();
+
+		// A boost pad drives the ship forward on its own, so it still works
+		// when the player isn't holding thrust, and stacks over what they are.
+		if (boost > F1_0)
+		{
+			fix boosted = fixmul(FrameTime, boost);
+
+			if (boosted > forward_thrust_time)
+				forward_thrust_time = boosted;
+		}
+	}
+
+	if ((Game_mode & GM_RACE) && race_countdown_active() && !object_is_observer(obj))
 	{
 		vm_vec_zero(&obj->mtype.phys_info.thrust);
 	}

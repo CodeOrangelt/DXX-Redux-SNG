@@ -55,6 +55,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "ogl_init.h"
 #endif
 #include "args.h"
+#include "race.h"
 
 #define INITIAL_LOCAL_LIGHT (F1_0/4)    // local light value in segment of occurence (of light emission)
 
@@ -1628,6 +1629,10 @@ void render_frame(fix eye_offset, int window_num)
 		if ((Game_mode & GM_MULTI) && Netgame.DisableFOVChange)
 			fov_zoom = 0;
 		Render_zoom = 0x9000 + (fov_zoom * 0x800);
+
+		// Race mode boost pads widen the view while the boost is running.
+		if (Game_mode & GM_RACE)
+			Render_zoom += race_get_fov_bonus();
 	}
 
 	start_lighting_frame(Viewer);		//this is for ugly light-smoothing hack

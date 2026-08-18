@@ -178,6 +178,8 @@ void multi_send_msgsend_state(int state);
 void multi_send_gmode_update();
 void multi_do_gmode_update(const ubyte *buf);
 void multi_do_race_update(const ubyte *buf);
+void multi_do_race_state(const ubyte *buf);
+void multi_do_race_box(const ubyte *buf);
 
 //
 // Local macros and prototypes
@@ -1634,6 +1636,9 @@ void multi_do_frame(void)
 		multi_send_gmode_update();
 		last_update_time = timer_query();
 	}
+
+	if (Game_mode & GM_RACE)
+		race_multi_frame();	// host's authoritative race state broadcast (self-rate-limited)
 
 	multi_send_message(); // Send any waiting messages
 
@@ -7280,6 +7285,10 @@ multi_process_data(const ubyte *buf, int len)
 			if (!Endlevel_sequence) multi_do_capture_bonus(buf); break;
 		case MULTI_RACE_UPDATE:
 			if (!Endlevel_sequence) multi_do_race_update(buf); break;
+		case MULTI_RACE_STATE:
+			if (!Endlevel_sequence) multi_do_race_state(buf); break;
+		case MULTI_RACE_BOX:
+			if (!Endlevel_sequence) multi_do_race_box(buf); break;
 		case MULTI_ORB_BONUS:
 			if (!Endlevel_sequence) multi_do_orb_bonus(buf); break;
 		case MULTI_GOT_FLAG:

@@ -1920,21 +1920,25 @@ void object_move_one( object * obj )
 			 fuelcen_check_for_goal (&Segments[obj->segnum]);
       if (Game_mode & GM_HOARD)
 			 fuelcen_check_for_hoard_goal (&Segments[obj->segnum]);
-      if (Game_mode & GM_RACE)
-			 race_frame ();
 #endif
 
-		fix fuel=fuelcen_give_fuel( &Segments[obj->segnum], INITIAL_ENERGY-Players[Player_num].energy );
-		if (fuel > 0 )	{
-			Players[Player_num].energy += fuel;
+		// In race mode fuel centers are boost pads and repair centers are the
+		// start/finish line (see race.h). Neither touches the ship: a repair
+		// center is there to be a visible landmark, not to patch you up.
+		if (!(Game_mode & GM_RACE))
+		{
+			fix fuel=fuelcen_give_fuel( &Segments[obj->segnum], INITIAL_ENERGY-Players[Player_num].energy );
+			if (fuel > 0 )	{
+				Players[Player_num].energy += fuel;
 
-			if (Game_mode & GM_MULTI)
-				multi_send_ship_status();
-		}
+				if (Game_mode & GM_MULTI)
+					multi_send_ship_status();
+			}
 
-		fix shields = repaircen_give_shields( &Segments[obj->segnum], INITIAL_SHIELDS-Players[Player_num].shields );
-		if (shields > 0) {
-			Players[Player_num].shields += shields;
+			fix shields = repaircen_give_shields( &Segments[obj->segnum], INITIAL_SHIELDS-Players[Player_num].shields );
+			if (shields > 0) {
+				Players[Player_num].shields += shields;
+			}
 		}
 	}
 
@@ -2037,8 +2041,20 @@ void object_move_one( object * obj )
 #ifdef NETWORK
 			int	old_level = Current_level_num;
 
+			// Walk every segment physics moved us through this frame, not
+			// just the one we ended in: at race speeds a ship crosses a thin
+			// checkpoint cube inside a single frame, and missing it makes
+			// every checkpoint after that one look out of order.
 			if ((Game_mode & GM_RACE) && Player_num == obj->id)
+			{
+				int s;
+
+				for (s = 0; s < n_phys_segs; s++)
+					if (phys_seglist[s] >= 0 && phys_seglist[s] <= Highest_segment_index)
+						race_check_checkpoint(&Segments[phys_seglist[s]]);
+
 				race_check_checkpoint(&Segments[obj->segnum]);
+			}
 #endif
 			for (i=0;i<n_phys_segs-1;i++) {
 				connect_side = find_connect_side(&Segments[phys_seglist[i+1]], &Segments[phys_seglist[i]]);
