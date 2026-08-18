@@ -39,6 +39,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "laser.h"
 #ifdef NETWORK
 #include "multi.h"
+#include "race.h"
 #endif
 #include "vclip.h"
 #include "fireball.h"
@@ -172,14 +173,23 @@ void read_flying_controls( object * obj )
 		}
 	}
 
-	// Set object's thrust vector for forward/backward
-	vm_vec_copy_scale(&obj->mtype.phys_info.thrust,&obj->orient.fvec, forward_thrust_time );
-	
-	// slide left/right
-	vm_vec_scale_add2(&obj->mtype.phys_info.thrust,&obj->orient.rvec, Controls.sideways_thrust_time );
+#ifdef NETWORK
+	if ((Game_mode & GM_RACE) && race_countdown_active())
+	{
+		vm_vec_zero(&obj->mtype.phys_info.thrust);
+	}
+	else
+#endif
+	{
+		// Set object's thrust vector for forward/backward
+		vm_vec_copy_scale(&obj->mtype.phys_info.thrust,&obj->orient.fvec, forward_thrust_time );
 
-	// slide up/down
-	vm_vec_scale_add2(&obj->mtype.phys_info.thrust,&obj->orient.uvec, Controls.vertical_thrust_time );
+		// slide left/right
+		vm_vec_scale_add2(&obj->mtype.phys_info.thrust,&obj->orient.rvec, Controls.sideways_thrust_time );
+
+		// slide up/down
+		vm_vec_scale_add2(&obj->mtype.phys_info.thrust,&obj->orient.uvec, Controls.vertical_thrust_time );
+	}
 
 	if (!is_observer() && obj->mtype.phys_info.flags & PF_WIGGLE)
 	{

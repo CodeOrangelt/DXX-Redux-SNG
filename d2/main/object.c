@@ -49,6 +49,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "cntrlcen.h"
 #include "powerup.h"
 #include "fuelcen.h"
+#include "race.h"
 #include "endlevel.h"
 #include "sounds.h"
 #include "collide.h"
@@ -1919,6 +1920,8 @@ void object_move_one( object * obj )
 			 fuelcen_check_for_goal (&Segments[obj->segnum]);
       if (Game_mode & GM_HOARD)
 			 fuelcen_check_for_hoard_goal (&Segments[obj->segnum]);
+      if (Game_mode & GM_RACE)
+			 race_frame ();
 #endif
 
 		fix fuel=fuelcen_give_fuel( &Segments[obj->segnum], INITIAL_ENERGY-Players[Player_num].energy );
@@ -2033,6 +2036,9 @@ void object_move_one( object * obj )
 			int	connect_side,i;
 #ifdef NETWORK
 			int	old_level = Current_level_num;
+
+			if ((Game_mode & GM_RACE) && Player_num == obj->id)
+				race_check_checkpoint(&Segments[obj->segnum]);
 #endif
 			for (i=0;i<n_phys_segs-1;i++) {
 				connect_side = find_connect_side(&Segments[phys_seglist[i+1]], &Segments[phys_seglist[i]]);

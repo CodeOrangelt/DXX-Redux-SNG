@@ -52,6 +52,7 @@ add_executable (d2x-redux
     playsave.c
     polyobj.c
     powerup.c
+    race.c
     render.c
     robot.c
     scores.c

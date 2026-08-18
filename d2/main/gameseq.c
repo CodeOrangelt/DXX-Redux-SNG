@@ -50,6 +50,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "wall.h"
 #include "ai.h"
 #include "fuelcen.h"
+#include "race.h"
 #include "switch.h"
 #include "digi.h"
 #include "gamesave.h"
@@ -1957,6 +1958,33 @@ void InitPlayerPosition(int random_flag)
 #ifdef NETWORK	
 	else if ((Game_mode & GM_MULTI) && (Netgame.SpawnStyle == SPAWN_STYLE_PREVIEW) && Dead_player_camera != NULL)
 		NewPlayer = previewed_spawn_point; 
+	else if ((Game_mode & GM_RACE) && Race_num_checkpoints > 0 && random_flag == 1 &&
+		Player_num >= 0 && Player_num < MAX_PLAYERS &&
+		Race_player[Player_num].next_checkpoint < Race_num_checkpoints &&
+		RobotCenters[Race_player[Player_num].next_checkpoint].segnum >= 0 &&
+		RobotCenters[Race_player[Player_num].next_checkpoint].segnum <= Highest_segment_index)
+	{
+		// Race mode: respawn at whichever start position is closest (by
+		// in-mine path distance) to the checkpoint the player is still
+		// trying to reach, instead of a random spawn point, so dying
+		// mid-race doesn't cost a lap's worth of progress.
+		int target_segnum = RobotCenters[Race_player[Player_num].next_checkpoint].segnum;
+		vms_vector target_pos;
+		fix closest_dist = 0x7fffffff, dist;
+		int i;
+
+		compute_segment_center(&target_pos, &Segments[target_segnum]);
+
+		for (i = 0; i < NumNetPlayerPositions; i++)
+		{
+			dist = find_connected_distance(&target_pos, target_segnum, &Player_init[i].pos, Player_init[i].segnum, 30, WID_FLY_FLAG);
+			if (dist >= 0 && dist < closest_dist)
+			{
+				closest_dist = dist;
+				NewPlayer = i;
+			}
+		}
+	}
 #endif	
 	else if (random_flag == 1)
 	{

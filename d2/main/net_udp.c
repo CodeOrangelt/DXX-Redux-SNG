@@ -5116,7 +5116,7 @@ int net_udp_more_options_handler( newmenu *menu, d_event *event, void *userdata 
 typedef struct param_opt
 {
 	int start_game, load_preset, save_preset, name, level, mode, mode_end, moreopts;
-	int closed, refuse, maxnet, maxobs, obsdelay, obsmin, anarchy, team_anarchy, robot_anarchy, coop, capture, hoard, team_hoard, bounty;
+	int closed, refuse, maxnet, maxobs, obsdelay, obsmin, anarchy, team_anarchy, robot_anarchy, coop, capture, hoard, team_hoard, bounty, race;
 } param_opt;
 
 int net_udp_start_game(void);
@@ -5242,6 +5242,8 @@ int net_udp_game_param_handler( newmenu *menu, d_event *event, param_opt *opt )
 					Netgame.gamemode = NETGAME_TEAM_HOARD;
 				else if( menus[opt->bounty].value )
 					Netgame.gamemode = NETGAME_BOUNTY;
+				else if( menus[opt->race].value )
+					Netgame.gamemode = NETGAME_RACE;
 				else Int3(); // Invalid mode -- see Rob
 			}
 
@@ -5484,7 +5486,7 @@ int net_udp_setup_game()
 	int i;
 	int optnum;
 	param_opt opt;
-	newmenu_item m[25];
+	newmenu_item m[26];
 	char slevel[5];
 	char level_text[32];
 	char srmaxnet[50];
@@ -5567,7 +5569,9 @@ int net_udp_setup_game()
 			opt.hoard = opt.team_hoard = 0; // NOTE: Make sure if you use these, use them in connection with HoardEquipped() only!
 		}
 		
-		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Bounty"; m[optnum].value = ( Netgame.gamemode & NETGAME_BOUNTY ); m[optnum].group = 0; opt.mode_end=opt.bounty=optnum; optnum++;
+		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Bounty"; m[optnum].value = ( Netgame.gamemode & NETGAME_BOUNTY ); m[optnum].group = 0; opt.bounty=optnum; optnum++;
+
+		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Race"; m[optnum].value = ( Netgame.gamemode == NETGAME_RACE ); m[optnum].group = 0; opt.mode_end=opt.race=optnum; optnum++;
 
 		m[optnum].type = NM_TYPE_TEXT; m[optnum].text = ""; optnum++;
 
@@ -5669,6 +5673,8 @@ net_udp_set_game_mode(int gamemode, ubyte join_as_obs)
 		 }
 	else if( gamemode == NETGAME_BOUNTY )
 		Game_mode = GM_NETWORK | GM_BOUNTY;
+	else if( gamemode == NETGAME_RACE )
+		Game_mode = GM_NETWORK | GM_RACE;
 	else if ( gamemode == NETGAME_TEAM_ANARCHY )
 	{
 		Game_mode = GM_NETWORK | GM_TEAM;
@@ -5728,7 +5734,7 @@ void net_udp_read_sync_packet( ubyte * data, int data_len, struct _sockaddr send
 			if (Player_num!=-1) {
 				Int3(); // Hey, we've found ourselves twice
 				Network_status = NETSTAT_MENU;
-				return; 
+				return;
 			}
 			if(!is_observer()) {
 				change_playernum_to(i);

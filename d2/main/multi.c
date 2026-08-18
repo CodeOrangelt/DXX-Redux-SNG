@@ -30,6 +30,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "object.h"
 #include "laser.h"
 #include "fuelcen.h"
+#include "race.h"
 #include "scores.h"
 #include "gauges.h"
 #include "collide.h"
@@ -176,6 +177,7 @@ void multi_do_msgsend_state(const ubyte *buf);
 void multi_send_msgsend_state(int state);
 void multi_send_gmode_update();
 void multi_do_gmode_update(const ubyte *buf);
+void multi_do_race_update(const ubyte *buf);
 
 //
 // Local macros and prototypes
@@ -308,7 +310,8 @@ const char GMNames[MULTI_GAME_TYPE_COUNT][MULTI_GAME_NAME_LENGTH]={
 	"Capture the Flag",
 	"Hoard",
 	"Team Hoard",
-	"Bounty"
+	"Bounty",
+	"Race"
 };
 const char GMNamesShrt[MULTI_GAME_TYPE_COUNT][8]={
 	"ANRCHY",
@@ -318,7 +321,8 @@ const char GMNamesShrt[MULTI_GAME_TYPE_COUNT][8]={
 	"FLAG",
 	"HOARD",
 	"TMHOARD",
-	"BOUNTY"
+	"BOUNTY",
+	"RACE"
 };
 
 int Current_obs_player = OBSERVER_PLAYER_ID; // Current player being observed. Defaults to the observer player ID.
@@ -4598,6 +4602,9 @@ void multi_prep_level(void)
 	Drop_afterburner_blob_flag=0;
 	Bounty_target = 0;
 
+	if (Game_mode & GM_RACE)
+		race_init_level();
+
 	multi_consistency_error(1);
 
 	for (i=0;i<MAX_PLAYERS;i++)
@@ -7271,6 +7278,8 @@ multi_process_data(const ubyte *buf, int len)
 			if (!Endlevel_sequence) multi_do_play_sound(buf); break;
 		case MULTI_CAPTURE_BONUS:
 			if (!Endlevel_sequence) multi_do_capture_bonus(buf); break;
+		case MULTI_RACE_UPDATE:
+			if (!Endlevel_sequence) multi_do_race_update(buf); break;
 		case MULTI_ORB_BONUS:
 			if (!Endlevel_sequence) multi_do_orb_bonus(buf); break;
 		case MULTI_GOT_FLAG:

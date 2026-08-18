@@ -84,6 +84,7 @@ extern int ft_preference;
 #define GM_NORMAL       0       // You are in normal play mode, no multiplayer stuff
 #define GM_MULTI        38      // You are in some type of multiplayer game
 #define GM_OBSERVER     4096    // You are observing this game
+#define GM_RACE         8192    // Race mode for network play
 
 #define NDL 5       // Number of difficulty levels.
 
@@ -266,6 +267,7 @@ typedef struct game_cheats
 	int buddyclone;
 	int buddyangry;
 	int acid;
+	int racetest;
 } __pack__ game_cheats;
 extern game_cheats cheats;
 void game_disable_cheats();
