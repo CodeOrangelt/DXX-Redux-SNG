@@ -1082,6 +1082,170 @@ static void race_draw_items(void)
 	race_font_pop();
 }
 
+// Bare top-down minimap, in the spirit of a kart racer's: no track geometry,
+// just where everyone is on the level's dominant plane. The checkpoints and
+// the finish line are plotted with it so the loop of dots reads as the track,
+// with the one the local player owes next lit up.
+static int race_map_pixel(fix norm, int center, int radius)
+{
+	int p = center + f2i(fixmul(norm, i2f(radius)));
+
+	// Anything off the level's bounding box (a stray object, a track that
+	// pokes outside it) is pinned to the edge rather than drawn outside the
+	// frame.
+	if (p < center - radius)
+		p = center - radius;
+	else if (p > center + radius)
+		p = center + radius;
+
+	return p;
+}
+
+static void race_draw_minimap(void)
+{
+	const race_label *labels;
+	int n_labels = race_get_labels(&labels);
+	int size = min(GWIDTH, GHEIGHT) / 5;
+	int left, top, cx, cy, radius, dot, i, players;
+	fix mx, my;
+
+	if (size < 40)			// too small a screen to be worth the clutter
+		return;
+
+	left = 0;								// hard into the corner
+	top = 0;
+	cx = left + size/2;
+	cy = top + size/2;
+	radius = size/2 - 2;
+	dot = max(2, size/40);
+
+	if (!race_map_project(&Objects[Players[Player_num].objnum].pos, &mx, &my))
+		return;								// level has no usable bounds
+
+	// Frame: a dark plate so the dots stay readable over bright mine walls.
+	gr_settransblend(10, GR_BLEND_NORMAL);
+	gr_setcolor(BM_XRGB(0,0,0));
+	gr_urect(left, top, left + size, top + size);
+	gr_settransblend(GR_FADE_OFF, GR_BLEND_NORMAL);
+	gr_setcolor(BM_XRGB(12,12,14));
+	gr_ubox(left, top, left + size, top + size);
+
+	//	--- the mine itself ---
+
+	{
+		const race_map_line *lines;
+		int n = race_get_map_outline(&lines);
+
+		gr_setcolor(BM_XRGB(13,13,20));
+
+		for (i = 0; i < n; i++)
+			gr_uline(i2f(race_map_pixel(lines[i].x0, cx, radius)),
+					 i2f(race_map_pixel(lines[i].y0, cy, radius)),
+					 i2f(race_map_pixel(lines[i].x1, cx, radius)),
+					 i2f(race_map_pixel(lines[i].y1, cy, radius)));
+	}
+
+	//	--- the track: checkpoints, then the line ---
+
+	for (i = 0; i < n_labels; i++)
+	{
+		const race_label *rl = &labels[i];
+		int is_next, x, y;
+
+		if (rl->kind == RACE_LABEL_BOOST)	// bare map: pads aren't waypoints
+			continue;
+
+		if (!race_map_project(&rl->pos, &mx, &my))
+			continue;
+
+		is_next = (rl->kind == RACE_LABEL_FINISH) ? race_finish_is_target()
+												  : race_checkpoint_is_target(rl->number);
+
+		x = race_map_pixel(mx, cx, radius);
+		y = race_map_pixel(my, cy, radius);
+
+		if (rl->kind == RACE_LABEL_FINISH)
+			gr_setcolor(is_next ? BM_XRGB(31,28,8) : BM_XRGB(20,18,6));
+		else
+			gr_setcolor(is_next ? BM_XRGB(6,31,6) : BM_XRGB(10,14,10));
+
+		gr_disk(i2f(x), i2f(y), i2f(dot));
+
+		if (is_next)						// ring the one we owe next
+			gr_ucircle(i2f(x), i2f(y), i2f(dot*2));
+	}
+
+	//	--- the players ---
+
+	// Race colours are pinned to the player index; see race_lock_player_rgb().
+	selected_player_rgb = race_lock_player_rgb(player_rgb);
+
+	players = (Game_mode & GM_MULTI) ? N_players : 1;
+
+	// Local player last, so their marker is never buried under someone else's.
+	for (i = 0; i <= players; i++)
+	{
+		int pnum = (i == players) ? Player_num : i;
+		object *objp;
+		int color, x, y;
+
+		if (i < players && (pnum == Player_num || !Players[pnum].connected))
+			continue;
+#ifdef NETWORK
+		if (Netgame.host_is_obs && pnum == 0)
+			continue;
+#endif
+
+		objp = &Objects[Players[pnum].objnum];
+
+		if (objp->type != OBJ_PLAYER)
+			continue;
+
+		if (!race_map_project(&objp->pos, &mx, &my))
+			continue;
+
+		x = race_map_pixel(mx, cx, radius);
+		y = race_map_pixel(my, cy, radius);
+		color = (Game_mode & GM_TEAM) ? get_team(pnum) : pnum;
+
+		gr_setcolor(BM_XRGB(selected_player_rgb[color].r,
+							selected_player_rgb[color].g,
+							selected_player_rgb[color].b));
+
+		if (pnum == Player_num)
+		{
+			vms_vector ahead;
+			fix ax, ay;
+
+			gr_disk(i2f(x), i2f(y), i2f(dot + 1));
+			gr_setcolor(BM_XRGB(31,31,31));
+			gr_ucircle(i2f(x), i2f(y), i2f(dot + 2));
+
+			// A tick out of the marker pointing where the ship is facing,
+			// taken from a point out in front of it so it flattens onto the
+			// map the same way the position does.
+			vm_vec_scale_add(&ahead, &objp->pos, &objp->orient.fvec, i2f(20));
+
+			if (race_map_project(&ahead, &ax, &ay))
+			{
+				float dx = f2fl(ax - mx), dy = f2fl(ay - my);
+				float len = sqrtf(dx*dx + dy*dy);
+
+				if (len > 0.0001f)
+				{
+					int tick = dot*3;
+
+					gr_uline(i2f(x), i2f(y),
+							 i2f(x + (int)(dx/len * tick)),
+							 i2f(y + (int)(dy/len * tick)));
+				}
+			}
+		}
+		else
+			gr_disk(i2f(x), i2f(y), i2f(dot));
+	}
+}
+
 void race_draw_hud()
 {
 	char buf[64];
@@ -1095,6 +1259,9 @@ void race_draw_hud()
 
 	if (PlayerCfg.RaceTrackLabels)
 		race_draw_track_labels();
+
+	if (PlayerCfg.RaceMinimap)
+		race_draw_minimap();
 
 	// LINE_SPACING is relative to the current font scale, so pin that down
 	// before measuring anything.
@@ -2255,17 +2422,10 @@ void draw_player_ship(int cloak_state,int x, int y)
 
 	grs_bitmap *bm = NULL;
 
-	int color;
-#ifdef NETWORK
-	if (Game_mode & GM_TEAM)
-	{
-		color = get_color_for_team(get_team(pnum));
-	}
-	else
-#endif
-	{
-		color = Netgame.players[pnum].color;
-	}
+	// get_color_for_player() covers the team case too, and keeps the cockpit
+	// ship in step with the colour everyone else sees us in (in a race, our
+	// player number).
+	int color = get_color_for_player(pnum, 0);
 		PAGE_IN_GAUGE( GAUGE_SHIPS+color );
 		bm = &GameBitmaps[ GET_GAUGE_INDEX(GAUGE_SHIPS+color) ];
 
@@ -2798,6 +2958,19 @@ const rgb player_rgb_all_blue[] = {
 
 const rgb* selected_player_rgb;
 
+// A race identifies players by their number in the running order -- the
+// minimap dots, the standings, the ship in front of you -- so a racer's colour
+// has to be their player index on every client. Callers pick their table from
+// the netgame colour options as usual and pass it through here, which pins it
+// back to the plain one for a race and leaves every other mode alone.
+const rgb *race_lock_player_rgb(const rgb *table)
+{
+	if (Game_mode & GM_RACE)
+		return player_rgb;
+
+	return table;
+}
+
 
 typedef struct {
 	sbyte x, y;
@@ -3011,6 +3184,7 @@ void hud_show_kill_list()
 		selected_player_rgb = player_rgb_alt;
 	else
 		selected_player_rgb = player_rgb;
+	selected_player_rgb = race_lock_player_rgb(selected_player_rgb);
 
 	x0 = FSPACX(1); x1 = FSPACX(43);
 
@@ -3669,6 +3843,7 @@ int observer_show_player_cards() {
 		selected_player_rgb = player_rgb_alt;
 	else
 		selected_player_rgb = player_rgb;
+	selected_player_rgb = race_lock_player_rgb(selected_player_rgb);
 
 	if ((Game_mode & GM_MULTI) && (Game_mode & GM_TEAM)) {
 		// Show team one to the left, team two to the right when possible.
@@ -4704,6 +4879,7 @@ void show_HUD_names()
 		selected_player_rgb = player_rgb_alt;
 	else
 		selected_player_rgb = player_rgb;
+	selected_player_rgb = race_lock_player_rgb(selected_player_rgb);
 
 	for (pnum=0;pnum<N_players;pnum++)
 	{

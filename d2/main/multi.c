@@ -2445,6 +2445,7 @@ void multi_do_message(const ubyte* cbuf)
 		selected_player_rgb = player_rgb_alt; 
 	else
 		selected_player_rgb = player_rgb;
+	selected_player_rgb = race_lock_player_rgb(selected_player_rgb);
 
 	if ((tilde=strchr (buf+loc,'$')))  // do that stupid name stuff
 	{											// why'd I put this in?  Probably for the
@@ -2457,10 +2458,10 @@ void multi_do_message(const ubyte* cbuf)
 	{
 		int color = 0;
 		mesbuf[0] = CC_COLOR;
-		if (Game_mode & GM_TEAM)
-			color = get_team((int)buf[1]);
-		else
-			color = Netgame.players[(int)buf[1]].color;//(int)buf[1]
+		// Through get_color_for_player() so a name in the chat log is the
+		// colour that player's ship actually draws in on this client -- in a
+		// race that is their player number, custom colours off.
+		color = get_color_for_player((int)buf[1], 0);
 		mesbuf[1] = BM_XRGB(selected_player_rgb[color].r,selected_player_rgb[color].g,selected_player_rgb[color].b);
 		strcpy(&mesbuf[2], Players[(int)buf[1]].callsign);
 		t = strlen(mesbuf);
@@ -3406,6 +3407,13 @@ void disable_faircolors_if_3_connected() {
 }
 
 int get_color_for_player(int player, int missile) {
+	// A race identifies players by their place in the join order -- the
+	// minimap dots, the standings and the ship ahead of you all have to agree,
+	// on every client -- so a racer's colour is their player number and
+	// nothing re-maps it: no custom colour, no netgame colour option.
+	if (Game_mode & GM_RACE)
+		return player;
+
 	if (Game_mode & GM_TEAM) {
 		return get_color_for_team(get_team(player));
 	}
@@ -6644,6 +6652,7 @@ void multi_new_bounty_target( int pnum )
 		selected_player_rgb = player_rgb_alt; 
 	else
 		selected_player_rgb = player_rgb;	
+	selected_player_rgb = race_lock_player_rgb(selected_player_rgb);
 	
 	/* Send a message */
 	HUD_init_message( HM_MULTI, "%c%c%s is the new target!", CC_COLOR,

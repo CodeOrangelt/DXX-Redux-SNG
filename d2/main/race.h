@@ -267,6 +267,23 @@ int race_get_rank(int pnum);
 // untouched otherwise. `style` may be NULL.
 int race_get_banner(char *buf, int bufsz, int *style);
 
+// One line of the minimap's top-down mine outline, in the normalised map
+// space race_map_project() returns.
+typedef struct race_map_line {
+	fix x0, y0, x1, y1;
+} race_map_line;
+
+// Top-down minimap: flattens a world point onto the plane the track spreads
+// out over most and normalises it to [-F1_0, F1_0] across the level's bounding
+// box (a point outside the box lands outside that range). Returns 0, leaving
+// the outputs untouched, if the level has no usable bounds. `mx`/`my` may be
+// NULL.
+int race_map_project(const vms_vector *pos, fix *mx, fix *my);
+
+// The level's top-down outline: the wall edges that define its shape, already
+// projected. Returns the line count and points *lines at the table.
+int race_get_map_outline(const race_map_line **lines);
+
 // World-space unit direction and distance from the local player to the
 // nearest checkpoint they still owe this lap. Returns 0 (leaving *dir/*dist
 // untouched) if there is nothing outstanding.

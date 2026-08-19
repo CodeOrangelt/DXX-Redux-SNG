@@ -131,6 +131,7 @@ typedef struct player_config
 	ubyte NoChatSound;
 	ubyte ClassicAutoselectWeapon;
 	ubyte RaceTrackLabels;
+	ubyte RaceMinimap;
 } __pack__ player_config;
 
 extern struct player_config PlayerCfg;
