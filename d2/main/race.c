@@ -28,6 +28,7 @@
 #include "weapon.h"
 #include "maths.h"
 #include "laser.h"
+#include "u_mem.h"
 
 race_player_info Race_player[MAX_PLAYERS];
 int Race_num_checkpoints = 0;
@@ -969,6 +970,241 @@ int race_label_visible(int i)
 }
 
 //	-------------------------------------------------------------------------
+//	Minimap projection
+//	-------------------------------------------------------------------------
+
+// The HUD minimap is a flat top-down slice of the track, so it needs a plane
+// to flatten onto. Mines are not laid out on any particular axis, so instead
+// of assuming world XZ the level's own bounding box picks it: the two axes the
+// track spreads out over most become the map's x and y, and the third (the one
+// a mostly-flat track barely uses) is thrown away. One shared scale keeps the
+// map square, so a track never comes out stretched.
+static int Race_map_ax = 0, Race_map_ay = 2;	// world axes drawn as map x/y
+static fix Race_map_cx = 0, Race_map_cy = 0;	// centre of the track on those axes
+static fix Race_map_half = 0;					// half-extent; ±this covers the track
+static int Race_map_ok = 0;
+
+static fix race_vec_axis(const vms_vector *v, int axis)
+{
+	switch (axis)
+	{
+		case 0:  return v->x;
+		case 1:  return v->y;
+		default: return v->z;
+	}
+}
+
+static void race_init_map(void)
+{
+	fix mn[3], mx[3], ext[3];
+	int i, a, wide = 0, tall = -1;
+
+	Race_map_ok = 0;
+
+	if (Num_vertices <= 0)
+		return;
+
+	for (a = 0; a < 3; a++)
+	{
+		mn[a] = race_vec_axis(&Vertices[0], a);
+		mx[a] = mn[a];
+	}
+
+	for (i = 1; i < Num_vertices; i++)
+		for (a = 0; a < 3; a++)
+		{
+			fix v = race_vec_axis(&Vertices[i], a);
+
+			if (v < mn[a])
+				mn[a] = v;
+			if (v > mx[a])
+				mx[a] = v;
+		}
+
+	for (a = 0; a < 3; a++)
+		ext[a] = mx[a] - mn[a];
+
+	// Keep the two widest axes: the widest is the map's x, the runner-up its y.
+	for (a = 1; a < 3; a++)
+		if (ext[a] > ext[wide])
+			wide = a;
+
+	for (a = 0; a < 3; a++)
+		if (a != wide && (tall < 0 || ext[a] > ext[tall]))
+			tall = a;
+
+	Race_map_ax = wide;
+	Race_map_ay = tall;
+	Race_map_cx = mn[wide] + ext[wide]/2;
+	Race_map_cy = mn[tall] + ext[tall]/2;
+	Race_map_half = ext[wide]/2;
+
+	if (Race_map_half < F1_0)		// degenerate level; nothing to show
+		return;
+
+	Race_map_half = Race_map_half + Race_map_half/16;	// a little air around the edges
+	Race_map_ok = 1;
+}
+
+int race_map_project(const vms_vector *pos, fix *mx, fix *my)
+{
+	if (!Race_map_ok || !pos)
+		return 0;
+
+	if (mx)
+		*mx = fixdiv(race_vec_axis(pos, Race_map_ax) - Race_map_cx, Race_map_half);
+	if (my)
+		*my = fixdiv(race_vec_axis(pos, Race_map_ay) - Race_map_cy, Race_map_half);
+
+	return 1;
+}
+
+// Top-down outline of the mine, built once as the level loads and kept in map
+// space so the HUD only has to scale it into its frame. This follows what the
+// automap does: the lines that define a mine are the edges of its solid walls
+// (a side with no segment behind it), minus the seams where two nearly
+// coplanar walls meet -- without that cull every segment boundary down a
+// straight corridor draws as a rung and the shape disappears in the noise.
+//
+// Flattened onto the map plane, a track's floors and ceilings collapse onto
+// the same lines as the walls between them, which is exactly the silhouette
+// wanted here.
+#define RACE_MAP_MAX_LINES  8192
+#define RACE_MAP_HASH_SIZE  (1<<16)		// edges are hashed to find the two faces sharing one
+#define RACE_MAP_MIN_LINE   (F1_0/200)	// shorter than a pixel on any sane map size: drop it
+
+static race_map_line Race_map_line[RACE_MAP_MAX_LINES];
+static int Race_num_map_lines = 0;
+
+typedef struct race_map_edge {
+	int64_t		key;		// vertex pair, low vertex first; -1 for an empty slot
+	int			va, vb;
+	vms_vector	normal;		// normal of the first face found on this edge
+	ubyte		flat;		// a second, nearly coplanar face shares it -- a seam, not an outline
+} race_map_edge;
+
+static void race_map_side_normal(int segnum, int sidenum, vms_vector *n)
+{
+#ifdef COMPACT_SEGS
+	get_side_normal(&Segments[segnum], sidenum, 0, n);
+#else
+	*n = Segments[segnum].sides[sidenum].normals[0];
+#endif
+}
+
+// Records one wall edge, or folds it into the entry already there. Returns the
+// slot, or NULL if the table is full (which just costs us some outline).
+static race_map_edge *race_map_add_edge(race_map_edge *table, int va, int vb, const vms_vector *n)
+{
+	int64_t key;
+	int lo = va < vb ? va : vb, hi = va < vb ? vb : va;
+	unsigned h;
+	int probe;
+
+	if (lo == hi)
+		return NULL;
+
+	key = (int64_t)lo * MAX_VERTICES + hi;
+	h = ((unsigned)key * 2654435761u) & (RACE_MAP_HASH_SIZE - 1);
+
+	for (probe = 0; probe < RACE_MAP_HASH_SIZE; probe++)
+	{
+		race_map_edge *e = &table[(h + probe) & (RACE_MAP_HASH_SIZE - 1)];
+
+		if (e->key == key)
+		{
+			// Same threshold the automap uses to decide an edge does not
+			// define anything.
+			if (vm_vec_dot(&e->normal, n) > (F1_0 - F1_0/10))
+				e->flat = 1;
+
+			return e;
+		}
+
+		if (e->key < 0)
+		{
+			e->key = key;
+			e->va = lo;
+			e->vb = hi;
+			e->normal = *n;
+			e->flat = 0;
+			return e;
+		}
+	}
+
+	return NULL;
+}
+
+static void race_build_map_outline(void)
+{
+	race_map_edge *table;
+	int i, s, sn;
+
+	Race_num_map_lines = 0;
+
+	if (!Race_map_ok)
+		return;
+
+	table = d_malloc(RACE_MAP_HASH_SIZE * sizeof(*table));
+
+	if (!table)
+		return;
+
+	for (i = 0; i < RACE_MAP_HASH_SIZE; i++)
+		table[i].key = -1;
+
+	for (s = 0; s <= Highest_segment_index; s++)
+		for (sn = 0; sn < MAX_SIDES_PER_SEGMENT; sn++)
+		{
+			int v[4];
+			vms_vector n;
+
+			if (Segments[s].children[sn] != -1)		// open into another segment
+				continue;
+
+			race_map_side_normal(s, sn, &n);
+			get_side_verts(v, s, sn);
+
+			for (i = 0; i < 4; i++)
+				race_map_add_edge(table, v[i], v[(i+1) & 3], &n);
+		}
+
+	for (i = 0; i < RACE_MAP_HASH_SIZE && Race_num_map_lines < RACE_MAP_MAX_LINES; i++)
+	{
+		race_map_edge *e = &table[i];
+		race_map_line *l = &Race_map_line[Race_num_map_lines];
+		fix dx, dy;
+
+		if (e->key < 0 || e->flat)
+			continue;
+
+		if (!race_map_project(&Vertices[e->va], &l->x0, &l->y0) ||
+			!race_map_project(&Vertices[e->vb], &l->x1, &l->y1))
+			continue;
+
+		// An edge running along the axis the map throws away flattens to a
+		// point, and a very short one cannot land on more than one pixel.
+		dx = abs(l->x1 - l->x0);
+		dy = abs(l->y1 - l->y0);
+
+		if (dx < RACE_MAP_MIN_LINE && dy < RACE_MAP_MIN_LINE)
+			continue;
+
+		Race_num_map_lines++;
+	}
+
+	d_free(table);
+}
+
+int race_get_map_outline(const race_map_line **lines)
+{
+	if (lines)
+		*lines = Race_map_line;
+
+	return Race_num_map_lines;
+}
+
+//	-------------------------------------------------------------------------
 //	Level setup and per-frame update
 //	-------------------------------------------------------------------------
 
@@ -1185,6 +1421,8 @@ void race_init_level(void)
 	race_init_boxes();
 	race_init_labels();
 	race_init_items();
+	race_init_map();
+	race_build_map_outline();
 }
 
 void race_frame(void)

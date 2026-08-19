@@ -136,6 +136,7 @@ void kmatrix_draw_names(int *sorted)
 		selected_player_rgb = player_rgb_alt; 
 	else
 		selected_player_rgb = player_rgb;	
+	selected_player_rgb = race_lock_player_rgb(selected_player_rgb);
 
 	for (j=0; j<N_players; j++)
 	{
@@ -220,6 +221,7 @@ void kmatrix_redraw(kmatrix_screen *km)
 		selected_player_rgb = player_rgb_alt; 
 	else
 		selected_player_rgb = player_rgb;	
+	selected_player_rgb = race_lock_player_rgb(selected_player_rgb);
 	
 	if (Game_mode & GM_MULTI_COOP)
 	{

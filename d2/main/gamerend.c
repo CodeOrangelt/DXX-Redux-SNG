@@ -355,6 +355,7 @@ void show_netplayerinfo()
 		selected_player_rgb = player_rgb_alt; 
 	else
 		selected_player_rgb = player_rgb;
+	selected_player_rgb = race_lock_player_rgb(selected_player_rgb);
 
 	// process players table
 	for (i=0; i<MAX_PLAYERS; i++)
