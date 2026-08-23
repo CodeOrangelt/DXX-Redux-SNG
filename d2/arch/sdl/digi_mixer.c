@@ -257,15 +257,22 @@ int digi_mixer_start_sound_pitched(short soundnum, fix volume, int pan, fix spee
 	if (SDL_BuildAudioCVT(&cvt, AUDIO_U8, 1, src_rate, out_format, out_channels, out_freq) < 0)
 		return -1;
 
-	chunk = (Mix_Chunk *)malloc(sizeof(Mix_Chunk));
+	// SDL_malloc/SDL_free rather than the C library's: Mix_FreeChunk() (used
+	// both below on failure and by digi_mixer_free_channel() once this
+	// finishes playing) frees a chunk's abuf and the chunk itself with
+	// SDL_free() internally. On a build where SDL's allocator has been
+	// overridden (SDL_SetMemoryFunctions(), some packaging setups) that
+	// heap need not be the same as malloc()'s, and freeing one allocator's
+	// pointer through the other is undefined behaviour.
+	chunk = (Mix_Chunk *)SDL_malloc(sizeof(Mix_Chunk));
 	if (!chunk) return -1;
 
-	cvt.buf = (Uint8 *)malloc(dlen * cvt.len_mult);
-	if (!cvt.buf) { free(chunk); return -1; }
+	cvt.buf = (Uint8 *)SDL_malloc(dlen * cvt.len_mult);
+	if (!cvt.buf) { SDL_free(chunk); return -1; }
 
 	cvt.len = dlen;
 	memcpy(cvt.buf, data, dlen);
-	if (SDL_ConvertAudio(&cvt)) { free(cvt.buf); free(chunk); return -1; }
+	if (SDL_ConvertAudio(&cvt)) { SDL_free(cvt.buf); SDL_free(chunk); return -1; }
 
 	chunk->abuf = cvt.buf;
 	chunk->alen = cvt.len_cvt;
@@ -276,7 +283,19 @@ int digi_mixer_start_sound_pitched(short soundnum, fix volume, int pan, fix spee
 	if (channel == -1) { Mix_FreeChunk(chunk); return -1; }
 
 	pitched_chunks[channel] = chunk;
-	Mix_PlayChannel(channel, chunk, 0);
+
+	// If this fails, nothing will ever call digi_mixer_free_channel() for
+	// this channel (Mix_ChannelFinished() only fires for a channel that
+	// actually finished playing) -- free the chunk and give the slot back
+	// here instead of leaking it and losing the channel for the rest of
+	// the session.
+	if (Mix_PlayChannel(channel, chunk, 0) == -1)
+	{
+		pitched_chunks[channel] = NULL;
+		Mix_FreeChunk(chunk);
+		return -1;
+	}
+
 	Mix_SetPanning(channel, 255 - mix_pan, mix_pan);
 	if (volume > F1_0)
 		Mix_SetDistance(channel, 0);
@@ -291,9 +310,23 @@ int digi_mixer_start_sound_pitched(short soundnum, fix volume, int pan, fix spee
 void digi_mixer_reset() {}
 void digi_mixer_stop_all_channels()
 {
+	int i;
+
 	Mix_HaltChannel(-1);
+
+	// Free any outstanding pitched chunks before clearing the table --
+	// digi_mixer_free_channel() (the normal owner of this) is only
+	// guaranteed to run for a channel that finishes playing on its own;
+	// zeroing the table out from under a halted channel without freeing
+	// its chunk first leaks it.
+	for (i = 0; i < MAX_SOUND_SLOTS; i++)
+		if (pitched_chunks[i])
+		{
+			Mix_FreeChunk(pitched_chunks[i]);
+			pitched_chunks[i] = NULL;
+		}
+
 	memset(channels, 0, MAX_SOUND_SLOTS);
-	memset(pitched_chunks, 0, sizeof(pitched_chunks));
 }
 
 extern void digi_end_soundobj(int channel);

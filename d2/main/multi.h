@@ -60,7 +60,7 @@ extern int multi_protocol; // set and determinate used protocol
 #define MULTI_PROTO_UDP 1 // UDP protocol
 
 // What version of the multiplayer protocol is this? Increment each time something drastic changes in Multiplayer without the version number changes. Can be reset to 0 each time the version of the game changes
-#define MULTI_PROTO_VERSION 30010 // Redux 1.1 + SNG CTF variant + SNG toggles + D2 weapon spawn toggles + Static Powerups (incl. D2 supers)
+#define MULTI_PROTO_VERSION 30011 // + Race mode (LapsToWin byte in netgame_info/game-info packet, MULTI_RACE_* messages)
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
