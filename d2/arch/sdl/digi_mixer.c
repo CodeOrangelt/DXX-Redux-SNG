@@ -48,6 +48,9 @@ static inline int fix2byte(fix f) { return f < 0 ? 0 : f >= 65536 ? 255 : f / 25
 Mix_Chunk SoundChunks[MAX_SOUNDS];
 ubyte channels[MAX_SOUND_SLOTS];
 
+// Temp chunks created for pitched playback; freed when the channel finishes.
+static Mix_Chunk *pitched_chunks[MAX_SOUND_SLOTS];
+
 #ifdef __linux__
 static int digi_mixer_check_soundfont(const char *path, void *data)
 {
@@ -116,6 +119,11 @@ int digi_mixer_find_channel()
 
 void digi_mixer_free_channel(int channel_num)
 {
+	if (pitched_chunks[channel_num])
+	{
+		Mix_FreeChunk(pitched_chunks[channel_num]);
+		pitched_chunks[channel_num] = NULL;
+	}
 	channels[channel_num] = 0;
 }
 
@@ -220,11 +228,72 @@ void digi_mixer_set_digi_volume( int dvolume )
 int digi_mixer_is_sound_playing(int soundno) { return 0; }
 int digi_mixer_is_channel_playing(int channel) { return 0; }
 
+// Plays `soundnum` with playback speed scaled by `speed` (F1_0 = normal pitch).
+// A higher speed value raises the pitch; lower lowers it.
+int digi_mixer_start_sound_pitched(short soundnum, fix volume, int pan, fix speed)
+{
+	SDL_AudioCVT cvt;
+	Uint8 *data = GameSounds[soundnum].data;
+	Uint32 dlen = GameSounds[soundnum].length;
+	int out_freq;
+	Uint16 out_format;
+	int out_channels;
+	int src_rate;
+	Mix_Chunk *chunk;
+	int channel;
+	int mix_vol = fix2byte(fixmul(digi_volume, volume));
+	int mix_pan = fix2byte(pan);
+
+	if (!digi_initialised) return -1;
+	if (!data || data == (void *)-1) return -1;
+
+	Mix_QuerySpec(&out_freq, &out_format, &out_channels);
+
+	// Treating the source as recorded at a higher rate makes SDL downsample
+	// to output rate, which plays back faster (higher pitch).
+	src_rate = (int)(((long long)GameArg.SndDigiSampleRate * speed) >> 16);
+	if (src_rate < 100) src_rate = 100;
+
+	if (SDL_BuildAudioCVT(&cvt, AUDIO_U8, 1, src_rate, out_format, out_channels, out_freq) < 0)
+		return -1;
+
+	chunk = (Mix_Chunk *)malloc(sizeof(Mix_Chunk));
+	if (!chunk) return -1;
+
+	cvt.buf = (Uint8 *)malloc(dlen * cvt.len_mult);
+	if (!cvt.buf) { free(chunk); return -1; }
+
+	cvt.len = dlen;
+	memcpy(cvt.buf, data, dlen);
+	if (SDL_ConvertAudio(&cvt)) { free(cvt.buf); free(chunk); return -1; }
+
+	chunk->abuf = cvt.buf;
+	chunk->alen = cvt.len_cvt;
+	chunk->allocated = 1;
+	chunk->volume = 128;
+
+	channel = digi_mixer_find_channel();
+	if (channel == -1) { Mix_FreeChunk(chunk); return -1; }
+
+	pitched_chunks[channel] = chunk;
+	Mix_PlayChannel(channel, chunk, 0);
+	Mix_SetPanning(channel, 255 - mix_pan, mix_pan);
+	if (volume > F1_0)
+		Mix_SetDistance(channel, 0);
+	else
+		Mix_SetDistance(channel, 255 - mix_vol);
+	channels[channel] = 1;
+	Mix_ChannelFinished(digi_mixer_free_channel);
+
+	return channel;
+}
+
 void digi_mixer_reset() {}
 void digi_mixer_stop_all_channels()
 {
 	Mix_HaltChannel(-1);
 	memset(channels, 0, MAX_SOUND_SLOTS);
+	memset(pitched_chunks, 0, sizeof(pitched_chunks));
 }
 
 extern void digi_end_soundobj(int channel);
