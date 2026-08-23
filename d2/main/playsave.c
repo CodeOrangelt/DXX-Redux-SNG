@@ -136,6 +136,7 @@ int new_player_config()
 	PlayerCfg.AutoDemoSp = 0;
 	PlayerCfg.AutoDemoMp = 0;
 	PlayerCfg.AutoDemoHideUi = 0;
+	PlayerCfg.DisableIdleDemo = 0;
 	PlayerCfg.ShowCustomColors = 1;
 	PlayerCfg.PreferMyTeamColors = 0;
 	PlayerCfg.QuietPlasma = 1; 
@@ -421,6 +422,8 @@ int read_player_d2x(char *filename)
 					PlayerCfg.AutoDemoMp = atoi(line);
 				if(!strcmp(word,"AUTODEMOHIDEUI"))
 					PlayerCfg.AutoDemoHideUi = atoi(line);
+				if(!strcmp(word,"DISABLEIDLEDEMO"))
+					PlayerCfg.DisableIdleDemo = atoi(line);
 				if(!strcmp(word,"SHOWCUSTOMCOLORS"))
 					PlayerCfg.ShowCustomColors = atoi(line);
 				if(!strcmp(word,"SHIPCOLOR"))
@@ -708,6 +711,7 @@ int write_player_d2x(char *filename)
 		PHYSFSX_printf(fout,"autodemosp=%i\n",PlayerCfg.AutoDemoSp);
 		PHYSFSX_printf(fout,"autodemomp=%i\n",PlayerCfg.AutoDemoMp);
 		PHYSFSX_printf(fout,"autodemohideui=%i\n",PlayerCfg.AutoDemoHideUi);
+		PHYSFSX_printf(fout,"disableidledemo=%i\n",PlayerCfg.DisableIdleDemo);
 		PHYSFSX_printf(fout,"showcustomcolors=%i\n",PlayerCfg.ShowCustomColors);
 		PHYSFSX_printf(fout,"shipcolor=%i\n",PlayerCfg.ShipColor);	
 		PHYSFSX_printf(fout,"missilecolor=%i\n",PlayerCfg.MissileColor);

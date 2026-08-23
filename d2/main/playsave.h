@@ -91,6 +91,7 @@ typedef struct player_config
 	ubyte AutoDemoSp;
 	ubyte AutoDemoMp;
 	ubyte AutoDemoHideUi;
+	ubyte DisableIdleDemo;	// don't auto-play a demo at the menu when idle, even with -autodemo
 	ubyte ShowCustomColors;
 	ubyte PreferMyTeamColors;
 	ubyte QuietPlasma;
