@@ -35,6 +35,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "vecmat.h"
 #include "effects.h"
 #include "slew.h"
+#include "dxma.h"
 #include "gamemine.h"
 #include "gamesave.h"
 #include "palette.h"
@@ -48,6 +49,8 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "newmenu.h"
 #include "scores.h"
 #include "playsave.h"
+#include "racebot.h"
+#include "race.h"
 #include "kconfig.h"
 #include "titles.h"
 #include "credits.h"
@@ -106,7 +109,9 @@ enum MENUS
     MENU_START_UDP_NETGAME,
     MENU_JOIN_MANUAL_UDP_NETGAME,
     MENU_JOIN_LIST_UDP_NETGAME,
+    MENU_DXMA_MISSIONS,
     #endif
+    MENU_RACE_GAME,
     #ifndef RELEASE
     MENU_SANDBOX
     #endif
@@ -122,6 +127,7 @@ static window *menus[16] = { NULL };
 // Function Prototypes added after LINTING
 int do_option(int select);
 int do_new_game_menu(void);
+int do_race_game_menu(void);
 void do_multi_player_menu();
 #ifndef RELEASE
 void do_sandbox_menu();
@@ -442,7 +448,7 @@ int main_menu_handler(newmenu *menu, d_event *event, int *menu_choice )
 			break;
 
 		case EVENT_IDLE:
-			if ( /*keyd_time_when_last_pressed+i2f(25) < timer_query() || */ GameArg.SysAutoDemo  )
+			if ( GameArg.SysAutoDemo && !PlayerCfg.DisableIdleDemo )
 			{
 				int n_demos;
 				n_demos = newdemo_count_demos();
@@ -498,6 +504,8 @@ void create_main_menu(newmenu_item *m, int *menu_choice, int *callers_num_option
 	num_options = 0;
 
 	ADD_ITEM(TXT_NEW_GAME,MENU_NEW_GAME,KEY_N);
+
+	ADD_ITEM("Race vs bots",MENU_RACE_GAME,KEY_R);
 
 	ADD_ITEM(TXT_LOAD_GAME,MENU_LOAD_GAME,KEY_L);
 #if defined(USE_UDP)
@@ -560,7 +568,11 @@ int do_option ( int select)
 {
 	switch (select) {
 		case MENU_NEW_GAME:
+			Race_sp_pending = 0;
 			select_mission(0, "New Game\n\nSelect mission", do_new_game_menu);
+			break;
+		case MENU_RACE_GAME:
+			select_mission(0, "Race\n\nSelect track", do_race_game_menu);
 			break;
 		case MENU_GAME:
 			break;
@@ -612,6 +624,9 @@ int do_option ( int select)
 		case MENU_JOIN_LIST_UDP_NETGAME:
 			multi_protocol = MULTI_PROTO_UDP;
 			net_udp_list_join_game();
+			break;
+		case MENU_DXMA_MISSIONS:
+			dxma_missions_menu();
 			break;
 #endif
 #if defined(USE_UDP)
@@ -788,6 +803,140 @@ int do_difficulty_menu()
 		return 1;
 	}
 	return 0;
+}
+
+// Single-player race: pick how big a field to race and how hard it races,
+// then start the mission's first level in race mode. Everything else about a
+// race -- the class picker on the grid, the mystery boxes, the standings --
+// is the same code the netgame runs; the only difference is who is driving
+// the other ships.
+
+#define RACE_MENU_OPPONENTS 1
+#define RACE_MENU_SKILL     2
+#define RACE_MENU_LAPS      3
+#define RACE_MENU_ADVANCED  4
+#define RACE_MENU_START     6
+
+// The slider labels carry their own value, so they have to be rewritten as the
+// sliders move. They are padded to a fixed width because newmenu measures the
+// menu once, when it is built, and a label that grows afterwards runs into the
+// slider bar. The buffers are static because newmenu keeps the pointers.
+static char Race_menu_bots_text[32];
+static char Race_menu_skill_text[32];
+static char Race_menu_laps_text[32];
+
+static void race_menu_labels(const newmenu_item *items)
+{
+	static const char *const skill_text[RACE_NUM_SKILLS] = { "ROOKIE", "PRO", "ACE" };
+	int skill = items[RACE_MENU_SKILL].value;
+
+	if (skill < 0 || skill >= RACE_NUM_SKILLS)
+		skill = RACE_SKILL_PRO;
+
+	snprintf(Race_menu_bots_text, sizeof(Race_menu_bots_text),
+			 "Opponents: %d", items[RACE_MENU_OPPONENTS].value);
+	snprintf(Race_menu_skill_text, sizeof(Race_menu_skill_text),
+			 "Skill: %-6s", skill_text[skill]);
+	snprintf(Race_menu_laps_text, sizeof(Race_menu_laps_text),
+			 "Laps: %d", items[RACE_MENU_LAPS].value + 1);
+}
+
+static int race_menu_handler(newmenu *menu, d_event *event, void *userdata)
+{
+	newmenu_item *items = newmenu_get_items(menu);
+	int citem = newmenu_get_citem(menu);
+
+	userdata = userdata;
+
+	switch (event->type)
+	{
+		case EVENT_NEWMENU_CHANGED:
+			race_menu_labels(items);
+			return 0;
+
+		case EVENT_NEWMENU_SELECTED:
+			// ENTER on a slider used to start the race, which made the two
+			// settings impossible to adjust without launching. Only the START
+			// line closes the menu now; anything else stays put.
+			if (citem == RACE_MENU_ADVANCED)
+			{
+				net_udp_race_advanced_options(&Race_powerup_chance, &Race_allowed_items);
+				return 1;		// handled: stay in the menu
+			}
+
+			if (citem != RACE_MENU_START)
+				return 1;		// handled: stay in the menu
+
+			return 0;
+
+		default:
+			return 0;
+	}
+}
+
+int do_race_game_menu()
+{
+	newmenu_item m[9];
+	int bots = Race_bot_count > 0 ? Race_bot_count : 3;
+	int skill = Race_bot_skill;
+	int laps = Race_laps_to_win;
+	int choice, i = 0;
+
+	if (bots < 1)
+		bots = 1;
+	if (bots > RACE_MAX_BOTS)
+		bots = RACE_MAX_BOTS;
+	if (skill < 0 || skill >= RACE_NUM_SKILLS)
+		skill = RACE_SKILL_PRO;
+	if (laps < 1) laps = RACE_DEFAULT_LAPS;
+	if (laps > 10) laps = 10;
+
+	memset(m, 0, sizeof(m));
+
+	m[i].type = NM_TYPE_TEXT;   m[i].text = "Race the CPU field on this track."; i++;
+	Assert(i == RACE_MENU_OPPONENTS);
+	m[i].type = NM_TYPE_SLIDER; m[i].text = Race_menu_bots_text; m[i].value = bots;
+	m[i].min_value = 1; m[i].max_value = RACE_MAX_BOTS; i++;
+	Assert(i == RACE_MENU_SKILL);
+	m[i].type = NM_TYPE_SLIDER; m[i].text = Race_menu_skill_text; m[i].value = skill;
+	m[i].min_value = 0; m[i].max_value = RACE_NUM_SKILLS - 1; i++;
+	Assert(i == RACE_MENU_LAPS);
+	m[i].type = NM_TYPE_SLIDER; m[i].text = Race_menu_laps_text; m[i].value = laps - 1;
+	m[i].min_value = 0; m[i].max_value = 9; i++;
+	Assert(i == RACE_MENU_ADVANCED);
+	m[i].type = NM_TYPE_MENU;   m[i].text = "Advanced Options..."; i++;
+	m[i].type = NM_TYPE_TEXT;   m[i].text = ""; i++;
+	Assert(i == RACE_MENU_START);
+	m[i].type = NM_TYPE_MENU;   m[i].text = "START RACE"; i++;
+
+	race_menu_labels(m);
+
+	// Opens on the opponents slider, so left/right adjust straight away.
+	choice = newmenu_do1(NULL, "RACE SETUP", i, m, race_menu_handler, NULL,
+						 RACE_MENU_OPPONENTS);
+
+	if (choice != RACE_MENU_START)
+		return 0;			// escaped out; back to the mission list
+
+	Race_bot_count = m[RACE_MENU_OPPONENTS].value;
+	Race_bot_skill = m[RACE_MENU_SKILL].value;
+	Race_laps_to_win = m[RACE_MENU_LAPS].value + 1;
+
+	if (Race_bot_count < 1)
+		Race_bot_count = 1;
+	if (Race_bot_count > RACE_MAX_BOTS)
+		Race_bot_count = RACE_MAX_BOTS;
+	if (Race_bot_skill < 0 || Race_bot_skill >= RACE_NUM_SKILLS)
+		Race_bot_skill = RACE_SKILL_PRO;
+	if (Race_laps_to_win < 1)
+		Race_laps_to_win = 1;
+
+	Difficulty_level = PlayerCfg.DefaultDifficulty;
+	Race_sp_pending = 1;
+
+	StartNewGame(1);
+
+	return 1;	// exit mission listbox
 }
 
 int do_new_game_menu()
@@ -2073,7 +2222,7 @@ struct misc_menu_data {
 
 void do_misc_menu()
 {
-	newmenu_item m[40];
+	newmenu_item m[45];
 	int i = 0;
 	struct misc_menu_data misc_menu_data;
 
@@ -2189,6 +2338,21 @@ void do_misc_menu()
 		}
 		m[39].value = PlayerCfg.PreferMyTeamColors;
 
+		m[40].type = NM_TYPE_TEXT;
+		m[40].text = "";
+
+		ADD_CHECK(41, "Race: floating track labels", PlayerCfg.RaceTrackLabels);
+		ADD_CHECK(42, "Race: minimap", PlayerCfg.RaceMinimap);
+
+		m[43].type = NM_TYPE_TEXT;
+		m[43].text = "";
+
+		// -autodemo (see d2x.ini) drops straight into a demo the moment the
+		// menu goes idle, which includes the first idle tick right after
+		// picking a pilot. This is the one knob that beats it regardless of
+		// what the command line or ini asked for.
+		ADD_CHECK(44, "Never Auto-Play A Demo At The Menu", PlayerCfg.DisableIdleDemo);
+
 		i = newmenu_do1(NULL, "Misc Options", SDL_arraysize(m), m, menu_misc_options_handler, &misc_menu_data, i);
 
 		PlayerCfg.AutoLeveling			= m[0].value;
@@ -2224,6 +2388,9 @@ void do_misc_menu()
 		PlayerCfg.NoChatSound = m[29].value;
 		PlayerCfg.ShowCustomColors = m[34].value;
 		PlayerCfg.PreferMyTeamColors = (PlayerCfg.MyTeamColor == 8 && PlayerCfg.OtherTeamColor == 8) ? 0 : m[39].value;
+		PlayerCfg.RaceTrackLabels = m[41].value;
+		PlayerCfg.RaceMinimap = m[42].value;
+		PlayerCfg.DisableIdleDemo = m[44].value;
 
 	} while( i>-1 );
 
@@ -2522,11 +2689,13 @@ void do_multi_player_menu()
 	newmenu_item *m;
 	int num_options = 0;
 
-	MALLOC(menu_choice, int, 3);
+	// 4 possible entries: HOST GAME, FIND LAN(/ONLINE) GAMES, JOIN GAME
+	// MANUALLY, DXMA MISSIONS.
+	MALLOC(menu_choice, int, 4);
 	if (!menu_choice)
 		return;
 
-	MALLOC(m, newmenu_item, 3);
+	MALLOC(m, newmenu_item, 4);
 	if (!m)
 	{
 		d_free(menu_choice);
@@ -2541,6 +2710,7 @@ void do_multi_player_menu()
 	m[num_options].type=NM_TYPE_MENU; m[num_options].text="FIND LAN GAMES"; menu_choice[num_options]=MENU_JOIN_LIST_UDP_NETGAME; num_options++;
 #endif
 	m[num_options].type=NM_TYPE_MENU; m[num_options].text="JOIN GAME MANUALLY"; menu_choice[num_options]=MENU_JOIN_MANUAL_UDP_NETGAME; num_options++;
+	m[num_options].type=NM_TYPE_MENU; m[num_options].text="DXMA MISSIONS"; menu_choice[num_options]=MENU_DXMA_MISSIONS; num_options++;
 #endif
 
 	newmenu_do3( NULL, TXT_MULTIPLAYER, num_options, m, (int (*)(newmenu *, d_event *, void *))multi_player_menu_handler, menu_choice, 0, NULL );

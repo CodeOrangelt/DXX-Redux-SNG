@@ -201,6 +201,14 @@ typedef struct {
 	short       start, end;
 } seg_seg;
 
+//	Shared pool every robot's path is allocated out of.
+//
+//	DO NOT raise this to buy headroom: ai_save_state() (ai.c) writes the whole array out at
+//	sizeof(point_seg) * MAX_POINT_SEGS, so the value is part of the savegame format and changing it
+//	silently invalidates every existing save. Budget path lengths against it instead -- see
+//	SURVIVAL_HUNT_PATH_LENGTH (ai.c) for what running this pool to its ceiling actually costs, which
+//	is worse than it sounds: maybe_ai_path_garbage_collect() answers repeated near-full collections by
+//	calling ai_reset_all_paths(), discarding every robot's path at once.
 #define MAX_POINT_SEGS  2500
 
 extern point_seg    Point_segs[MAX_POINT_SEGS];

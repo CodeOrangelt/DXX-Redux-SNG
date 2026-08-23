@@ -52,6 +52,8 @@ add_executable (d2x-redux
     playsave.c
     polyobj.c
     powerup.c
+    race.c
+    racebot.c
     render.c
     robot.c
     scores.c
@@ -184,4 +186,23 @@ if(UPNP)
     target_link_libraries(d2x-redux PRIVATE miniupnpc::miniupnpc)
 endif()
 target_sources(d2x-redux PRIVATE vers_id.c)
+
+# Compile the DXMA mission database CSV into the executable -- see the
+# matching comment in d1/main/CMakeLists.txt. Both games share one CSV
+# (its "game" column carries D1/D2/D3/XL rows); dxma.c filters to D2 rows
+# via DXMA_GAME_TAG.
+set(DXMA_CSV "${CMAKE_CURRENT_SOURCE_DIR}/../dxma_missions_complete_with_direct_links.csv")
+set(DXMA_CSV_GEN "${CMAKE_CURRENT_BINARY_DIR}/dxma_csv_data.c")
+add_custom_command(
+    OUTPUT "${DXMA_CSV_GEN}"
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${DXMA_CSV}
+        -DOUTPUT=${DXMA_CSV_GEN}
+        -DSYMBOL=dxma_csv_data
+        -P "${CMAKE_SOURCE_DIR}/../cmake/embed_file.cmake"
+    DEPENDS "${DXMA_CSV}" "${CMAKE_SOURCE_DIR}/../cmake/embed_file.cmake"
+    COMMENT "Embedding DXMA mission database..."
+)
+target_sources(d2x-redux PRIVATE dxma.c "${DXMA_CSV_GEN}")
+
 install(TARGETS d2x-redux RUNTIME DESTINATION .)

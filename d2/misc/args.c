@@ -210,9 +210,6 @@ void ReadCmdArgs(void)
 		}
 	}
 #endif
-	GameArg.MplRelayAddr		= get_str_arg("-relay_hostaddr", NULL);
-	GameArg.MplRelayPort		= get_int_arg("-relay_hostport", 0);
-	GameArg.MplRelayToken		= get_int_arg("-relay_token", 0);
 #endif
 
 #ifdef EDITOR

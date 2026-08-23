@@ -136,6 +136,7 @@ int new_player_config()
 	PlayerCfg.AutoDemoSp = 0;
 	PlayerCfg.AutoDemoMp = 0;
 	PlayerCfg.AutoDemoHideUi = 0;
+	PlayerCfg.DisableIdleDemo = 0;
 	PlayerCfg.ShowCustomColors = 1;
 	PlayerCfg.PreferMyTeamColors = 0;
 	PlayerCfg.QuietPlasma = 1; 
@@ -171,6 +172,8 @@ int new_player_config()
 		PlayerCfg.ObsHideEnergyWeaponMuzzle[obs_mode] = 0;
 	}
 	PlayerCfg.NoChatSound = 0;
+	PlayerCfg.RaceTrackLabels = 1;
+	PlayerCfg.RaceMinimap = 1;
 	PlayerCfg.ClassicAutoselectWeapon = 0;
 
 	// Default taunt macros
@@ -419,6 +422,8 @@ int read_player_d2x(char *filename)
 					PlayerCfg.AutoDemoMp = atoi(line);
 				if(!strcmp(word,"AUTODEMOHIDEUI"))
 					PlayerCfg.AutoDemoHideUi = atoi(line);
+				if(!strcmp(word,"DISABLEIDLEDEMO"))
+					PlayerCfg.DisableIdleDemo = atoi(line);
 				if(!strcmp(word,"SHOWCUSTOMCOLORS"))
 					PlayerCfg.ShowCustomColors = atoi(line);
 				if(!strcmp(word,"SHIPCOLOR"))
@@ -442,6 +447,10 @@ int read_player_d2x(char *filename)
 					PlayerCfg.NoChatSound = atoi(line);
 				if(!strcmp(word,"CLASSICAUTOSELECTWEAPON"))
 					PlayerCfg.ClassicAutoselectWeapon = atoi(line);
+				if(!strcmp(word,"RACETRACKLABELS"))
+					PlayerCfg.RaceTrackLabels = atoi(line);
+				if(!strcmp(word,"RACEMINIMAP"))
+					PlayerCfg.RaceMinimap = atoi(line);
 
 				// Observer settings - migrate from old version
 				// If migrating from an older version, set all observer modes to the same value
@@ -702,6 +711,7 @@ int write_player_d2x(char *filename)
 		PHYSFSX_printf(fout,"autodemosp=%i\n",PlayerCfg.AutoDemoSp);
 		PHYSFSX_printf(fout,"autodemomp=%i\n",PlayerCfg.AutoDemoMp);
 		PHYSFSX_printf(fout,"autodemohideui=%i\n",PlayerCfg.AutoDemoHideUi);
+		PHYSFSX_printf(fout,"disableidledemo=%i\n",PlayerCfg.DisableIdleDemo);
 		PHYSFSX_printf(fout,"showcustomcolors=%i\n",PlayerCfg.ShowCustomColors);
 		PHYSFSX_printf(fout,"shipcolor=%i\n",PlayerCfg.ShipColor);	
 		PHYSFSX_printf(fout,"missilecolor=%i\n",PlayerCfg.MissileColor);
@@ -712,6 +722,8 @@ int write_player_d2x(char *filename)
 		PHYSFSX_printf(fout,"maxfps=%i\n",PlayerCfg.maxFps);	
 		PHYSFSX_printf(fout,"nochatsound=%i\n",PlayerCfg.NoChatSound);
 		PHYSFSX_printf(fout,"classicautoselectweapon=%i\n",PlayerCfg.ClassicAutoselectWeapon);
+		PHYSFSX_printf(fout,"racetracklabels=%i\n",PlayerCfg.RaceTrackLabels);
+		PHYSFSX_printf(fout,"raceminimap=%i\n",PlayerCfg.RaceMinimap);
 		PHYSFSX_printf(fout,"[end]\n");
 		PHYSFSX_printf(fout, "[observer]\n");
 		PHYSFSX_printf(fout, "obssharesettings=%i\n", PlayerCfg.ObsShareSettings);

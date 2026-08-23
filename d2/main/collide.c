@@ -59,6 +59,8 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "textures.h"
 #ifdef NETWORK
 #include "multi.h"
+#include "race.h"
+#include "racebot.h"
 #endif
 #include "cntrlcen.h"
 #include "newdemo.h"
@@ -1882,6 +1884,12 @@ void drop_player_eggs(object *playerobj) {
 
 void drop_player_eggs_remote(object *playerobj, ubyte remote)
 {
+	// Race mode: a wreck must not scatter permanent pickups, or dying while
+	// holding a mega would leave one on the track for the rest of the race.
+	// Everything a racer carries came from a mystery box on a fuse.
+	if (Game_mode & GM_RACE)
+		return;
+
 	if ((playerobj->type == OBJ_PLAYER) || (playerobj->type == OBJ_GHOST)) {
 		int	rthresh;
 		int	pnum = playerobj->id;
@@ -2215,6 +2223,14 @@ extern fix64 Buddy_sorry_time;
 
 void apply_damage_to_player(object *playerobj, object *killer, fix damage, ubyte possibly_friendly)
 {
+	// A race bot's shields live in its player slot and come off here: the
+	// rest of this function only ever moves the local player's, because in a
+	// netgame every other ship is somebody else's to account for. A bot has
+	// no machine of its own. Before the Player_is_dead test, so bots still
+	// take hits while the human is waiting to respawn.
+	if (race_bot_take_damage(playerobj, killer, damage))
+		return;
+
 	if (Player_is_dead)
 		return;
 
@@ -2237,6 +2253,11 @@ void apply_damage_to_player(object *playerobj, object *killer, fix damage, ubyte
 	//be a mirror of the value in the Player structure.
 
 	if (playerobj->id == Player_num) {		//is this the local player?
+		// Race classes trade damage for speed both ways round -- the
+		// shooter's multiplier and ours, applied where every source of damage
+		// funnels through.
+		damage = race_scale_damage(killer, damage);
+
 		Players[Player_num].shields -= damage;
 		PALETTE_FLASH_ADD(f2i(damage)*4,-f2i(damage/2),-f2i(damage/2));	//flash red
 
@@ -2576,6 +2597,19 @@ void collide_player_and_powerup( object * playerobj, object * powerup, vms_vecto
 
 	if (!Endlevel_sequence && !Player_is_dead && (playerobj->id == Player_num )) {
 		int powerup_used;
+
+#ifdef NETWORK
+		// Mystery boxes aren't networked objects -- every client spawns its
+		// own copy at the same map-authored spot -- so they must not go
+		// through multi_send_remobj()'s objnum mapping.
+		if ((Game_mode & GM_RACE) && race_box_hit(powerup))
+			return;
+
+		// A racer carries their class's gun and no other, so another class's
+		// primary is left lying where it is rather than picked up.
+		if (!race_powerup_allowed(powerup->id))
+			return;
+#endif
 
 		powerup_used = do_powerup(powerup);
 

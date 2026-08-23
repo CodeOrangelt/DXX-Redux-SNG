@@ -60,3 +60,24 @@ Thumbs.db
 *.app
 d*x-rebirth
 /*/out/install
+
+# CMake build directories #
+############################
+build*/
+buildd1/
+buildd2/
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+cmake_install.cmake
+Makefile
+_deps/
+
+# AppImage packaging output #
+##############################
+*.AppImage
+*.appdir/
+
+# Downloaded/local assets not part of source #
+################################################
+TimGM6mb.sf2

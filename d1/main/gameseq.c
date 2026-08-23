@@ -87,6 +87,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "songs.h"
 #ifdef NETWORK
 #include "multi.h"
+#include "survival.h"
 #endif
 #include "strutil.h"
 #ifdef EDITOR
@@ -183,13 +184,24 @@ gameseq_init_network_players()
 	ConsoleObject = &Objects[0];
 	k = 0;
 	j = 0;
+#ifdef NETWORK
+	// Survival sets GM_MULTI_COOP purely for its no-friendly-fire semantics
+	// (see net_udp_set_game_mode()), but it needs Anarchy-style spread-out
+	// spawning, not real Coop's "everyone starts at the one shared OBJ_COOP
+	// marker" behavior -- most levels have no OBJ_COOP markers at all, which
+	// would collapse NumNetPlayerPositions down to a single point and put
+	// every player on top of each other.
+	int coop_single_start = (Game_mode & GM_MULTI_COOP) && Netgame.gamemode != NETGAME_SURVIVAL;
+#else
+	int coop_single_start = (Game_mode & GM_MULTI_COOP);
+#endif
 	for (i=0;i<=Highest_object_index;i++) {
 
 		if (( Objects[i].type==OBJ_PLAYER )	|| (Objects[i].type == OBJ_GHOST) || (Objects[i].type == OBJ_COOP))
 		{
 #ifndef SHAREWARE
-			if ( (!(Game_mode & GM_MULTI_COOP) && ((Objects[i].type == OBJ_PLAYER)||(Objects[i].type==OBJ_GHOST))) ||
-	           ((Game_mode & GM_MULTI_COOP) && ((j == 0) || ( Objects[i].type==OBJ_COOP ) )) )
+			if ( (!coop_single_start && ((Objects[i].type == OBJ_PLAYER)||(Objects[i].type==OBJ_GHOST))) ||
+	           (coop_single_start && ((j == 0) || ( Objects[i].type==OBJ_COOP ) )) )
 			{
 
 				Objects[i].type=OBJ_PLAYER;
@@ -214,6 +226,44 @@ gameseq_init_network_players()
 	if (Game_mode & GM_MULTI) {
 		// Ensure we have 8 starting locations, even if there aren't 8 in the file.  This makes observer mode work in all levels.
 		for (; k < MAX_PLAYERS; k++) {
+#ifdef NETWORK
+			// Survival is commonly played on missions authored for
+			// single-player/Coop that only place one real Anarchy-style
+			// start marker (NumNetPlayerPositions==1) -- unlike stock Coop,
+			// which intentionally stacks every extra player on that same
+			// spot, Survival needs everyone spread out (see
+			// gameseq_init_network_players()'s coop_single_start comment
+			// above). Cloning Objects[0]'s exact position for every extra
+			// slot put all of them on top of each other. Walk to a random
+			// connected neighboring segment per extra slot instead -- same
+			// decorrelation trick survival.c's own robot spawner uses --
+			// so each extra player lands nearby but not literally
+			// coincident.
+			if (Netgame.gamemode == NETGAME_SURVIVAL && NumNetPlayerPositions > 0)
+			{
+				int segnum = Objects[k % NumNetPlayerPositions].segnum;
+				int step;
+
+				for (step = 0; step < k; step++)
+				{
+					int side = (d_rand() * MAX_SIDES_PER_SEGMENT) >> 15;
+					int child = Segments[segnum].children[side];
+					if (IS_CHILD(child))
+						segnum = child;
+				}
+
+				pick_random_point_in_seg(&Player_init[k].pos, segnum);
+				Player_init[k].orient = Objects[k % NumNetPlayerPositions].orient;
+				Player_init[k].segnum = segnum;
+
+				i = obj_create(OBJ_PLAYER, k, Player_init[k].segnum, &Player_init[k].pos,
+					&Player_init[k].orient, Polygon_models[Player_ship->model_num].rad,
+					CT_NONE, MT_PHYSICS, RT_POLYOBJ);
+
+				Players[k].objnum = i;
+				continue;
+			}
+#endif
 			Player_init[k].pos = Objects[k % NumNetPlayerPositions].pos;
 			Player_init[k].orient = Objects[k % NumNetPlayerPositions].orient;
 			Player_init[k].segnum = Objects[k % NumNetPlayerPositions].segnum;
@@ -1200,8 +1250,47 @@ void DoPlayerDead()
 				window_close(Game_wind);		// Exit out of game loop
 		}
 	} else {
-		init_player_stats_new_ship(Player_num);
-		StartLevel(1);
+		int survival_ended = 0;
+#ifdef NETWORK
+		// In Survival, dying puts you out for the rest of the current wave
+		// rather than the rest of the match: survival_player_died() marks
+		// this player down and, only if that was the last one standing,
+		// shows the stats screen and disconnects everyone on its own (same
+		// window_close(Game_wind) pattern as the "real" game-over branch
+		// above). Otherwise the team clearing the wave revives everyone who
+		// went down during it -- see survival_revive_all().
+		if ((Game_mode & GM_MULTI) && Netgame.gamemode == NETGAME_SURVIVAL)
+			survival_ended = survival_player_died(Player_num);
+#endif
+		if (!survival_ended) {
+			init_player_stats_new_ship(Player_num);
+			StartLevel(1);
+#ifdef NETWORK
+			// Note the survival_is_eliminated() test: survival_player_died()
+			// can decline to put the player down at all by spending a banked
+			// extra life, in which case this really is a plain respawn and
+			// the spectator flagging below must not happen.
+			if ((Game_mode & GM_MULTI) && Netgame.gamemode == NETGAME_SURVIVAL && survival_is_eliminated(Player_num))
+			{
+				// Down but the match continues: this fresh ship is a
+				// spectator shell, not a combatant -- untouchable, cloaked
+				// so the robot AI ignores it too, and blocked from firing
+				// (see survival_is_eliminated() call sites in game.c). It's
+				// also ghosted on every other machine so nobody can see it.
+				// The cloak is held open frame by frame in
+				// survival_hold_spectator_cloak(); all of it is cleared
+				// again by survival_revive_all() when the team clears the
+				// wave, via init_player_stats_new_ship().
+				Players[Player_num].flags |= PLAYER_FLAGS_INVULNERABLE | PLAYER_FLAGS_CLOAKED;
+				Players[Player_num].cloak_time = GameTime64;
+			}
+			else if ((Game_mode & GM_MULTI) && Netgame.gamemode == NETGAME_SURVIVAL)
+				// Not eliminated -- either a fresh spawn or an extra life
+				// just saved us. survival_maybe_grant_revive_invulnerability()
+				// no-ops unless it was the latter.
+				survival_maybe_grant_revive_invulnerability(Player_num);
+#endif
+		}
 	}
 
 	if (Game_wind  && cycle_window_vis)

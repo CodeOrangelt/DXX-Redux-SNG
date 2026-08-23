@@ -23,6 +23,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #include "game.h"
 #include "multi.h"
+#include "survival.h"
 #include "object.h"
 #include "laser.h"
 #include "fuelcen.h"
@@ -71,6 +72,77 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 // LOCALIZE ME!!
 
 #define vm_angvec_zero(v) (v)->p=(v)->b=(v)->h=0
+
+// Convert keycodes to ASCII for immediate text entry in EVENT_KEY_COMMAND handlers.
+static int multi_keycode_to_ascii(int key)
+{
+	int base_key = key & 0xFF;
+
+	if (base_key == KEY_1) return '1';
+	if (base_key == KEY_2) return '2';
+	if (base_key == KEY_3) return '3';
+	if (base_key == KEY_4) return '4';
+	if (base_key == KEY_5) return '5';
+	if (base_key == KEY_6) return '6';
+	if (base_key == KEY_7) return '7';
+	if (base_key == KEY_8) return '8';
+	if (base_key == KEY_9) return '9';
+	if (base_key == KEY_0) return '0';
+
+	if (base_key == KEY_A) return 'a';
+	if (base_key == KEY_B) return 'b';
+	if (base_key == KEY_C) return 'c';
+	if (base_key == KEY_D) return 'd';
+	if (base_key == KEY_E) return 'e';
+	if (base_key == KEY_F) return 'f';
+	if (base_key == KEY_G) return 'g';
+	if (base_key == KEY_H) return 'h';
+	if (base_key == KEY_I) return 'i';
+	if (base_key == KEY_J) return 'j';
+	if (base_key == KEY_K) return 'k';
+	if (base_key == KEY_L) return 'l';
+	if (base_key == KEY_M) return 'm';
+	if (base_key == KEY_N) return 'n';
+	if (base_key == KEY_O) return 'o';
+	if (base_key == KEY_P) return 'p';
+	if (base_key == KEY_Q) return 'q';
+	if (base_key == KEY_R) return 'r';
+	if (base_key == KEY_S) return 's';
+	if (base_key == KEY_T) return 't';
+	if (base_key == KEY_U) return 'u';
+	if (base_key == KEY_V) return 'v';
+	if (base_key == KEY_W) return 'w';
+	if (base_key == KEY_X) return 'x';
+	if (base_key == KEY_Y) return 'y';
+	if (base_key == KEY_Z) return 'z';
+
+	if (base_key == KEY_SPACEBAR) return ' ';
+	if (base_key == KEY_MINUS) return '-';
+	if (base_key == KEY_EQUAL) return '=';
+	if (base_key == KEY_LBRACKET) return '[';
+	if (base_key == KEY_RBRACKET) return ']';
+	if (base_key == KEY_SLASH) return '\\';
+	if (base_key == KEY_DIVIDE) return '/';
+	if (base_key == KEY_COMMA) return ',';
+	if (base_key == KEY_PERIOD) return '.';
+	if (base_key == KEY_SEMICOL) return ';';
+	if (base_key == KEY_RAPOSTRO) return '\'';
+	if (base_key == KEY_LAPOSTRO) return '`';
+
+	if (base_key == KEY_PAD0) return '0';
+	if (base_key == KEY_PAD1) return '1';
+	if (base_key == KEY_PAD2) return '2';
+	if (base_key == KEY_PAD3) return '3';
+	if (base_key == KEY_PAD4) return '4';
+	if (base_key == KEY_PAD5) return '5';
+	if (base_key == KEY_PAD6) return '6';
+	if (base_key == KEY_PAD7) return '7';
+	if (base_key == KEY_PAD8) return '8';
+	if (base_key == KEY_PAD9) return '9';
+	if (base_key == KEY_PADPERIOD) return '.';
+
+	return 255;
+}
 
 void reset_player_object(void); // In object.c but not in object.h
 void multi_reset_object_texture(object *objp);
@@ -144,7 +216,8 @@ const char GMNames[MULTI_GAME_TYPE_COUNT][MULTI_GAME_NAME_LENGTH]={
 	"Bounty",
 	"Capture Flag",
 	"Turkey Shoot",
-	"Arcade"
+	"Arcade",
+	"Survival"
 };
 const char GMNamesShrt[MULTI_GAME_TYPE_COUNT][8]={
 	"ANRCHY",
@@ -157,7 +230,8 @@ const char GMNamesShrt[MULTI_GAME_TYPE_COUNT][8]={
 	"BOUNTY",
 	"CTF",
 	"TURKEY",
-	"ARCADE"
+	"ARCADE",
+	"SURVIVE"
 };
 
 int Current_obs_player = OBSERVER_PLAYER_ID; // Current player being observed. Defaults to the observer player ID.
@@ -1515,6 +1589,9 @@ void multi_do_frame(void)
 	// Arcade Mode handling - spawns super powers around the mine (spawner only)
 	multi_arcade_do_frame();
 
+	// Survival Mode handling - spawns robot waves and ammo drops (spawner only)
+	survival_do_frame();
+
 	multi_send_message(); // Send any waiting messages
 
 	if (Game_mode & GM_MULTI_ROBOTS)
@@ -2126,7 +2203,7 @@ int multi_message_input_sub(int key)
 			return 1;
 		default:
 		{
-			int ascii = key_ascii();
+			int ascii = multi_keycode_to_ascii(key);
 			if ( ascii < 255 ) {
 				if (multi_message_index < MAX_MESSAGE_LEN-2 ) {
 					Network_message[multi_message_index++] = ascii;
@@ -2252,15 +2329,14 @@ void multi_do_message(const ubyte *cbuf)
 {
 	const char *buf = (const char*)cbuf;
 
-#ifdef USE_TRACKER
 	// Forward every chat message the host receives, ahead of the
 	// team-addressing filter below -- that filter decides what to *display*
 	// locally, not what the tracker should see. buf[1] != Player_num guards
 	// against double-logging in case the host ever receives its own
 	// broadcast back (multi_send_message() already forwards its own chat).
-	if (multi_i_am_master() && Netgame.Tracker && (ubyte)buf[1] != Player_num)
+	// The host/tracker-enabled test lives inside udp_tracker_send_message().
+	if ((ubyte)buf[1] != Player_num)
 		udp_tracker_send_message((ubyte)buf[1], buf + 2);
-#endif
 
 	if (is_observer() && !PlayerCfg.ObsPlayerChat[get_observer_game_mode()]) {
 		multi_sending_message[(int)buf[1]] = 0;
@@ -2328,13 +2404,10 @@ void multi_do_message(const ubyte *cbuf)
 
 void multi_do_obs_message(const ubyte *cbuf)
 {
-#ifdef USE_TRACKER
 	// A remote observer sent this (the host's own observer chat is already
 	// forwarded directly from multi_send_obs_message() -- it never loops
 	// back through here).
-	if (multi_i_am_master() && Netgame.Tracker)
-		udp_tracker_send_obs_message(((const char*)cbuf) + 2);
-#endif
+	udp_tracker_send_obs_message(((const char*)cbuf) + 2);
 
     if (!PlayerCfg.ObsChat) {
         return;
@@ -2542,10 +2615,8 @@ multi_do_kill(const ubyte *buf)
 
 		multi_send_data(multibuf, 7, 2);
 
-#ifdef USE_TRACKER
-		if (Netgame.Tracker)
-			udp_tracker_send_kill(multibuf[1], GET_INTEL_SHORT(multibuf + 2), multibuf[4], multibuf[5], multibuf[6]);
-#endif
+		// A client's death, just relayed by me. Forward the exact bytes.
+		udp_tracker_send_kill(multibuf[1], GET_INTEL_SHORT(multibuf + 2), multibuf[4], multibuf[5], multibuf[6]);
 	}
 
 	killed = Players[pnum].objnum;
@@ -4364,13 +4435,10 @@ multi_send_message(void)
 		multibuf[loc-1] = '\0';
 		multi_send_data(multibuf, loc, 0);
 		con_printf(CON_NORMAL, "Gamelog: %s: %s\n", Players[Player_num].callsign, Network_message);
-#ifdef USE_TRACKER
 		// I am the host sending my own chat -- I already know what I said,
 		// no need to wait to receive it back the way multi_do_message()
 		// would for someone else's message.
-		if (multi_i_am_master() && Netgame.Tracker)
-			udp_tracker_send_message(Player_num, (const char*)multibuf + 2);
-#endif
+		udp_tracker_send_message(Player_num, (const char*)multibuf + 2);
 		Network_message_reciever = -1;
 	}
 }
@@ -4390,10 +4458,7 @@ void multi_send_obs_message(void)
 
     if (multi_i_am_master()) {
         HUD_init_message(HM_MULTI, "%c%c%s: %s", (char)CC_COLOR, (char)BM_XRGB(8, 8, 32), Players[Player_num].callsign, Network_message);
-#ifdef USE_TRACKER
-        if (Netgame.Tracker)
-            udp_tracker_send_obs_message((const char*)multibuf + 2);
-#endif
+        udp_tracker_send_obs_message((const char*)multibuf + 2);
     }
 }
 
@@ -4488,10 +4553,9 @@ multi_send_kill(int objnum)
 	{
 		multi_send_data(multibuf, count, 2);
 
-#ifdef USE_TRACKER
-		if (Netgame.Tracker)
-			udp_tracker_send_kill(multibuf[1], GET_INTEL_SHORT(multibuf + 2), multibuf[4], multibuf[5], multibuf[6]);
-#endif
+		// My own death as host -- forward before multi_compute_kill() below,
+		// which trashes multibuf.
+		udp_tracker_send_kill(multibuf[1], GET_INTEL_SHORT(multibuf + 2), multibuf[4], multibuf[5], multibuf[6]);
 
 		multi_compute_kill(killer_objnum, objnum); // THIS TRASHES THE MULTIBUF!!!
 	}
@@ -4932,6 +4996,11 @@ multi_prep_level(void)
 	// Initialize Arcade mode
 	if (Game_mode & GM_ARCADE)
 		multi_arcade_init_level();
+
+	// Survival: the mine starts stripped of every author-placed powerup --
+	// robot drops are the only supply line. Must happen before the object
+	// checksum below, and before anyone can pick anything up.
+	survival_strip_level_powerups();
 
 	multi_consistency_error(1);
 
@@ -5584,26 +5653,20 @@ void multi_send_damage(fix damage, fix shields, ubyte killer_type, ubyte killer_
 
 	multi_send_data_direct( multibuf, 14, multi_who_is_master(), 2 );
 
-#ifdef USE_TRACKER
 	// I am the host taking damage myself -- this packet is addressed to
 	// myself, so it never comes back around through multi_do_damage() the
 	// way another player's damage packet would. Forward it from here
 	// instead, using the exact bytes just sent.
-	if (multi_i_am_master() && Netgame.Tracker)
-		udp_tracker_send_damage(multibuf[1], GET_INTEL_INT(multibuf + 2), GET_INTEL_INT(multibuf + 6), multibuf[10], multibuf[11], multibuf[12], multibuf[13]);
-#endif
+	udp_tracker_send_damage(multibuf[1], GET_INTEL_INT(multibuf + 2), GET_INTEL_INT(multibuf + 6), multibuf[10], multibuf[11], multibuf[12], multibuf[13]);
 }
 
 void multi_do_damage( const ubyte *buf )
 {
-#ifdef USE_TRACKER
 	// I am the host receiving another player's damage packet -- this is
 	// the same reliably-delivered data observer mode uses below, just not
 	// gated on is_observer() since the tracker wants it regardless of
 	// whether anyone is spectating.
-	if (multi_i_am_master() && Netgame.Tracker)
-		udp_tracker_send_damage(buf[1], GET_INTEL_INT(buf + 2), GET_INTEL_INT(buf + 6), buf[10], buf[11], buf[12], buf[13]);
-#endif
+	udp_tracker_send_damage(buf[1], GET_INTEL_INT(buf + 2), GET_INTEL_INT(buf + 6), buf[10], buf[11], buf[12], buf[13]);
 
 	if (is_observer())
 	{
@@ -6199,6 +6262,16 @@ multi_process_data(const ubyte *buf, int len)
 			if (!Endlevel_sequence) multi_do_arcade_powerup(buf); break;
 		case MULTI_ARCADE_ANNOUNCE:
 			if (!Endlevel_sequence) multi_do_arcade_announce(buf); break;
+		case MULTI_SURVIVAL_WAVE_STATE:
+			if (!Endlevel_sequence) multi_do_survival_wave_state(buf); break;
+		case MULTI_SURVIVAL_SPAWN_ROBOT:
+			if (!Endlevel_sequence) multi_do_survival_spawn_robot(buf); break;
+		case MULTI_SURVIVAL_ELIMINATED:
+			if (!Endlevel_sequence) multi_do_survival_eliminated(buf); break;
+		case MULTI_SURVIVAL_SHIELDS:
+			if (!Endlevel_sequence) multi_do_survival_shields(buf); break;
+		case MULTI_SURVIVAL_SHOP_READY:
+			if (!Endlevel_sequence) multi_do_survival_shop_ready(buf); break;
 		case MULTI_PLAY_SOUND:
 			if (!Endlevel_sequence) multi_do_play_sound(buf); break;
 		case MULTI_ROBOT_CLAIM:

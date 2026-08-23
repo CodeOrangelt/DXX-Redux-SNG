@@ -72,6 +72,9 @@ extern void digi_stop_sound( int channel );
 
 // Volume 0-F1_0
 extern int digi_start_sound(short soundnum, fix volume, int pan, int looping, int loop_start, int loop_end, int soundobj);
+// Like digi_start_sound but speed > F1_0 raises pitch, < F1_0 lowers it.
+extern int digi_start_sound_pitched(short soundnum, fix volume, int pan, fix speed);
+extern void digi_play_sample_pitched(int sndnum, fix max_volume, fix speed);
 
 // Stops all sounds that are playing
 void digi_stop_all_channels();

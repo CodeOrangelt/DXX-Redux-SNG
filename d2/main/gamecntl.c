@@ -79,6 +79,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "scores.h"
 
 #include "multi.h"
+#include "race.h"
 #include "cntrlcen.h"
 #include "fuelcen.h"
 #include "pcx.h"
@@ -1541,7 +1542,7 @@ char AcidCheatOn=0;
 char old_IntMethod;
 
 #define CHEAT_MAX_LEN 15
-#define NUM_CHEATS    28
+#define NUM_CHEATS    29
 
 typedef struct cheat_code
 {
@@ -1578,6 +1579,7 @@ cheat_code cheat_codes[NUM_CHEATS] = {
 	{ "helpvishnu", &cheats.buddyclone },
 	{ "gowingnut", &cheats.buddyangry },
 	{ "bittersweet", &cheats.acid },
+	{ "racetest", &cheats.racetest },
 };
 
 int FinalCheats(int key)
@@ -1776,6 +1778,46 @@ int FinalCheats(int key)
 	if (cheat_codes[gotcha].stateptr == &cheats.acid)
 	{
 		HUD_init_message_literal(HM_DEFAULT, cheats.acid?"Going up!":"Coming down!");
+	}
+
+	if (cheat_codes[gotcha].stateptr == &cheats.racetest)
+	{
+		if (cheats.racetest)
+		{
+			Game_mode |= GM_RACE;
+			race_init_level();
+			HUD_init_message_literal(HM_DEFAULT, "Race test mode ON (single-player, checkpoints/laps only)");
+
+			// Drop a scattering of common powerups around the player so
+			// there's something to fly through and pick up while testing.
+			{
+				vms_vector pos;
+				vms_vector zero_vel = { 0, 0, 0 };
+				int segnum = ConsoleObject->segnum;
+				extern int drop_powerup(int type, int id, int num, vms_vector *init_vel, vms_vector *pos, int segnum);
+
+				#define RACETEST_DROP(id, rs, us, fs) \
+					vm_vec_scale_add(&pos, &ConsoleObject->pos, &ConsoleObject->orient.rvec, i2f(rs)); \
+					vm_vec_scale_add2(&pos, &ConsoleObject->orient.uvec, i2f(us)); \
+					vm_vec_scale_add2(&pos, &ConsoleObject->orient.fvec, i2f(fs)); \
+					drop_powerup(OBJ_POWERUP, id, 1, &zero_vel, &pos, segnum);
+
+				RACETEST_DROP(POW_ENERGY, -15, 0, 20)
+				RACETEST_DROP(POW_SHIELD_BOOST, 15, 0, 20)
+				RACETEST_DROP(POW_LASER, 0, 10, 25)
+				RACETEST_DROP(POW_VULCAN_WEAPON, -15, 0, 30)
+				RACETEST_DROP(POW_VULCAN_AMMO, 0, 0, 35)
+				RACETEST_DROP(POW_QUAD_FIRE, 15, 0, 30)
+				RACETEST_DROP(POW_AFTERBURNER, 0, -10, 25)
+
+				#undef RACETEST_DROP
+			}
+		}
+		else
+		{
+			Game_mode &= ~GM_RACE;
+			HUD_init_message_literal(HM_DEFAULT, "Race test mode OFF");
+		}
 	}
 
 	return 1;
@@ -1988,6 +2030,13 @@ int ReadControls(d_event *event)
 		{
 			return multi_message_input_sub(key);
 		}
+
+		// The class picker gets first refusal on a key, but only claims the
+		// ones it owns -- ESC, chat and the rest still work behind it, and
+		// flight/firing are held by their own gates rather than by taking
+		// the whole keyboard.
+		if (race_lobby_handle_key(key))
+			return 1;
 #endif
 
 #ifndef RELEASE
@@ -2038,6 +2087,11 @@ int ReadControls(d_event *event)
 			should_read_controls = 1; 
 		}
 	}
+
+	// The class picker takes priority over that spawn-preview override too:
+	// nothing on the grid flies, turns or fires until the lobby closes.
+	if (race_lobby_blocks_input())
+		should_read_controls = 0;
 	#endif
 
 	if (should_read_controls)

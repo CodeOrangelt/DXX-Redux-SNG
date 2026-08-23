@@ -45,6 +45,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "text.h"
 #include "rbaudio.h"
 #include "multi.h"
+#include "race.h"
 #include "kmatrix.h"
 #include "gauges.h"
 #include "pcx.h"
@@ -60,6 +61,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #define KMATRIX_VIEW_SEC 7 // Time after reactor explosion until new level - in seconds
 void kmatrix_phallic ();
 void kmatrix_redraw_coop();
+void kmatrix_redraw_race();
 fix64 StartAbortMenuTime;
 
 void kmatrix_draw_item( int  i, int *sorted )
@@ -134,6 +136,7 @@ void kmatrix_draw_names(int *sorted)
 		selected_player_rgb = player_rgb_alt; 
 	else
 		selected_player_rgb = player_rgb;	
+	selected_player_rgb = race_lock_player_rgb(selected_player_rgb);
 
 	for (j=0; j<N_players; j++)
 	{
@@ -190,7 +193,9 @@ void kmatrix_status_msg (fix time, int reactor)
 	grd_curcanv->cv_font = GAME_FONT;
 	gr_set_fontcolor(gr_find_closest_color(255,255,255),-1);
 
-	if (reactor)
+	if (Game_mode & GM_RACE)
+		gr_printf(0x8000, SHEIGHT-LINE_SPACING, "You have finished. Standings update as the rest of the field comes in -- ESC to leave.");
+	else if (reactor)
 		gr_printf(0x8000, SHEIGHT-LINE_SPACING, "Waiting for players to finish level. Reactor time: T-%d", time);
 	else
 		gr_printf(0x8000, SHEIGHT-LINE_SPACING, "Level finished. Wait (%d) to proceed or ESC to Quit.", time);
@@ -210,16 +215,28 @@ void kmatrix_redraw(kmatrix_screen *km)
 	int sorted[MAX_PLAYERS];
 
 	gr_set_current_canvas(NULL);
+	// Tried keeping the live cockpit on screen behind the standings instead
+	// of the dedicated results background -- it read as the gameplay HUD
+	// shouldering the results screen out of the way rather than as
+	// "persistent," and fought the table for attention regardless of how
+	// it was dimmed. Back to the plain background this screen was designed
+	// around; Game_wind is still hidden for the duration (see
+	// race_show_summary()), it just isn't drawn as a backdrop here anymore.
 	show_fullscr(&km->background);
 
 	if(Netgame.BlackAndWhitePyros) 
 		selected_player_rgb = player_rgb_alt; 
 	else
 		selected_player_rgb = player_rgb;	
+	selected_player_rgb = race_lock_player_rgb(selected_player_rgb);
 	
 	if (Game_mode & GM_MULTI_COOP)
 	{
 		kmatrix_redraw_coop();
+	}
+	else if (Game_mode & GM_RACE)
+	{
+		kmatrix_redraw_race();
 	}
 	else
 	{
@@ -251,6 +268,72 @@ void kmatrix_redraw(kmatrix_screen *km)
 
 			kmatrix_draw_item( i, sorted );
 		}
+	}
+
+	gr_palette_load(gr_palette);
+}
+
+void kmatrix_draw_race_names(int *sorted)
+{
+	sorted=sorted;
+
+	gr_set_fontcolor( BM_XRGB(63,31,31),-1 );
+	gr_string( CENTERSCREEN-FSPACX(15), FSPACY(40), "LAPS");
+	gr_set_fontcolor( BM_XRGB(63,31,31),-1 );
+	gr_string( CENTERSCREEN+FSPACX(40), FSPACY(40), "TIME");
+}
+
+void kmatrix_draw_race_item(int i, int *sorted)
+{
+	int x, y, pnum = sorted[i];
+	race_player_info *rp = &Race_player[pnum];
+	char buf[16];
+	char name[16];
+
+	y = FSPACY(50+i*9);
+	sprintf(name, "%d. %s", i+1, Players[pnum].callsign);
+	// CENTERING_OFFSET() is tuned for the deathmatch kill matrix, which
+	// widens with N_players -- for a race's fixed two-column LAPS/TIME
+	// layout it puts the name hard against the left edge, stranded well
+	// away from the columns it's naming. Anchored off CENTERSCREEN instead,
+	// same as LAPS and TIME are, so the row reads as one line.
+	gr_printf( CENTERSCREEN-FSPACX(110), y, "%s", name );
+
+	x = CENTERSCREEN-FSPACX(15);
+	gr_set_fontcolor( BM_XRGB(60,40,10),-1 );
+	gr_printf( x, y, "%d/%d", rp->laps_completed, Race_laps_to_win );
+
+	x = CENTERSCREEN+FSPACX(40);
+	race_format_time(buf, sizeof(buf), race_get_finish_elapsed(pnum));
+	gr_set_fontcolor( BM_XRGB(60,40,10),-1 );
+	gr_printf( x, y, "%s", buf );
+}
+
+void kmatrix_redraw_race()
+{
+	int i, color;
+	int sorted[MAX_PLAYERS];
+
+	grd_curcanv->cv_font = MEDIUM3_FONT;
+	gr_string( 0x8000, FSPACY(10), "RACE RESULTS");
+	grd_curcanv->cv_font = GAME_FONT;
+
+	race_get_positions(sorted);
+	kmatrix_draw_race_names(sorted);
+
+	for (i=0; i<N_players; i++ )
+	{
+		if (Game_mode & GM_TEAM)
+			color = get_color_for_team(sorted[i]);
+		else
+			color = get_color_for_player(sorted[i], 0);
+
+		if (Players[sorted[i]].connected==CONNECT_DISCONNECTED)
+			gr_set_fontcolor(gr_find_closest_color(31,31,31),-1);
+		else
+			gr_set_fontcolor(BM_XRGB(selected_player_rgb[color].r,selected_player_rgb[color].g,selected_player_rgb[color].b),-1 );
+
+		kmatrix_draw_race_item( i, sorted );
 	}
 
 	gr_palette_load(gr_palette);
@@ -327,7 +410,12 @@ int kmatrix_handler(window *wind, d_event *event, kmatrix_screen *km)
 
 			if (km->network)
 				multi_do_protocol_frame(0, 1);
-			
+
+			// Keep the host's race broadcast going while it sits here, or the
+			// players still driving stop hearing authoritative standings.
+			if (km->network && (Game_mode & GM_RACE))
+				race_multi_frame();
+
 			km->playing = 0;
 
 			// Check if all connected players are also looking at this screen ...
@@ -430,9 +518,10 @@ void kmatrix_view(int network)
 		d_free(km);
 		return;
 	}
-	
+
 	while (window_exists(wind))
 		event_process();
+
 	gr_free_bitmap_data(&km->background);
 	d_free(km);
 }

@@ -49,6 +49,8 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "cntrlcen.h"
 #include "powerup.h"
 #include "fuelcen.h"
+#include "race.h"
+#include "racebot.h"
 #include "endlevel.h"
 #include "sounds.h"
 #include "collide.h"
@@ -1921,17 +1923,23 @@ void object_move_one( object * obj )
 			 fuelcen_check_for_hoard_goal (&Segments[obj->segnum]);
 #endif
 
-		fix fuel=fuelcen_give_fuel( &Segments[obj->segnum], INITIAL_ENERGY-Players[Player_num].energy );
-		if (fuel > 0 )	{
-			Players[Player_num].energy += fuel;
+		// In race mode fuel centers are boost pads and repair centers are the
+		// start/finish line (see race.h). Neither touches the ship: a repair
+		// center is there to be a visible landmark, not to patch you up.
+		if (!(Game_mode & GM_RACE))
+		{
+			fix fuel=fuelcen_give_fuel( &Segments[obj->segnum], INITIAL_ENERGY-Players[Player_num].energy );
+			if (fuel > 0 )	{
+				Players[Player_num].energy += fuel;
 
-			if (Game_mode & GM_MULTI)
-				multi_send_ship_status();
-		}
+				if (Game_mode & GM_MULTI)
+					multi_send_ship_status();
+			}
 
-		fix shields = repaircen_give_shields( &Segments[obj->segnum], INITIAL_SHIELDS-Players[Player_num].shields );
-		if (shields > 0) {
-			Players[Player_num].shields += shields;
+			fix shields = repaircen_give_shields( &Segments[obj->segnum], INITIAL_SHIELDS-Players[Player_num].shields );
+			if (shields > 0) {
+				Players[Player_num].shields += shields;
+			}
 		}
 	}
 
@@ -2028,6 +2036,44 @@ void object_move_one( object * obj )
 	//	If player and moved to another segment, see if hit any triggers.
 	// also check in player under a lavafall
 	if (obj->type == OBJ_PLAYER && obj->movement_type==MT_PHYSICS)	{
+
+#ifdef NETWORK
+		// Walk every segment physics moved us through this frame, not just
+		// the one we ended in, and do it whether or not the net result left
+		// us in a new segment. Gating this on previous_segment != obj->segnum
+		// (as the trigger walk below still does) misses a crossing whenever
+		// this frame's motion brings the ship back to where it started --
+		// e.g. a ship at very low closing speed on the line, or one whose
+		// forward crossing gets cancelled the same frame by the recoil of
+		// firing a heavy weapon. phys_seglist still has the finish segment in
+		// it even though obj->segnum nets out unchanged, so read it
+		// unconditionally; race_check_checkpoint()/race_bot_check_segment()
+		// already dedup on segment number so this costs nothing extra on a
+		// normal frame.
+		if ((Game_mode & GM_RACE) && Player_num == obj->id)
+		{
+			int s;
+
+			for (s = 0; s < n_phys_segs; s++)
+				if (phys_seglist[s] >= 0 && phys_seglist[s] <= Highest_segment_index)
+					race_check_checkpoint(&Segments[phys_seglist[s]]);
+
+			race_check_checkpoint(&Segments[obj->segnum]);
+		}
+		// A bot crosses a thin checkpoint inside one frame for exactly the
+		// same reason, and a bot that misses one silently drops a lap
+		// behind the field it is supposed to be racing.
+		else if ((Game_mode & GM_RACE) && race_object_is_bot(obj))
+		{
+			int s;
+
+			for (s = 0; s < n_phys_segs; s++)
+				if (phys_seglist[s] >= 0 && phys_seglist[s] <= Highest_segment_index)
+					race_bot_check_segment(obj->id, phys_seglist[s]);
+
+			race_bot_check_segment(obj->id, obj->segnum);
+		}
+#endif
 
 		if (previous_segment != obj->segnum) {
 			int	connect_side,i;

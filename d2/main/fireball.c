@@ -759,6 +759,12 @@ int choose_drop_segment()
 
 void maybe_drop_net_powerup(int powerup_type)
 {
+	// Race mode has no powerup economy to conserve: every weapon comes out of
+	// a mystery box on a fuse, so respawning what a player fires would litter
+	// the track with permanent pickups.
+	if (Game_mode & GM_RACE)
+		return;
+
 	if ((Game_mode & GM_MULTI) && !(Game_mode & GM_MULTI_COOP)) {
 		int	segnum, objnum;
 		vms_vector	new_pos;

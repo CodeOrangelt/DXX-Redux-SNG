@@ -60,7 +60,7 @@ extern int multi_protocol; // set and determinate used protocol
 #define MULTI_PROTO_UDP 1 // UDP protocol
 
 // What version of the multiplayer protocol is this? Increment each time something drastic changes in Multiplayer without the version number changes. Can be reset to 0 each time the version of the game changes
-#define MULTI_PROTO_VERSION 30010 // Redux 1.1 + SNG CTF variant + SNG toggles + D2 weapon spawn toggles + Static Powerups (incl. D2 supers)
+#define MULTI_PROTO_VERSION 30012 // + Race options (RacePowerupChance/RaceAllowedItems bytes in netgame_info/game-info packet)
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -147,6 +147,11 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_REPAIR               , 11)  \
 	VALUE(MULTI_SHIP_STATUS          , 43)  \
 	VALUE(MULTI_CREATE_EXPLOSION2    , 24)  \
+	VALUE(MULTI_RACE_UPDATE          , 5)  \
+	VALUE(MULTI_RACE_STATE           , 3 + 4*MAX_PLAYERS)  \
+	VALUE(MULTI_RACE_BOX             , 3)  \
+	VALUE(MULTI_RACE_READY           , 3)  \
+	VALUE(MULTI_RACE_POWER           , 3)  \
 	AFTER
 for_each_multiplayer_command(enum {, define_multiplayer_command, });
 
@@ -162,6 +167,7 @@ for_each_multiplayer_command(enum {, define_multiplayer_command, });
 #define NETGAME_HOARD           5
 #define NETGAME_TEAM_HOARD      6
 #define NETGAME_BOUNTY		7
+#define NETGAME_RACE		8
 
 #define CTF_VARIANT_VANILLA    0   // D2's native flag-object CTF
 #define CTF_VARIANT_SNG        1   // D1 SNG-style CTF: key powerups double as flags, scored at your fuelcen
@@ -240,7 +246,7 @@ enum { for_each_netflag_value(define_netflag_bit_enum) };
 enum { for_each_netflag_value(define_netflag_bit_mask) };
 enum { NETFLAG_DOPOWERUP = 0 for_each_netflag_value(define_netflag_powerup_mask) };
 
-#define MULTI_GAME_TYPE_COUNT	8
+#define MULTI_GAME_TYPE_COUNT	9
 #define MULTI_GAME_NAME_LENGTH	17
 #define MULTI_ALLOW_POWERUP_MAX 27
 extern char *multi_allow_powerup_text[MULTI_ALLOW_POWERUP_MAX];
@@ -626,6 +632,9 @@ typedef struct netgame_info
 	ubyte						StaticHelix;
 	ubyte						StaticPhoenix;
 	ubyte						StaticOmega;
+	ubyte						LapsToWin;		// race mode: laps needed to finish (0 = use default)
+	ubyte						RacePowerupChance;	// race mode: odds (0-100) a mystery box/bot draw yields anything (0 = use default)
+	ubyte						RaceAllowedItems;	// race mode: bitmask of RACE_ITEM_* slots the loot table may offer (0 = use default)
 	ubyte						team_color[2];
 } __pack__ netgame_info;
 
