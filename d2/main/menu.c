@@ -814,7 +814,8 @@ int do_difficulty_menu()
 #define RACE_MENU_OPPONENTS 1
 #define RACE_MENU_SKILL     2
 #define RACE_MENU_LAPS      3
-#define RACE_MENU_START     5
+#define RACE_MENU_ADVANCED  4
+#define RACE_MENU_START     6
 
 // The slider labels carry their own value, so they have to be rewritten as the
 // sliders move. They are padded to a fixed width because newmenu measures the
@@ -857,7 +858,13 @@ static int race_menu_handler(newmenu *menu, d_event *event, void *userdata)
 			// ENTER on a slider used to start the race, which made the two
 			// settings impossible to adjust without launching. Only the START
 			// line closes the menu now; anything else stays put.
-			if (citem < 0 || items[citem].type != NM_TYPE_MENU)
+			if (citem == RACE_MENU_ADVANCED)
+			{
+				net_udp_race_advanced_options(&Race_powerup_chance, &Race_allowed_items);
+				return 1;		// handled: stay in the menu
+			}
+
+			if (citem != RACE_MENU_START)
 				return 1;		// handled: stay in the menu
 
 			return 0;
@@ -869,7 +876,7 @@ static int race_menu_handler(newmenu *menu, d_event *event, void *userdata)
 
 int do_race_game_menu()
 {
-	newmenu_item m[8];
+	newmenu_item m[9];
 	int bots = Race_bot_count > 0 ? Race_bot_count : 3;
 	int skill = Race_bot_skill;
 	int laps = Race_laps_to_win;
@@ -896,6 +903,8 @@ int do_race_game_menu()
 	Assert(i == RACE_MENU_LAPS);
 	m[i].type = NM_TYPE_SLIDER; m[i].text = Race_menu_laps_text; m[i].value = laps - 1;
 	m[i].min_value = 0; m[i].max_value = 9; i++;
+	Assert(i == RACE_MENU_ADVANCED);
+	m[i].type = NM_TYPE_MENU;   m[i].text = "Advanced Options..."; i++;
 	m[i].type = NM_TYPE_TEXT;   m[i].text = ""; i++;
 	Assert(i == RACE_MENU_START);
 	m[i].type = NM_TYPE_MENU;   m[i].text = "START RACE"; i++;

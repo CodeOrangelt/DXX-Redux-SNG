@@ -178,6 +178,22 @@ extern int Race_finish_segnum;		// a segment of the start/finish line, -1 if the
 extern int Race_finish_marked;		// level marks its line with repair centers
 extern int Race_num_boxes;			// total mystery box spawn points on this level
 extern int Race_laps_to_win;
+extern int Race_powerup_chance;	// 0-100: odds a mystery box or bot draw yields anything at all (100 = always)
+extern int Race_allowed_items;		// bitmask of RACE_ITEM_* slots the loot table may offer (see below)
+
+// Mystery-box loot table slots, for the "allowed powerups" advanced race
+// option. Bit i of Race_allowed_items enables/disables that slot;
+// race_init_items() (race.c) is the only reader. Order matches the box's own
+// standing missile table plus the two box powers.
+#define RACE_ITEM_HOMING        0
+#define RACE_ITEM_SMART         1
+#define RACE_ITEM_MERCURY       2
+#define RACE_ITEM_MEGA          3
+#define RACE_ITEM_EARTHSHAKER   4
+#define RACE_ITEM_EMP           5
+#define RACE_ITEM_TRACTOR       6
+#define RACE_NUM_ITEM_SLOTS     7
+#define RACE_ALLOWED_ITEMS_ALL  ((1 << RACE_NUM_ITEM_SLOTS) - 1)
 
 // Resets all players' race progress, (re)counts checkpoints for the level
 // that was just loaded, spawns the mystery boxes and starts the start-line

@@ -3763,6 +3763,8 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.StaticPhoenix; len++;
 		buf[len] = Netgame.StaticOmega; len++;
 		buf[len] = Netgame.LapsToWin;							len++;
+		buf[len] = Netgame.RacePowerupChance;					len++;
+		buf[len] = Netgame.RaceAllowedItems;					len++;
 		buf[len] = Netgame.team_color[0];						len++;
 		buf[len] = Netgame.team_color[1];						len++;
 
@@ -4056,6 +4058,11 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		// otherwise reaches the options menu's slider with an out-of-range
 		// initial `value`.
 		Netgame.LapsToWin = min(data[len], 10);					len++;
+		// Same reasoning as LapsToWin above: unauthenticated UDP input.
+		// Chance is a plain 0-100 percentage; the allowed-items mask only has
+		// RACE_NUM_ITEM_SLOTS real bits, so mask off anything above them.
+		Netgame.RacePowerupChance = min(data[len], 100);			len++;
+		Netgame.RaceAllowedItems = data[len] & RACE_ALLOWED_ITEMS_ALL;	len++;
 		Netgame.team_color[0] = data[len];						len++;
 		Netgame.team_color[1] = data[len];						len++;
 
@@ -4594,6 +4601,7 @@ static int opt_burner_spawn;
 static int opt_allowprefcolor, opt_ow;
 static int opt_sngtoggles;
 static int opt_race_laps;
+static int opt_race_options;
 static int opt_spawnwithmenu;
 static int opt_staticpowerupsmenu;
 static int opt_low_vulcan;
@@ -4625,6 +4633,62 @@ void net_udp_set_power (void)
 	for (i = 0; i < MULTI_ALLOW_POWERUP_MAX; i++)
 		if (m[i].value)
 			Netgame.AllowedItems |= (1 << i);
+}
+
+// Human-readable names for the RACE_ITEM_* mystery-box loot slots, in slot
+// order -- shared by the netgame and singleplayer "advanced race options"
+// menus.
+static char *Race_item_slot_text[RACE_NUM_ITEM_SLOTS] = {
+	"Homing Missiles",
+	"Smart Missiles",
+	"Mercury Missiles",
+	"Mega Missiles",
+	"Earthshakers",
+	"EMP",
+	"Tractor Beam",
+};
+
+static int net_udp_race_options_handler(newmenu *menu, d_event *event, void *userdata)
+{
+	newmenu_item *menus = newmenu_get_items(menu);
+	int citem = newmenu_get_citem(menu);
+	userdata = userdata;
+
+	if (event->type == EVENT_NEWMENU_CHANGED && citem == 0)
+		sprintf(menus[0].text, "Powerup Chance: %d%%", menus[0].value * 5);
+
+	return 0;
+}
+
+// The advanced race options: how often a mystery box/bot draw yields
+// anything at all, and which items the loot table may offer. Shared by the
+// netgame host menu (writes Netgame.Race*) and the singleplayer race setup
+// menu (writes Race_powerup_chance/Race_allowed_items directly) -- callers
+// pass in the chance/mask to start from and get the edited values back.
+void net_udp_race_advanced_options(int *chance, int *allowed_items)
+{
+	newmenu_item m[1 + RACE_NUM_ITEM_SLOTS];
+	char chance_text[32];
+	int opt = 0, i;
+
+	sprintf(chance_text, "Powerup Chance: %d%%", *chance);
+	m[opt].type = NM_TYPE_SLIDER; m[opt].text = chance_text; m[opt].value = *chance / 5;
+	m[opt].min_value = 0; m[opt].max_value = 20; opt++;
+
+	for (i = 0; i < RACE_NUM_ITEM_SLOTS; i++)
+	{
+		m[opt].type = NM_TYPE_CHECK; m[opt].text = Race_item_slot_text[i];
+		m[opt].value = (*allowed_items >> i) & 1;
+		opt++;
+	}
+
+	newmenu_do1( NULL, "Advanced Race Options", opt, m, net_udp_race_options_handler, NULL, 0 );
+
+	*chance = m[0].value * 5;
+	*allowed_items = 0;
+	for (i = 0; i < RACE_NUM_ITEM_SLOTS; i++)
+		if (m[1 + i].value)
+			*allowed_items |= (1 << i);
 }
 
 static int menu_spawn_with_weapons_handler( newmenu *menu, d_event *event, void *userdata )
@@ -4778,9 +4842,9 @@ void net_udp_more_game_options ()
 	char RaceLapsText[40];
 	
 #ifdef USE_TRACKER
-	newmenu_item m[57];
+	newmenu_item m[58];
 #else
-	newmenu_item m[56];
+	newmenu_item m[57];
 #endif
 
 	snprintf(packstring,sizeof(char)*4,"%d",Netgame.PacketsPerSec);
@@ -4869,6 +4933,9 @@ void net_udp_more_game_options ()
 	opt_race_laps = opt;
 	snprintf(RaceLapsText, sizeof(RaceLapsText), "Race Laps: %d", Netgame.LapsToWin ? Netgame.LapsToWin : RACE_DEFAULT_LAPS);
 	m[opt].type = NM_TYPE_SLIDER; m[opt].text = RaceLapsText; m[opt].value = (Netgame.LapsToWin ? Netgame.LapsToWin : RACE_DEFAULT_LAPS) - 1; m[opt].min_value = 0; m[opt].max_value = 9; opt++;
+
+	opt_race_options = opt;
+	m[opt].type = NM_TYPE_MENU; m[opt].text = "Advanced Race Options..."; opt++;
 
 	opt_faircolors = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "All Players Blue"; m[opt].value = Netgame.FairColors; opt++;		
@@ -4979,6 +5046,16 @@ menu:
 	if (i==opt_sngtoggles)
 	{
 		net_udp_sng_toggles_menu();
+		goto menu;
+	}
+
+	if (i==opt_race_options)
+	{
+		int chance = Netgame.RacePowerupChance;
+		int allowed_items = Netgame.RaceAllowedItems;
+		net_udp_race_advanced_options(&chance, &allowed_items);
+		Netgame.RacePowerupChance = chance;
+		Netgame.RaceAllowedItems = allowed_items;
 		goto menu;
 	}
 
@@ -5396,6 +5473,8 @@ void netgame_set_defaults()
 	Netgame.StaticPhoenix = 0;
 	Netgame.StaticOmega = 0;
 	Netgame.LapsToWin = RACE_DEFAULT_LAPS;
+	Netgame.RacePowerupChance = 100;
+	Netgame.RaceAllowedItems = RACE_ALLOWED_ITEMS_ALL;
 
 #ifdef USE_TRACKER
 	Netgame.Tracker = 1;

@@ -218,3 +218,9 @@ typedef struct connection_status {
 extern int Observer_num;
 
 void netgame_set_defaults(void);
+
+// The advanced race options submenu (mystery box powerup chance + which
+// items the loot table may offer): edits *chance (0-100) and *allowed_items
+// (RACE_ITEM_* bitmask) in place. Shared by the netgame host menu and the
+// singleplayer race setup menu.
+void net_udp_race_advanced_options(int *chance, int *allowed_items);
