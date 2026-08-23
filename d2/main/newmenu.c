@@ -1865,6 +1865,22 @@ void update_scroll_position(listbox *lb)
 	if (lb->first_item < 0 ) lb->first_item = 0;
 }
 
+void listbox_set_items(listbox *lb, int nitems, char **items)
+{
+	lb->nitems = nitems;
+	lb->item = items;
+	if (lb->citem >= lb->nitems)
+		lb->citem = lb->nitems > 0 ? lb->nitems - 1 : 0;
+	if (lb->first_item > lb->citem)
+		lb->first_item = lb->citem;
+	update_scroll_position(lb);
+}
+
+void listbox_set_title(listbox *lb, char *title)
+{
+	lb->title = title;
+}
+
 int listbox_mouse(window *wind, d_event *event, listbox *lb, int button)
 {
 	int i, mx, my, mz, x1, x2, y1, y2;

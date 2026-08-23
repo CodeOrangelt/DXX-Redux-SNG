@@ -3886,6 +3886,10 @@ void fontcolor_good() {
 	gr_set_fontcolor(BM_XRGB(0, 18, 0), -1);
 }
 
+void fontcolor_ehh() {
+	gr_set_fontcolor(BM_XRGB(255, 165, 0), -1);  // Orange "medium" warning color
+}
+
 int n_players, player_list[MAX_PLAYERS];
 
 #ifdef NETWORK
@@ -4113,7 +4117,9 @@ void hud_show_kill_list()
 			if(lag != -1) {
 				if(lag > 100) {
 					fontcolor_bad();
-				} else {
+				} else if(lag > 70) {
+					fontcolor_ehh();
+				} else if(lag > 1) {
 					fontcolor_good();
 				}
 
