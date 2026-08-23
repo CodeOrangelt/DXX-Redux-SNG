@@ -163,6 +163,18 @@ void digi_play_sample_once( int soundno, fix max_volume )
 	digi_start_sound( soundno, max_volume, 0xffff/2, 0, -1, -1, -1 );
 }
 
+void digi_play_sample_pitched( int soundno, fix max_volume, fix speed )
+{
+	if ( Newdemo_state == ND_STATE_RECORDING )
+		newdemo_record_sound( soundno );
+
+	soundno = digi_xlat_sound(soundno);
+
+	if (soundno < 0 ) return;
+
+	digi_start_sound_pitched( soundno, max_volume, 0xffff/2, speed );
+}
+
 
 void digi_play_sample( int soundno, fix max_volume )
 {

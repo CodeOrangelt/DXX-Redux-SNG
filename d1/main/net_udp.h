@@ -26,12 +26,25 @@ void net_udp_send_mdata_direct(ubyte *data, int data_len, int pnum, int priority
 void net_udp_send_netgame_update();
 void net_udp_send_obs_quit();
 #ifdef USE_TRACKER
-// Forward a single kill/damage/chat event to every configured tracker.
-// Host-only: call sites in multi.c gate these behind multi_i_am_master().
+// Queue one kill/damage/chat event for the configured tracker(s). These are
+// self-gating: they do nothing unless we are the host of a tracker-enabled
+// netgame, so call sites don't repeat that test. Queued events go out on the
+// next udp_tracker_flush_events(). See TRACKER-EVENTS.md for the wire format.
 void udp_tracker_send_kill(ubyte killed_pnum, short killer_objnum, ubyte killer_net, ubyte team_vector, ubyte bounty_target);
 void udp_tracker_send_damage(ubyte victim_pnum, fix damage, fix shields_after, ubyte killer_type, ubyte killer_id, ubyte damage_type, ubyte source_id);
 void udp_tracker_send_message(ubyte player_num, const char *text);
 void udp_tracker_send_obs_message(const char *formatted_text);
+// Send any queued events now. No-op when nothing is queued; called once per
+// net_udp_do_frame() and again before we unregister, to flush the tail.
+void udp_tracker_flush_events(void);
+#else
+// Keep the call sites in multi.c free of #ifdef clutter. Every argument used
+// at those sites is side-effect free, so discarding them is safe.
+#define udp_tracker_send_kill(a,b,c,d,e)		((void)0)
+#define udp_tracker_send_damage(a,b,c,d,e,f,g)	((void)0)
+#define udp_tracker_send_message(a,b)			((void)0)
+#define udp_tracker_send_obs_message(a)			((void)0)
+#define udp_tracker_flush_events()			((void)0)
 #endif
 
 // Some defines
@@ -91,6 +104,9 @@ void udp_tracker_send_obs_message(const char *formatted_text);
 #ifdef USE_TRACKER
 #  define UPID_TRACKER_VERIFY			 21 // The tracker has successfully gotten a hold of us
 #  define UPID_TRACKER_INCGAME			 22 // The tracker is sending us some game info
+#  define UPID_TRACKER_HOLEPUNCH		 23 // NAT punch brokerage: tracker->peer with the other side's public address, or peer->peer as a throwaway probe. See "NAT hole punching" in net_udp.c.
+#  define UPID_TRACKER_HOLEPUNCH_SIZE		 12
+#  define UPID_TRACKER_SIGNAL			 32 // Tracker-relayed ICE signaling blob for the pre-join path. Client->tracker->host and host->tracker->client before a direct UDP route exists.
 #endif
 
 #define UPID_P2P_PING	25

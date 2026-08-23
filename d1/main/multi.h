@@ -64,7 +64,13 @@ extern int multi_protocol; // set and determinate used protocol
 #define MULTI_PROTO_UDP 1 // UDP protocol
 
 // What version of the multiplayer protocol is this? Increment each time something drastic changes in Multiplayer without the version number changes. Can be reset to 0 each time the version of the game changes
-#define MULTI_PROTO_VERSION 30082 // SNG 1.7 + Arcade mode
+// Bumped for Survival mode: adds MULTI_SURVIVAL_* packets, and changes what
+// the relay is allowed to carry (rendezvous only -- see
+// relay_upid_is_handshake() in net_udp.c). That second change is why the
+// bump matters: an old peer would happily relay gameplay that a new peer
+// now discards, which would look like a totally broken game rather than the
+// version mismatch it is.
+#define MULTI_PROTO_VERSION 30084 // SNG 1.7 + Arcade mode + Survival (+ shop ready-check)
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -131,6 +137,11 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_CREATE_EXPLOSION2    , 24)  \
 	VALUE(MULTI_ARCADE_POWERUP       , 19)  \
 	VALUE(MULTI_ARCADE_ANNOUNCE      , 3)   \
+	VALUE(MULTI_SURVIVAL_WAVE_STATE  , 5)   \
+	VALUE(MULTI_SURVIVAL_SPAWN_ROBOT , 24)  \
+	VALUE(MULTI_SURVIVAL_ELIMINATED  , 2)   \
+	VALUE(MULTI_SURVIVAL_SHIELDS     , 10)  \
+	VALUE(MULTI_SURVIVAL_SHOP_READY  , 2)   \
 	AFTER
 for_each_multiplayer_command(enum {, define_multiplayer_command, });
 
@@ -148,6 +159,7 @@ for_each_multiplayer_command(enum {, define_multiplayer_command, });
 #define NETGAME_CTF		8
 #define NETGAME_TURKEY_SHOOT	9
 #define NETGAME_ARCADE		10
+#define NETGAME_SURVIVAL	11
 
 #define NETSTAT_MENU                0
 #define NETSTAT_PLAYING             1
@@ -208,7 +220,7 @@ enum { for_each_netflag_value(define_netflag_bit_enum) };
 enum { for_each_netflag_value(define_netflag_bit_mask) };
 enum { NETFLAG_DOPOWERUP = 0 for_each_netflag_value(define_netflag_powerup_mask) };
 
-#define MULTI_GAME_TYPE_COUNT	11
+#define MULTI_GAME_TYPE_COUNT	12
 #define MULTI_GAME_NAME_LENGTH	13
 #define MULTI_ALLOW_POWERUP_MAX 13
 extern int multi_allow_powerup_mask[MAX_POWERUP_TYPES];

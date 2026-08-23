@@ -60,6 +60,7 @@ extern int Turkey_target;
 #include "effects.h"
 #include "textures.h"
 #include "multi.h"
+#include "survival.h"
 #include "cntrlcen.h"
 #include "newdemo.h"
 #include "endlevel.h"
@@ -161,7 +162,10 @@ void apply_force_damage(object *obj,fix force,object *other_obj)
 			}
 
 			if (result && (other_obj->ctype.laser_info.parent_signature == ConsoleObject->signature))
+			{
 				add_points_to_score(Robot_info[obj->id].score_value);
+				survival_note_robot_kill(obj, Robot_info[obj->id].score_value);
+			}
 			break;
 
 		case OBJ_PLAYER:
@@ -1000,6 +1004,7 @@ void collide_robot_and_weapon( object * robot, object * weapon, vms_vector *coll
 				bump_two_objects(robot, weapon, 0);		//only bump if not dead. no damage from bump
 			else if (weapon->ctype.laser_info.parent_signature == ConsoleObject->signature) {
 				add_points_to_score(Robot_info[robot->id].score_value);
+				survival_note_robot_kill(robot, Robot_info[robot->id].score_value);
 			}
 		}
 
@@ -1402,6 +1407,9 @@ void apply_damage_to_player(object *player, object *killer, fix damage, ubyte po
 
 
 	if (player->id == Player_num) {		//is this the local player?
+		// Survival shop: a purchased armor tier scales down incoming damage.
+		damage = fixmul(damage, survival_damage_multiplier());
+
 		Players[Player_num].shields -= damage;
 		PALETTE_FLASH_ADD(f2i(damage)*4,-f2i(damage/2),-f2i(damage/2));	//flash red
 
@@ -1713,6 +1721,14 @@ void collide_player_and_powerup( object * player, object * powerup, vms_vector *
 		int powerup_used;
 
 		powerup_used = do_powerup(powerup);
+
+#ifdef NETWORK
+		// Survival: nothing left to give (ammo/shields full, primary already owned, cloak/invuln
+		// already active, laser already maxed) converts to scrap points instead of sitting
+		// uncollectible on the floor. No-op outside Survival.
+		if (!powerup_used)
+			powerup_used = survival_convert_wasted_pickup(powerup);
+#endif
 
 		if (powerup_used)	{
 			powerup->flags |= OF_SHOULD_BE_DEAD;

@@ -37,6 +37,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "texmerge.h"
 #include "physics.h"
 #include "3d.h"
+#include "survival.h"
 #include "gameseg.h"
 #include "vclip.h"
 #include "lighting.h"
@@ -540,6 +541,7 @@ void do_render_object(int objnum)
 	#ifdef EDITOR
 	int save_3d_outline=0;
 	#endif
+	int survival_outline = 0, save_survival_outline = 0, save_survival_outline_color = -1;
 	object *obj = &Objects[objnum];
 	int count = 0;
 	int n;
@@ -584,6 +586,17 @@ void do_render_object(int objnum)
 	}
 	#endif
 
+	// Survival's elite robots wear a 3D outline colored by kind (survival_robot_elite_color()).
+	// Set around render_object() only, and restored immediately after, so it cannot leak onto the
+	// attached explosion objects rendered below it or onto whatever the caller draws next.
+	if (survival_robot_is_elite(objnum)) {
+		survival_outline = 1;
+		save_survival_outline_color = g3d_interp_outline_color;
+		save_survival_outline = g3d_interp_outline;
+		g3d_interp_outline = 1;
+		g3d_interp_outline_color = survival_robot_elite_color(survival_robot_is_elite(objnum));
+	}
+
 	#ifdef EDITOR
 	if (_search_mode)
 		render_object_search(obj);
@@ -591,6 +604,11 @@ void do_render_object(int objnum)
 	#endif
 		//NOTE LINK TO ABOVE
 		render_object(obj);
+
+	if (survival_outline) {
+		g3d_interp_outline = save_survival_outline;
+		g3d_interp_outline_color = save_survival_outline_color;
+	}
 
 	for (n=obj->attached_obj;n!=-1;n=Objects[n].ctype.expl_info.next_attach) {
 

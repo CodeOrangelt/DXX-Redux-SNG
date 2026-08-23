@@ -78,6 +78,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "songs.h"
 #include "rbaudio.h"
 #include "multi.h"
+#include "survival.h"
 #include "cntrlcen.h"
 #include "pcx.h"
 #include "state.h"
@@ -717,7 +718,21 @@ int allowed_to_fire_laser(void)
 	}
 
 	if(is_observer()) {
-		return 0; 
+		return 0;
+	}
+
+	if (survival_is_eliminated(Player_num)) {
+		return 0;
+	}
+
+	// Menu takes priority: don't let a fire button that was already held
+	// down when the shop opened keep firing every frame just because
+	// nothing's re-reading Controls.fire_primary_state while it's up (see
+	// the should_read_controls gate in gamecntl.c's ReadControls()).
+	if ((Game_mode & GM_MULTI) && survival_shop_blocks_input()) {
+		Global_laser_firing_count = 0;
+		Global_missile_firing_count = 0;
+		return 0;
 	}
 
 	//	Make sure enough time has elapsed to fire laser
@@ -733,7 +748,11 @@ int allowed_to_fire_flare(void)
 		return 0;
 
 	if(is_observer()) {
-		return 0; 
+		return 0;
+	}
+
+	if (survival_is_eliminated(Player_num)) {
+		return 0;
 	}
 
 	Next_flare_fire_time = GameTime64 + F1_0/4;
@@ -748,7 +767,11 @@ int allowed_to_fire_missile(void)
 		return 0;
 
 	if(is_observer()) {
-		return 0; 
+		return 0;
+	}
+
+	if (survival_is_eliminated(Player_num)) {
+		return 0;
 	}
 
 	return 1;

@@ -39,6 +39,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "laser.h"
 #ifdef NETWORK
 #include "multi.h"
+#include "race.h"
 #endif
 #include "vclip.h"
 #include "fireball.h"
@@ -119,6 +120,19 @@ void read_flying_controls( object * obj )
 	if ((obj->type != OBJ_PLAYER && !object_is_observer(obj)) || (obj->id != Player_num))
 		return;
 
+#ifdef NETWORK
+	// The class picker owns the stick while it is up: kconfig_read_controls()
+	// never runs behind it (see the should_read_controls gate in ReadControls),
+	// so Controls.* would otherwise keep holding whatever they read the frame
+	// the race loaded and fly the ship off the grid on stale input.
+	if (race_lobby_blocks_input())
+	{
+		vm_vec_zero(&obj->mtype.phys_info.thrust);
+		vm_vec_zero(&obj->mtype.phys_info.rotthrust);
+		return;
+	}
+#endif
+
 
 	forward_thrust_time = Controls.forward_thrust_time;
 
@@ -137,7 +151,10 @@ void read_flying_controls( object * obj )
 	
 				old_count = (Players[Player_num].afterburner_charge / (DROP_DELTA_TIME/AFTERBURNER_USE_SECS));
 
-				Players[Player_num].afterburner_charge -= FrameTime/AFTERBURNER_USE_SECS;
+				// A race class can burn the tank slower, which is the same
+				// thing as a longer afterburner.
+				Players[Player_num].afterburner_charge -=
+					fixmul(FrameTime/AFTERBURNER_USE_SECS, race_class_afterburner_drain_scale());
 
 				if (Players[Player_num].afterburner_charge < 0)
 					Players[Player_num].afterburner_charge = 0;
@@ -172,14 +189,59 @@ void read_flying_controls( object * obj )
 		}
 	}
 
-	// Set object's thrust vector for forward/backward
-	vm_vec_copy_scale(&obj->mtype.phys_info.thrust,&obj->orient.fvec, forward_thrust_time );
-	
-	// slide left/right
-	vm_vec_scale_add2(&obj->mtype.phys_info.thrust,&obj->orient.rvec, Controls.sideways_thrust_time );
+#ifdef NETWORK
+	if (Game_mode & GM_RACE)
+	{
+		fix boost;
 
-	// slide up/down
-	vm_vec_scale_add2(&obj->mtype.phys_info.thrust,&obj->orient.uvec, Controls.vertical_thrust_time );
+		// Reverse thrust drops the boost on the spot, so a pad never commits
+		// you to three seconds you don't want.
+		if (Controls.forward_thrust_time < 0)
+			race_cancel_boost();
+
+		boost = race_get_boost_scale();
+
+		// A boost pad drives the ship forward on its own, so it still works
+		// when the player isn't holding thrust, and stacks over what they are.
+		if (boost > F1_0)
+		{
+			fix boosted = fixmul(FrameTime, boost);
+
+			if (boosted > forward_thrust_time)
+				forward_thrust_time = boosted;
+		}
+
+		// Trichord burst: same mechanism as a boost pad so the kick pierces
+		// the drag ceiling rather than just scaling already-capped thrust.
+		{
+			fix tscale = race_trichord_charge_scale();
+
+			if (tscale > F1_0)
+			{
+				fix boosted = fixmul(FrameTime, tscale);
+
+				if (boosted > forward_thrust_time)
+					forward_thrust_time = boosted;
+			}
+		}
+	}
+
+	if ((Game_mode & GM_RACE) && race_countdown_active() && !object_is_observer(obj))
+	{
+		vm_vec_zero(&obj->mtype.phys_info.thrust);
+	}
+	else
+#endif
+	{
+		// Set object's thrust vector for forward/backward
+		vm_vec_copy_scale(&obj->mtype.phys_info.thrust,&obj->orient.fvec, forward_thrust_time );
+
+		// slide left/right
+		vm_vec_scale_add2(&obj->mtype.phys_info.thrust,&obj->orient.rvec, Controls.sideways_thrust_time );
+
+		// slide up/down
+		vm_vec_scale_add2(&obj->mtype.phys_info.thrust,&obj->orient.uvec, Controls.vertical_thrust_time );
+	}
 
 	if (!is_observer() && obj->mtype.phys_info.flags & PF_WIGGLE)
 	{
@@ -208,11 +270,60 @@ void read_flying_controls( object * obj )
 
 		vm_vec_scale( &obj->mtype.phys_info.thrust, fixdiv(Player_ship->max_thrust,ft) );
 
+		// Race class: thrust only, not rotation -- a heavier ship, not a
+		// less responsive one.
+		if (Game_mode & GM_RACE)
+		{
+			fix trichord_ratio = 0;
+
+			// How close this frame's stick is to a genuine three-axis
+			// diagonal: the smallest of the three inputs against the
+			// LARGEST of them, not against how long the frame was -- a pure
+			// angle measurement, independent of how hard any of the three is
+			// actually being pushed. (An earlier version measured the
+			// smallest against FrameTime instead, which let two axes maxed
+			// out and a third barely nudged read as most of the way to a
+			// perfect diagonal, since only the weak axis had to clear the
+			// floor -- that's magnitude leaking into what's supposed to be a
+			// direction check.) A lone forward push, or forward plus only
+			// one slide, still reads as 0 no matter how hard it's held,
+			// since one of the three axes is exactly zero. Skipped outside a
+			// live lap -- the countdown already zeroes thrust, and there is
+			// nothing to reward while sitting in the class lobby.
+			if (FrameTime > 0 && !race_countdown_active() && !race_lobby_blocks_input())
+			{
+				fix af = Controls.forward_thrust_time  < 0 ? -Controls.forward_thrust_time  : Controls.forward_thrust_time;
+				fix as = Controls.sideways_thrust_time < 0 ? -Controls.sideways_thrust_time : Controls.sideways_thrust_time;
+				fix av = Controls.vertical_thrust_time < 0 ? -Controls.vertical_thrust_time : Controls.vertical_thrust_time;
+				fix mx = max(af, max(as, av));
+
+				if (mx > 0)
+				{
+					fix mn = min(af, min(as, av));
+
+					trichord_ratio = fixdiv(mn, mx);
+
+					if (trichord_ratio > F1_0)
+						trichord_ratio = F1_0;
+				}
+			}
+
+			race_note_trichord(trichord_ratio);
+
+			vm_vec_scale( &obj->mtype.phys_info.thrust,
+				fixmul(race_class_speed_scale(), race_power_speed_scale()) );
+		}
+
 		if ((ft < F1_0/2) && (ft << 15 <= Player_ship->max_rotthrust)) {
 			ft = (Player_ship->max_thrust >> 15) + 1;
 		}
 
 		vm_vec_scale( &obj->mtype.phys_info.rotthrust, fixdiv(Player_ship->max_rotthrust,ft) );
+
+		// Race class: a class that trades handling for straight-line punch
+		// turns slower too -- the counterpart to the thrust scale above.
+		if (Game_mode & GM_RACE)
+			vm_vec_scale( &obj->mtype.phys_info.rotthrust, race_class_turn_scale() );
 	}
 
 	// moved here by WraithX

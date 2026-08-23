@@ -559,6 +559,7 @@ void draw_automap(automap *am)
 #ifdef NETWORK
 	if(Netgame.BlackAndWhitePyros) 
 		selected_player_rgb = player_rgb_alt; 
+	selected_player_rgb = race_lock_player_rgb(selected_player_rgb);
 	if (Game_mode & GM_TEAM)
 		color = get_team(Player_num);
 	else

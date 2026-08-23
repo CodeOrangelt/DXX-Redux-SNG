@@ -77,6 +77,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "gamepal.h"
 
 #include "multi.h"
+#include "race.h"
 #include "cntrlcen.h"
 #include "pcx.h"
 #include "state.h"
@@ -416,6 +417,11 @@ void calc_frame_time()
 
 	if (FrameTime < 0)				//if bogus frametime...
 		FrameTime = (last_frametime==0?1:last_frametime);		//...then use time from last frame
+
+	// See MAX_FRAME_TIME (game.h): without this, one slow frame can spiral
+	// into an apparent hang instead of just a stutter.
+	if (FrameTime > MAX_FRAME_TIME)
+		FrameTime = MAX_FRAME_TIME;
 }
 
 void calc_game_time()
@@ -764,6 +770,18 @@ int allowed_to_fire_laser(void)
 	if (is_observer()) {
 		return 0;
 	}
+
+#ifdef NETWORK
+	// The class picker takes priority: a fire button already held when the
+	// race loaded must not keep firing every frame just because nothing is
+	// re-reading Controls.* behind the panel (see the should_read_controls
+	// gate in ReadControls()).
+	if (race_lobby_blocks_input()) {
+		Global_laser_firing_count = 0;
+		Global_missile_firing_count = 0;
+		return 0;
+	}
+#endif
 
 	//	Make sure enough time has elapsed to fire laser
 	if (Next_laser_fire_time > GameTime64)
@@ -1351,6 +1369,17 @@ void GameProcessFrame(void)
 #endif
 
 #ifdef NETWORK
+	// Countdown, boost timer and mystery box respawns. Driven from here (and
+	// not from object_move_one) so it keeps ticking while the player is dead.
+	//
+	// The line crossing itself is caught below, right after object_move_all()
+	// -- race_check_checkpoint() runs out of *this* frame's movement, and it
+	// used to be polled for right here, before that movement had happened.
+	// That meant the standings screen only ever came up a frame late, off the
+	// previous crossing rather than the one that just happened.
+	if (Game_mode & GM_RACE)
+		race_frame();
+
 	if (Game_mode & GM_MULTI)
 	{
 		multi_do_frame();
@@ -1414,6 +1443,20 @@ void GameProcessFrame(void)
 
 		if (Endlevel_sequence)	//might have been started during move
 			return;
+
+#ifdef NETWORK
+		// Crossing the line for the last time drops the player into the
+		// standings, which keep updating as the rest of the field comes in.
+		// Checked right after object_move_all(), which is what actually
+		// walks the segments the finish line lives in and sets this --
+		// polling for it any earlier in the frame always read last frame's
+		// crossing instead of this one.
+		if ((Game_mode & GM_RACE) && race_take_summary_pending())
+		{
+			race_show_summary();
+			return;
+		}
+#endif
 
 		fuelcen_update_all();
 

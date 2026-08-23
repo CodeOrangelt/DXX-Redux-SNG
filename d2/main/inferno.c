@@ -53,6 +53,7 @@ char copyright[] = "DESCENT II  COPYRIGHT (C) 1994-1996 PARALLAX SOFTWARE CORPOR
 #include "texmap.h"
 #include "texmerge.h"
 #include "menu.h"
+#include "dxma.h"
 #include "digi.h"
 #include "palette.h"
 #include "args.h"
@@ -291,7 +292,7 @@ int standard_handler(d_event *event)
 
 // Use SEH for catching exceptions on Windows, this is needed because of the SDL parachute
 // But only on MSVC/64-bit clang (SEH is broken on 32-bit clang https://github.com/llvm/llvm-project/issues/25753)
-#if defined(WIN32) && (!defined(__clang__) || !defined(__i386__))
+#if defined(WIN32) && (defined(_MSC_VER) || (defined(__clang__) && !defined(__i386__)))
 int inner_main(int argc, char *argv[]);
 LONG WINAPI win32_exception_handler(EXCEPTION_POINTERS* exceptionPointers);
 
@@ -439,6 +440,12 @@ int main(int argc, char *argv[])
 
 	con_printf( CON_DEBUG, "\nRunning game...\n" );
 	init_game();
+
+	// Load the DXMA mission database (embedded baseline, plus a cached
+	// refresh if one exists) so both the mission browser and the join-time
+	// "you're missing this map" lookup work without the player having to
+	// open the browser first.
+	dxma_load();
 
 	Players[Player_num].callsign[0] = '\0';
 

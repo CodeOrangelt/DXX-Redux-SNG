@@ -67,6 +67,11 @@ extern const rgb player_rgb_alt[];
 extern const rgb player_rgb_all_blue[];
 extern const rgb* selected_player_rgb; 
 
+// Forces a race's players back onto the plain, index-ordered colour table;
+// returns `table` unchanged in every other mode. Wrap the table a caller
+// picked from the netgame colour options in this before using it.
+const rgb *race_lock_player_rgb(const rgb *table);
+
 #define WBU_WEAPON      0       // the weapons display
 #define WBU_MISSILE     1       // the missile view
 #define WBU_ESCORT      2       // the "buddy bot"

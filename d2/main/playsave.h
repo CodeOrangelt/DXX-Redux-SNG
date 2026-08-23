@@ -91,6 +91,7 @@ typedef struct player_config
 	ubyte AutoDemoSp;
 	ubyte AutoDemoMp;
 	ubyte AutoDemoHideUi;
+	ubyte DisableIdleDemo;	// don't auto-play a demo at the menu when idle, even with -autodemo
 	ubyte ShowCustomColors;
 	ubyte PreferMyTeamColors;
 	ubyte QuietPlasma;
@@ -130,6 +131,8 @@ typedef struct player_config
 	ubyte ObsHideEnergyWeaponMuzzle[NUM_OBS_MODES];
 	ubyte NoChatSound;
 	ubyte ClassicAutoselectWeapon;
+	ubyte RaceTrackLabels;
+	ubyte RaceMinimap;
 } __pack__ player_config;
 
 extern struct player_config PlayerCfg;

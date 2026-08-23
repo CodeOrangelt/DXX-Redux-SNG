@@ -80,8 +80,17 @@ build_appimage() {
     ./linuxdeploy-x86_64.AppImage --appimage-extract-and-run --appdir "${appdir}"
 
     # Package!
+    #
+    # Remove any previous AppImage FIRST. The check below used to test only
+    # that the file exists, which a leftover from an earlier run satisfies --
+    # so when appimagetool failed, the script happily tarred up the *stale*
+    # AppImage and produced an archive named after the current commit that
+    # contained an older build. Deleting first makes the existence test mean
+    # what it was supposed to mean.
+    rm -f "${appimagename}"
+
     ./appimagetool-x86_64.AppImage --appimage-extract-and-run --no-appstream --verbose "${appdir}" "${appimagename}"
-    
+
     if [ ! -f "${appimagename}" ]; then
         echo "ERROR: AppImage creation failed: ${appimagename} not found"
         exit 1

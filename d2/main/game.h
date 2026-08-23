@@ -31,6 +31,18 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #define MAXIMUM_FPS 1000
 #endif
 
+// calc_frame_time() only ever clamps FrameTime to a minimum (the FPS-cap
+// delay loop) -- nothing stops one badly slow frame from producing a huge
+// FrameTime. A huge FrameTime moves every object much further before its
+// next collision check, which on a crowded starting grid (many ships packed
+// together, all boosted off the line at once) can turn one slow frame into
+// more simultaneous collisions than before, which makes the next frame
+// slower still -- a feedback loop that reads as a hang rather than a single
+// runaway loop, since nothing inside any one frame is actually unbounded.
+// Clamping the top end breaks that spiral: a real stall just plays back in
+// slow motion for a moment instead of compounding.
+#define MAX_FRAME_TIME (F1_0/8)
+
 struct object;
 
 extern struct window *Game_wind;
@@ -84,6 +96,7 @@ extern int ft_preference;
 #define GM_NORMAL       0       // You are in normal play mode, no multiplayer stuff
 #define GM_MULTI        38      // You are in some type of multiplayer game
 #define GM_OBSERVER     4096    // You are observing this game
+#define GM_RACE         8192    // Race mode for network play
 
 #define NDL 5       // Number of difficulty levels.
 
@@ -266,6 +279,7 @@ typedef struct game_cheats
 	int buddyclone;
 	int buddyangry;
 	int acid;
+	int racetest;
 } __pack__ game_cheats;
 extern game_cheats cheats;
 void game_disable_cheats();

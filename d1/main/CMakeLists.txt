@@ -57,6 +57,7 @@ add_executable (d1x-redux
     snddecom.c
     songs.c
     state.c
+    survival.c
     switch.c
     terrain.c
     texmerge.c
@@ -190,13 +191,25 @@ target_link_libraries(d1x-redux PRIVATE 2d 3d arch_sdl iff maths mem misc texmap
 target_link_libraries(d1x-redux PUBLIC ${OPENGL_LIBRARY} ${SDL_LIBRARY} ${SDL_MIXER_LIBRARY} ${PHYSFS_LIBRARY} ${PNG_LIBRARY} ${EXTRA_LIBRARIES})
 target_sources(d1x-redux PRIVATE vers_id.c)
 
-# Copy DXMA mission database CSV to output directory
-add_custom_command(TARGET d1x-redux POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/../dxma_missions_complete_with_direct_links.csv"
-        "$<TARGET_FILE_DIR:d1x-redux>/dxma_missions_complete_with_direct_links.csv"
-    COMMENT "Copying DXMA mission database..."
+# Compile the DXMA mission database CSV into the executable, so the mission
+# browser works with no external file and survives however the build gets
+# packaged (AppImage, .exe, bare directory). Regenerated whenever the CSV
+# changes; embed_file.cmake -> dxma_csv_data[] / dxma_csv_data_len, consumed
+# by dxma.c. A cached refresh (dxma_refresh() in dxma.c) can still overlay a
+# newer copy at runtime; this is only the offline baseline.
+set(DXMA_CSV "${CMAKE_CURRENT_SOURCE_DIR}/../dxma_missions_complete_with_direct_links.csv")
+set(DXMA_CSV_GEN "${CMAKE_CURRENT_BINARY_DIR}/dxma_csv_data.c")
+add_custom_command(
+    OUTPUT "${DXMA_CSV_GEN}"
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${DXMA_CSV}
+        -DOUTPUT=${DXMA_CSV_GEN}
+        -DSYMBOL=dxma_csv_data
+        -P "${CMAKE_SOURCE_DIR}/../cmake/embed_file.cmake"
+    DEPENDS "${DXMA_CSV}" "${CMAKE_SOURCE_DIR}/../cmake/embed_file.cmake"
+    COMMENT "Embedding DXMA mission database..."
 )
+target_sources(d1x-redux PRIVATE dxma.c "${DXMA_CSV_GEN}")
 
 # Copy missions folder if it exists
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/missions")

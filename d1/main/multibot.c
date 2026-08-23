@@ -38,6 +38,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "powerup.h"
 #include "scores.h"
 #include "gauges.h"
+#include "survival.h"
 #include "fuelcen.h"
 #include "morph.h"
 #include "digi.h"
@@ -74,6 +75,19 @@ int robot_fired[MAX_ROBOTS_CONTROLLED];
 ubyte robot_fire_buf[MAX_ROBOTS_CONTROLLED][18+3];
 
 #define MULTI_ROBOT_PRIORITY(objnum, pnum) ((objnum + pnum) % (N_players - (Netgame.host_is_obs ? 1 : 0)))
+
+// See the comment on STOCK_ROBOTS_CONTROLLED in multibot.h. Everything else
+// in this file still sizes its loops off MAX_ROBOTS_CONTROLLED (the table
+// capacity) -- those loops only scan for/clean up already-claimed slots, and
+// unused slots hold -1 -- so this limit is applied at the one place that
+// matters: handing out a new slot.
+int multi_max_robots_controlled(void)
+{
+	if (Netgame.gamemode == NETGAME_SURVIVAL)
+		return MAX_ROBOTS_CONTROLLED;
+
+	return STOCK_ROBOTS_CONTROLLED;
+}
 
 int
 multi_can_move_robot(int objnum, int agitation)
@@ -209,6 +223,7 @@ multi_add_controlled_robot(int objnum, int agitation)
 	int lowest_agitation = 0x7fffffff; // MAX POSITIVE INT
 	int lowest_agitated_bot = -1;
 	int first_free_robot = -1;
+	int max_controlled = multi_max_robots_controlled();
 
 	// Try to add a new robot to the controlled list, return 1 if added, 0 if not.
 
@@ -218,7 +233,7 @@ multi_add_controlled_robot(int objnum, int agitation)
 		return 0;
 	}
 
-	for (i = 0; i < MAX_ROBOTS_CONTROLLED; i++)
+	for (i = 0; i < max_controlled; i++)
 	{
 		if ((robot_controlled[i] == -1) || (Objects[robot_controlled[i]].type != OBJ_ROBOT)) {
 			first_free_robot = i;
@@ -767,8 +782,6 @@ multi_explode_robot_sub(int botnum, int killer,char isthief)
 {
 	object *robot;
 
-	killer = killer;
-
 	if ((botnum < 0) || (botnum > Highest_object_index)) { // Objnum in range?
 		Int3(); // See rob
 		return 0;
@@ -812,8 +825,14 @@ multi_explode_robot_sub(int botnum, int killer,char isthief)
 			start_boss_death_sequence(robot);
 		else
 			return 0;
-	} else
+	} else {
+		// Survival elites go up harder than the rest. No-op for everything else, and never reached
+		// for bosses -- they have their own death sequence above, which this would fight. killer is
+		// passed through unmodified from this function's own parameter -- it's the BOUNTY kind's
+		// only way to know whether *this* player was the one who earned the score bonus.
+		survival_robot_death_blast(robot, killer);
 		explode_object(robot, STANDARD_EXPL_DELAY);
+	}
 	return 1;
 }
 
@@ -848,7 +867,10 @@ multi_do_robot_explode(const ubyte *buf)
 	Players[0].num_kills_level++;
 	Players[0].num_kills_total++;
 	if (killer == Players[Player_num].objnum)
+	{
 		add_points_to_score(Robot_info[Objects[botnum].id].score_value);
+		survival_note_robot_kill(&Objects[botnum], Robot_info[Objects[botnum].id].score_value);
+	}
 
 	if(multi_i_am_master() && (Game_mode & GM_MULTI_ROBOTS)) {
 	    kill_respawnable_robot(Objects + botnum); 
@@ -1286,9 +1308,19 @@ multi_drop_robot_powerups(int objnum)
 	robptr = &Robot_info[del_obj->id];
 
 	if(Game_mode & GM_MULTI_ROBOTS && !(Game_mode & GM_MULTI_COOP))
-		return; 
+		return;
 
 	Net_create_loc = 0;
+
+	// Survival mode: two independent drop rolls (weapon, and shield/ammo),
+	// replacing the robot type's own contains_prob table entirely -- see
+	// survival_robot_drops(). It does its own object_create_egg() and
+	// network sends per drop, so we're done here either way.
+	if (Netgame.gamemode == NETGAME_SURVIVAL)
+	{
+		survival_robot_drops(del_obj);
+		return;
+	}
 
 	if (del_obj->contains_count > 0) { 
 		//	If dropping a weapon that the player has, drop energy instead, unless it's vulcan, in which case drop vulcan ammo.

@@ -50,6 +50,8 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "wall.h"
 #include "ai.h"
 #include "fuelcen.h"
+#include "race.h"
+#include "racebot.h"
 #include "switch.h"
 #include "digi.h"
 #include "gamesave.h"
@@ -245,6 +247,12 @@ gameseq_init_network_players()
 
 		NumNetPlayerPositions = MAX_PLAYERS;
 	}
+
+	// A single-player race fields a grid of bots in the player slots the
+	// level would otherwise leave empty. Done here, before the start position
+	// count is asserted against N_players below, because claiming a slot is
+	// what makes a bot a racer.
+	race_bots_claim_slots();
 }
 
 void gameseq_remove_unused_players()
@@ -269,6 +277,11 @@ void gameseq_remove_unused_players()
 	{		// Note link to above if!!!
 		for (i=1; i < NumNetPlayerPositions; i++)
 		{
+			// ...except the bot field, which is the one thing in a single
+			// player game that wants those slots flying.
+			if (race_player_is_bot(i))
+				continue;
+
 			obj_delete(Players[i].objnum);
 		}
 	}
@@ -457,8 +470,18 @@ void init_player_stats_new_ship(ubyte pnum)
 	Players[pnum].secondary_ammo[0] = 2 + NDL - Difficulty_level;
 	Players[pnum].primary_weapon_flags = HAS_LASER_FLAG;
 	Players[pnum].secondary_weapon_flags = HAS_CONCUSSION_FLAG;
+
+	// Race mode starts you empty -- no laser, no concussions. Everything you
+	// fire comes out of a mystery box and evaporates on a timer.
+	if (Game_mode & GM_RACE)
+		race_strip_loadout(pnum);
 	Players[pnum].afterburner_charge = 0;
 	Players[pnum].flags &= ~( PLAYER_FLAGS_QUAD_LASERS | PLAYER_FLAGS_AFTERBURNER | PLAYER_FLAGS_CLOAKED | PLAYER_FLAGS_INVULNERABLE | PLAYER_FLAGS_MAP_ALL | PLAYER_FLAGS_CONVERTER | PLAYER_FLAGS_AMMO_RACK | PLAYER_FLAGS_HEADLIGHT | PLAYER_FLAGS_HEADLIGHT_ON | PLAYER_FLAGS_FLAG);
+
+	// ...except the class kit, which is what a racer always has. After the
+	// flag clear above, since a class can carry quad lasers or an afterburner.
+	if (Game_mode & GM_RACE)
+		race_grant_class_loadout(pnum);
 	Players[pnum].cloak_time = 0;
 	Players[pnum].invulnerable_time = 0;
 	Players[pnum].homing_object_dist = -F1_0; // Added by RH
@@ -473,8 +496,10 @@ void init_player_stats_new_ship(ubyte pnum)
 	}
 #endif
 
-	// SNG spawn weapon toggles
-	if (Game_mode & GM_MULTI)
+	// SNG spawn weapon toggles. A race skips them all: the class picked at the
+	// line *is* the loadout, and these would stack a second gun (and their own
+	// weapon selection) on top of it every spawn.
+	if ((Game_mode & GM_MULTI) && !(Game_mode & GM_RACE))
 	{
 		if (Netgame.FusionSpawn)
 		{
@@ -956,6 +981,12 @@ void StartNewGame(int start_level)
 	state_quick_item = -1;	// for first blind save, pick slot to save in
 
 	Game_mode = GM_NORMAL;
+
+	// Set by the single-player race menu, which is the only thing that starts
+	// a race outside a netgame. Every other route into StartNewGame() clears
+	// it, so a normal game can never come up in race mode.
+	if (Race_sp_pending)
+		Game_mode |= GM_RACE;
 
 	Next_level_num = 0;
 
@@ -1577,11 +1608,18 @@ void DoPlayerDead()
 	else
 #endif
 	{				//Note link to above else!
-		Players[Player_num].lives--;
-		if (Players[Player_num].lives == 0)
+		// A race is not a campaign. Dying in one costs you the time it takes
+		// to get going again and whatever was in your rack; running out of
+		// lives three laps in and being thrown to a game over screen would
+		// end the race rather than lose it.
+		if (!(Game_mode & GM_RACE))
 		{
-			DoGameOver();
-			return;
+			Players[Player_num].lives--;
+			if (Players[Player_num].lives == 0)
+			{
+				DoGameOver();
+				return;
+			}
 		}
 	}
 
@@ -1744,6 +1782,21 @@ void StartNewLevelSub(int level_num, int page_in_textures, int secret_flag)
 #endif
 
 	gameseq_remove_unused_players();
+
+	// The netgame path runs this from multi_level_sync(), once the level is
+	// agreed with the host. A single-player race has nobody to agree with.
+	if ((Game_mode & GM_RACE) && !(Game_mode & GM_MULTI))
+	{
+		int i;
+
+		// A race is a race: whatever robots the level ships with are not part
+		// of it, the same way multi_prep_level() clears them out of a netgame.
+		for (i = 0; i <= Highest_object_index; i++)
+			if (Objects[i].type == OBJ_ROBOT)
+				Objects[i].flags |= OF_SHOULD_BE_DEAD;
+
+		race_init_level();
+	}
 
 	Game_suspended = 0;
 
@@ -1957,7 +2010,7 @@ void InitPlayerPosition(int random_flag)
 #ifdef NETWORK	
 	else if ((Game_mode & GM_MULTI) && (Netgame.SpawnStyle == SPAWN_STYLE_PREVIEW) && Dead_player_camera != NULL)
 		NewPlayer = previewed_spawn_point; 
-#endif	
+#endif
 	else if (random_flag == 1)
 	{
 		int i, trys=0;
@@ -1992,7 +2045,28 @@ void InitPlayerPosition(int random_flag)
 	Assert(NewPlayer < NumNetPlayerPositions);
 	ConsoleObject->pos = Player_init[NewPlayer].pos;
 	ConsoleObject->orient = Player_init[NewPlayer].orient;
-#ifdef NETWORK	
+#ifdef NETWORK
+	{
+		// Race mode: come back at the last checkpoint captured, facing the
+		// next one, rather than at a level-editor start position. Falls
+		// through to the normal spawn until the first checkpoint is crossed.
+		vms_vector race_pos;
+		vms_matrix race_orient;
+		int race_segnum;
+
+		if ((Game_mode & GM_RACE) && random_flag == 1 && !is_observer() &&
+			race_get_respawn(&race_pos, &race_orient, &race_segnum))
+		{
+			ConsoleObject->pos = race_pos;
+			ConsoleObject->orient = race_orient;
+			Dead_player_camera = NULL;
+			obj_relink(ConsoleObject-Objects, race_segnum);
+			reset_player_object();
+			reset_cruise();
+			return;
+		}
+	}
+
 	if ((Game_mode & GM_MULTI) && (Netgame.SpawnStyle == SPAWN_STYLE_PREVIEW) && Dead_player_camera != NULL) {
 		ConsoleObject->orient = Dead_player_camera->orient;  
 		Dead_player_camera = NULL; 

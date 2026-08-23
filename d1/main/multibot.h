@@ -24,9 +24,28 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #ifndef SHAREWARE
 
-#define MAX_ROBOTS_CONTROLLED 3
+// Capacity of the robot-control tables (robot_controlled[] and friends).
+// This is only the array size -- the number of slots a machine will actually
+// hand out is multi_max_robots_controlled() below, which stays at the stock
+// value of 3 for every mode except Survival.
+#define MAX_ROBOTS_CONTROLLED 32
+
+// Stock Descent value, and still what every non-Survival mode uses. In
+// multiplayer, a robot is only simulated by whichever machine currently
+// "controls" it (see multi_can_move_robot()); an uncontrolled robot fails
+// every ai_multiplayer_awareness() check in do_ai_frame() and so does not
+// move or fire at all. With three slots per machine, a Survival wave of a
+// dozen robots left most of them standing perfectly still until something
+// (usually being shot, which spikes their agitation past the currently
+// controlled ones) evicted a slot for them.
+#define STOCK_ROBOTS_CONTROLLED 3
 
 #define ROBOT_FIRE_AGITATION 94
+
+// How many robots this machine may control concurrently right now. Survival
+// gets the full table because its whole premise is a large simultaneous
+// horde; everything else keeps stock behaviour and stock bandwidth.
+int multi_max_robots_controlled(void);
 
 extern int robot_controlled[MAX_ROBOTS_CONTROLLED];
 extern int robot_agitation[MAX_ROBOTS_CONTROLLED];
@@ -53,6 +72,11 @@ void multi_do_create_robot_powerups(const ubyte *buf);
 int multi_explode_robot_sub(int botnum, int killer, char unused);
 
 void multi_drop_robot_powerups(int objnum);
+// Broadcasts the powerups a just-killed robot dropped, using del_obj's
+// contains_* fields plus the Net_create_objnums[] the preceding
+// object_create_egg() filled in. Exposed for survival.c, which rolls its own
+// drop table and emits one of these per drop.
+void multi_send_create_robot_powerups(struct object *del_obj);
 void multi_dump_robots(void);
 
 void multi_strip_robots(int playernum);
