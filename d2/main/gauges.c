@@ -43,6 +43,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #ifdef NETWORK
 #include "multi.h"
 #include "race.h"
+#include "racebot.h"
 #endif
 #include "endlevel.h"
 #include "cntrlcen.h"
@@ -52,7 +53,9 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "render.h"
 #include "piggy.h"
 #include "vclip.h"
+#include "newmenu.h"   // nm_draw_background, the stock Descent menu frame
 #include "laser.h"
+#include "weapon.h"		// Weapon_info -- weapon icon bitmaps further down this file
 #include "playsave.h"
 #include "rle.h"
 #include "byteswap.h"
@@ -780,10 +783,179 @@ static const char *race_rank_suffix(int rank)
 // FSPACX/FSPACY macros alike, so measurement stays consistent while pushed.
 static float Race_font_save_x = 1, Race_font_save_y = 1;
 
+// Kills, deaths and the key icons mean nothing in a race, and they land in
+// the same two corners the race HUD needs -- so outside the status bar (which
+// draws them down on its own ribbon, clear of everything) a race simply does
+// not draw them.
+static int race_hides_stock_hud(void)
+{
+	if (!(Game_mode & GM_RACE))
+		return 0;
+
+	return PlayerCfg.CurrentCockpitMode == CM_FULL_SCREEN ||
+		   PlayerCfg.CurrentCockpitMode == CM_FULL_COCKPIT;
+}
+
+// How far the full cockpit's casing eats into the rectangle the mine renders
+// into. That rectangle is the plain top two thirds of the screen
+// (init_cockpit(), game.c), but the cockpit art is drawn over it and its
+// canopy arcs curve through the lower corners.
+//
+// Measuring the bitmap does not help here: gr_bitblt_find_transparent_area()
+// returns the bounding box of every transparent pixel, and since the top edge
+// of the view is clear all the way across, that box is the whole rectangle --
+// it describes a rectangular window, which this cockpit does not have. So
+// these are fractions of the screen, in the same spirit as the constants the
+// stock HUD already uses for this mode (hud_show_orbs() indents by SWIDTH/18,
+// hud_show_lives() by HUD_SCALE_X(7)).
+//
+// The top corners are clear -- the arcs exit through the top edge well inside
+// them -- so there is no top inset, which is what keeps the minimap in the
+// canvas corner where it belongs.
+static void race_cockpit_inset(int *left, int *top, int *right, int *bottom)
+{
+	*left = *top = *right = *bottom = 0;
+
+	if (PlayerCfg.CurrentCockpitMode != CM_FULL_COCKPIT)
+		return;
+
+	*left = GWIDTH / 24;
+	*right = GWIDTH / 24;
+	*bottom = GHEIGHT / 10;
+}
+
+// What is left of the render canvas once the stock HUD has taken its cut in
+// the current cockpit mode -- every race readout is laid out inside this box.
+// The canvas itself already shrinks for the cockpit and the status bar
+// (Screen_3d_window, game.c), so this only has to account for what the engine
+// draws *inside* it: the deaths/lives and score lines along the top, the kill
+// list along the bottom, and, in full screen only, the energy/shield and
+// weapon readouts in the bottom corners -- which is what the race clock and
+// the box loot list used to land on top of.
+typedef struct race_hud_box {
+	int left, top, right, bottom;
+} race_hud_box;
+
+static void race_hud_get_box(race_hud_box *b)
+{
+	int bottom_lines = 1;
+
+	int inset_l, inset_t, inset_r, inset_b;
+
+	race_cockpit_inset(&inset_l, &inset_t, &inset_r, &inset_b);
+
+	b->left = inset_l + FSPACX(2);
+	b->right = GWIDTH - inset_r - FSPACX(2);
+	// Two lines down normally, to clear the deaths/lives and score lines --
+	// but a race hides those, and then the block starts at the top.
+	b->top = inset_t + (race_hides_stock_hud() ? FSPACY(2) : LINE_SPACING*2 + FSPACY(2));
+
+	// Full screen is the only mode that puts the ship's own readouts inside
+	// the 3D window: energy/shield/afterburner stack up the bottom-left and
+	// the weapon boxes up the bottom-right, six lines apiece. The cockpit and
+	// the status bar draw theirs on their own bitmap, below the canvas.
+	if (PlayerCfg.CurrentCockpitMode == CM_FULL_SCREEN)
+		bottom_lines = 7;
+
+	// The kill list runs along the bottom of the canvas in every mode and
+	// grows with the roster -- same one-column-up-to-four split
+	// hud_show_kill_list() uses.
+	if (((Game_mode & GM_MULTI) || race_bots_enabled()) && Show_kill_list)
+	{
+		int rows = (N_players <= 4) ? N_players : (N_players + 1) / 2;
+
+		if (rows + 1 > bottom_lines)
+			bottom_lines = rows + 1;
+	}
+
+	b->bottom = GHEIGHT - inset_b - LINE_SPACING*bottom_lines;
+
+	if (b->bottom < b->top + LINE_SPACING)		// canvas too small to lay out in
+		b->bottom = b->top + LINE_SPACING;
+}
+
+// How far to scale the race HUD's text down for the canvas it is landing in.
+// The full cockpit renders the mine into two thirds of the screen and the
+// status bar into about three quarters, so a size that reads well full screen
+// swamps a cockpit view. Every race_font_push() folds this in, which is what
+// keeps one set of nominal sizes working across all three gauge modes.
+static float race_hud_scale(void)
+{
+	float s;
+
+	if (SHEIGHT <= 0)
+		return 1.0f;
+
+	s = (float)GHEIGHT / (float)SHEIGHT;
+
+	if (s > 1.0f)
+		s = 1.0f;
+	else if (s < 0.66f)
+		s = 0.66f;
+
+	return s;
+}
+
+// Side of the minimap square. A fifth of the smaller side of the canvas, but
+// never more than a third of the height the race HUD actually owns: the
+// cockpit renders the mine into two thirds of the screen, and a map sized off
+// the width alone would swallow that canvas.
+static int race_minimap_size(void)
+{
+	race_hud_box box;
+	// Off the width, not the smaller side: the cockpit renders into a canvas
+	// two thirds as tall, and sizing off that gave it a noticeably smaller
+	// map than the other two modes for no reason.
+	int size = GWIDTH / 9;
+
+	race_hud_get_box(&box);
+
+	size = min(size, (box.bottom - box.top) / 2);
+
+	return min(size, GHEIGHT / 4);
+}
+
+// Where the map's corner is: hard into the canvas corner. Every cockpit mode
+// leaves the top corners clear (see race_cockpit_inset()), so this is one
+// place in all three -- it stays a function because the stock HUD elements
+// sharing that corner measure themselves against it.
+static void race_minimap_origin(int *left, int *top)
+{
+	int inset_l, inset_t, inset_r, inset_b;
+
+	race_cockpit_inset(&inset_l, &inset_t, &inset_r, &inset_b);
+
+	// Hard into the canvas corner, except in the full cockpit where the
+	// canopy sweeps through it -- there the map sits inboard of the frame.
+	*left = inset_l;
+	*top = inset_t;
+}
+
+// How much of the top-left corner the minimap is occupying this frame, for
+// the stock HUD elements that would otherwise be drawn straight over it. 0
+// when there is no map up.
+static int race_minimap_reserved_width(void)
+{
+	int size, left, top;
+
+	if (!(Game_mode & GM_RACE) || !PlayerCfg.RaceMinimap)
+		return 0;
+
+	size = race_minimap_size();
+
+	if (size < 40)			// too small a canvas: race_draw_minimap() skips it
+		return 0;
+
+	race_minimap_origin(&left, &top);
+
+	return left + size;
+}
+
 static void race_font_push(float scale)
 {
 	Race_font_save_x = FNTScaleX;
 	Race_font_save_y = FNTScaleY;
+	scale *= race_hud_scale();
 	FNTScaleX *= scale;
 	FNTScaleY *= scale;
 }
@@ -792,6 +964,65 @@ static void race_font_pop(void)
 {
 	FNTScaleX = Race_font_save_x;
 	FNTScaleY = Race_font_save_y;
+}
+
+// -------------------------------------------------------------------------
+// EMP static
+// -------------------------------------------------------------------------
+//
+// What a jammed instrument shows instead of going blank: blocky grayscale
+// noise filling the exact box the readout would have occupied. Used by
+// every race HUD element race_emp_gauge_hidden() blanks (minimap, lap/
+// timer/placing, weapon-timer rack, trichord bar, reticle, nameplates) --
+// each draws its own noise into its own already-known geometry rather than
+// this code guessing bounding boxes from outside. In particular
+// race_string_right() and race_timer_line() below draw static sized to the
+// real measured text they would otherwise have shown, so the patch always
+// matches exactly what it's covering instead of some separately-guessed box.
+
+// Cheap deterministic pseudo-noise. Deliberately NOT d_rand(): that PRNG
+// drives gameplay (robot AI, mine timers, ...) and is kept in lockstep
+// across every machine in a multiplayer game, so a rendering effect pulling
+// from it would burn through the shared sequence at a rate that differs per
+// machine -- a desync waiting to happen, not a rounding error.
+static unsigned race_static_noise(unsigned seed)
+{
+	seed = seed * 1103515245u + 12345u;
+	return (seed >> 16) & 0x7fffu;
+}
+
+// Cell size (px) and refresh cadence (ticks, 50ms each) for the noise.
+// Coarse and infrequent on purpose: this is a handful of gr_rect calls per
+// panel, not a per-pixel fill, and five refreshes a second reads as static
+// without repainting for no visible gain -- or, worse, fast enough to
+// become a flicker risk.
+#define RACE_STATIC_CELL           8
+#define RACE_STATIC_REFRESH_TICKS  3
+
+static void race_draw_static(int x0, int y0, int x1, int y1)
+{
+	unsigned frame_seed;
+	int cx, cy;
+
+	if (x1 <= x0 || y1 <= y0)
+		return;
+
+	frame_seed = race_static_noise((unsigned)(d_tick_count / RACE_STATIC_REFRESH_TICKS));
+
+	for (cy = y0; cy < y1; cy += RACE_STATIC_CELL)
+	{
+		int cell_y1 = min(cy + RACE_STATIC_CELL - 1, y1 - 1);
+
+		for (cx = x0; cx < x1; cx += RACE_STATIC_CELL)
+		{
+			unsigned s = race_static_noise(frame_seed ^ ((unsigned)cx * 374761393u) ^ ((unsigned)cy * 668265263u));
+			int v = 6 + s % 26;		// dark-ish to bright grey, never full black or white
+			int cell_x1 = min(cx + RACE_STATIC_CELL - 1, x1 - 1);
+
+			gr_setcolor(BM_XRGB(v, v, v));
+			gr_rect(cx, cy, cell_x1, cell_y1);
+		}
+	}
 }
 
 // Text with a one-pixel drop shadow, so the readouts stay legible against
@@ -832,7 +1063,11 @@ static void race_string_right(int right, int y, const char *s, int color)
 	int w, h, aw;
 
 	gr_get_string_size(s, &w, &h, &aw);
-	race_string(right - w, y, s, color);
+
+	if (race_emp_gauge_hidden())
+		race_draw_static(right - w, y, right, y + h);
+	else
+		race_string(right - w, y, s, color);
 }
 
 // Floating labels sitting in the mine over checkpoints, the finish line and
@@ -925,15 +1160,21 @@ static void race_draw_track_labels()
 // every row keeps the times in a straight line despite the proportional font.
 static void race_timer_line(int right, int y, const char *label, const char *value, int color)
 {
-	int w, h, aw, colw;
+	int w, h, aw, colw, label_w;
 
 	gr_get_string_size("0:00.00", &colw, &h, &aw);
+	gr_get_string_size(label, &label_w, &h, &aw);
+
+	if (race_emp_gauge_hidden())
+	{
+		race_draw_static(right - colw - FSPACX(3) - label_w, y, right, y + h);
+		return;
+	}
 
 	gr_get_string_size(value, &w, &h, &aw);
 	race_string(right - w, y, value, color);
 
-	gr_get_string_size(label, &w, &h, &aw);
-	race_string(right - colw - FSPACX(3) - w, y, label, color);
+	race_string(right - colw - FSPACX(3) - label_w, y, label, color);
 }
 
 // Mario-Kart-style clock: running total, current lap, best lap so far, then
@@ -946,7 +1187,9 @@ static int race_draw_timer(int right, int y)
 	fix64 best;
 	int n = race_get_splits(&splits, &best);
 	int i;
-	int line = LINE_SPACING;
+	// A little leading: at the sizes the cockpit modes scale this block down
+	// to, rows at exactly LINE_SPACING run into each other.
+	int line = LINE_SPACING + FSPACY(1);
 
 	race_format_time(time, sizeof(time), race_get_total_time());
 	race_timer_line(right, y, "TOTAL", time, BM_XRGB(28, 28, 31));
@@ -1043,7 +1286,57 @@ static void race_draw_items(void)
 	row = icon_h + FSPACY(3);				// and between the rows
 	x = FSPACX(2);
 	text_x = x + col_w + FSPACX(4);
-	y = GHEIGHT/2 - (n * row)/2;
+
+	// Centred down the left edge of what the race HUD owns, then pushed clear
+	// of the minimap above and pinned off the readouts below -- in a cockpit
+	// canvas a full rack of loot is taller than the space between them.
+	{
+		race_hud_box box;
+		int top_limit;
+
+		race_hud_get_box(&box);
+		{
+			int map_left, map_top;
+
+			race_minimap_origin(&map_left, &map_top);
+			top_limit = race_minimap_reserved_width() ? map_top + race_minimap_size() + FSPACY(2)
+													  : box.top;
+		}
+
+		y = (box.top + box.bottom)/2 - (n * row)/2;
+
+		if (y + n * row > box.bottom)
+			y = box.bottom - n * row;
+		if (y < top_limit)
+			y = top_limit;
+	}
+
+	if (race_emp_gauge_hidden())
+	{
+		// Icon column plus the widest of the actual name/ammo and fuse-time
+		// lines this rack is about to draw, so the patch traces the real
+		// panel instead of a guessed allowance.
+		int text_w = 0;
+
+		for (i = 0; i < n; i++)
+		{
+			char buf[48];
+			int w, h, aw, ammo = race_get_item_ammo(held[i].wclass, held[i].index);
+
+			if (ammo > 1)
+				snprintf(buf, sizeof(buf), "%s x%d", race_item_name(held[i].wclass, held[i].index), ammo);
+			else
+				snprintf(buf, sizeof(buf), "%s", race_item_name(held[i].wclass, held[i].index));
+
+			gr_get_string_size(buf, &w, &h, &aw);
+			if (w > text_w)
+				text_w = w;
+		}
+
+		race_draw_static(x, y, text_x + text_w, y + n * row - FSPACY(3));
+		race_font_pop();
+		return;
+	}
 
 	for (i = 0; i < n; i++)
 	{
@@ -1086,9 +1379,18 @@ static void race_draw_items(void)
 // just where everyone is on the level's dominant plane. The checkpoints and
 // the finish line are plotted with it so the loop of dots reads as the track,
 // with the one the local player owes next lit up.
-static int race_map_pixel(fix norm, int center, int radius)
+static int race_map_pixel_r(fix norm, int center, int radius, int margin)
 {
 	int p = center + f2i(fixmul(norm, i2f(radius)));
+
+	// Dots and rings are drawn from their centre, so anything pinned to the
+	// frame has to leave room for its own radius -- otherwise the primitive
+	// spills outside the map, which on a corner-mounted map means outside the
+	// canvas.
+	radius -= margin;
+
+	if (radius < 0)
+		radius = 0;
 
 	// Anything off the level's bounding box (a stray object, a track that
 	// pokes outside it) is pinned to the edge rather than drawn outside the
@@ -1101,19 +1403,26 @@ static int race_map_pixel(fix norm, int center, int radius)
 	return p;
 }
 
+static int race_map_pixel(fix norm, int center, int radius)
+{
+	return race_map_pixel_r(norm, center, radius, 0);
+}
+
 static void race_draw_minimap(void)
 {
 	const race_label *labels;
 	int n_labels = race_get_labels(&labels);
-	int size = min(GWIDTH, GHEIGHT) / 5;
-	int left, top, cx, cy, radius, dot, i, players;
+	race_hud_box box;
+	int size, left, top, cx, cy, radius, dot, i, players;
 	fix mx, my;
 
-	if (size < 40)			// too small a screen to be worth the clutter
+	race_hud_get_box(&box);
+	size = race_minimap_size();
+
+	if (size < 40)			// too small a canvas to be worth the clutter
 		return;
 
-	left = 0;								// hard into the corner
-	top = 0;
+	race_minimap_origin(&left, &top);
 	cx = left + size/2;
 	cy = top + size/2;
 	radius = size/2 - 2;
@@ -1125,10 +1434,10 @@ static void race_draw_minimap(void)
 	// Frame: a dark plate so the dots stay readable over bright mine walls.
 	gr_settransblend(10, GR_BLEND_NORMAL);
 	gr_setcolor(BM_XRGB(0,0,0));
-	gr_urect(left, top, left + size, top + size);
+	gr_rect(left, top, left + size, top + size);
 	gr_settransblend(GR_FADE_OFF, GR_BLEND_NORMAL);
 	gr_setcolor(BM_XRGB(12,12,14));
-	gr_ubox(left, top, left + size, top + size);
+	gr_box(left, top, left + size, top + size);
 
 	//	--- the mine itself ---
 
@@ -1139,10 +1448,10 @@ static void race_draw_minimap(void)
 		gr_setcolor(BM_XRGB(13,13,20));
 
 		for (i = 0; i < n; i++)
-			gr_uline(i2f(race_map_pixel(lines[i].x0, cx, radius)),
-					 i2f(race_map_pixel(lines[i].y0, cy, radius)),
-					 i2f(race_map_pixel(lines[i].x1, cx, radius)),
-					 i2f(race_map_pixel(lines[i].y1, cy, radius)));
+			gr_line(i2f(race_map_pixel(lines[i].x0, cx, radius)),
+					i2f(race_map_pixel(lines[i].y0, cy, radius)),
+					i2f(race_map_pixel(lines[i].x1, cx, radius)),
+					i2f(race_map_pixel(lines[i].y1, cy, radius)));
 	}
 
 	//	--- the track: checkpoints, then the line ---
@@ -1161,8 +1470,9 @@ static void race_draw_minimap(void)
 		is_next = (rl->kind == RACE_LABEL_FINISH) ? race_finish_is_target()
 												  : race_checkpoint_is_target(rl->number);
 
-		x = race_map_pixel(mx, cx, radius);
-		y = race_map_pixel(my, cy, radius);
+		// dot*2 is the widest thing drawn on a waypoint (the target ring).
+		x = race_map_pixel_r(mx, cx, radius, dot*2 + 1);
+		y = race_map_pixel_r(my, cy, radius, dot*2 + 1);
 
 		if (rl->kind == RACE_LABEL_FINISH)
 			gr_setcolor(is_next ? BM_XRGB(31,28,8) : BM_XRGB(20,18,6));
@@ -1172,7 +1482,7 @@ static void race_draw_minimap(void)
 		gr_disk(i2f(x), i2f(y), i2f(dot));
 
 		if (is_next)						// ring the one we owe next
-			gr_ucircle(i2f(x), i2f(y), i2f(dot*2));
+			gr_circle(i2f(x), i2f(y), i2f(dot*2));
 	}
 
 	//	--- the players ---
@@ -1180,7 +1490,9 @@ static void race_draw_minimap(void)
 	// Race colours are pinned to the player index; see race_lock_player_rgb().
 	selected_player_rgb = race_lock_player_rgb(player_rgb);
 
-	players = (Game_mode & GM_MULTI) ? N_players : 1;
+	// A single-player race still has a field on the track -- the bots are
+	// real ships in real player slots, so they are dots like anyone else.
+	players = (Game_mode & GM_MULTI) ? N_players : race_bot_field_size();
 
 	// Local player last, so their marker is never buried under someone else's.
 	for (i = 0; i <= players; i++)
@@ -1204,8 +1516,9 @@ static void race_draw_minimap(void)
 		if (!race_map_project(&objp->pos, &mx, &my))
 			continue;
 
-		x = race_map_pixel(mx, cx, radius);
-		y = race_map_pixel(my, cy, radius);
+		// The local ship's marker is the biggest: its ring plus a heading tick.
+		x = race_map_pixel_r(mx, cx, radius, dot*3 + 1);
+		y = race_map_pixel_r(my, cy, radius, dot*3 + 1);
 		color = (Game_mode & GM_TEAM) ? get_team(pnum) : pnum;
 
 		gr_setcolor(BM_XRGB(selected_player_rgb[color].r,
@@ -1219,7 +1532,7 @@ static void race_draw_minimap(void)
 
 			gr_disk(i2f(x), i2f(y), i2f(dot + 1));
 			gr_setcolor(BM_XRGB(31,31,31));
-			gr_ucircle(i2f(x), i2f(y), i2f(dot + 2));
+			gr_circle(i2f(x), i2f(y), i2f(dot + 2));
 
 			// A tick out of the marker pointing where the ship is facing,
 			// taken from a point out in front of it so it flattens onto the
@@ -1235,9 +1548,9 @@ static void race_draw_minimap(void)
 				{
 					int tick = dot*3;
 
-					gr_uline(i2f(x), i2f(y),
-							 i2f(x + (int)(dx/len * tick)),
-							 i2f(y + (int)(dy/len * tick)));
+					gr_line(i2f(x), i2f(y),
+							i2f(x + (int)(dx/len * tick)),
+							i2f(y + (int)(dy/len * tick)));
 				}
 			}
 		}
@@ -1246,11 +1559,349 @@ static void race_draw_minimap(void)
 	}
 }
 
+// Class kit icons are the game's own powerup sprites -- the exact bitmap
+// draw_powerup() blits in the world -- fitted into a box rather than squashed
+// into a square, so a Vulcan icon here is literally the Vulcan pickup. Same
+// approach the Survival shop's rows use.
+static void race_draw_powerup_icon(int cx, int cy, int box, int powerup_id)
+{
+	bitmap_index bmi;
+	grs_bitmap *bm;
+	int vc, w, h;
+
+	if (powerup_id < 0 || powerup_id >= MAX_POWERUP_TYPES)
+		return;
+
+	vc = Powerup_info[powerup_id].vclip_num;
+
+	if (vc < 0 || vc >= VCLIP_MAXNUM || Vclip[vc].num_frames <= 0)
+		return;
+
+	// The rest of the game never freezes a vclip on frame 0 -- draw_powerup()
+	// steps every instance in the world on its own timer -- so a static kit
+	// icon in the lobby was the only place a Vulcan pickup didn't spin. This
+	// has no backing object to carry a per-instance timer, so it reads the
+	// clock directly instead: GameTime64 and frame_time share the same fixed
+	// -point scale, so dividing one by the other is already an unscaled frame
+	// count, no fixdiv needed.
+	{
+		fix frame_time = Vclip[vc].frame_time;
+		int frame = 0;
+
+		if (frame_time > 0)
+			frame = (int)((GameTime64 / frame_time) % Vclip[vc].num_frames);
+
+		bmi = Vclip[vc].frames[frame];
+	}
+	PIGGY_PAGE_IN(bmi);
+	bm = &GameBitmaps[bmi.index];
+
+	if (!bm || bm->bm_w <= 0 || bm->bm_h <= 0)
+		return;
+
+	// Longest side fills the box, the other follows, so the sprite keeps its
+	// proportions.
+	if (bm->bm_w >= bm->bm_h)
+	{
+		w = box;
+		h = box * bm->bm_h / bm->bm_w;
+	}
+	else
+	{
+		h = box;
+		w = box * bm->bm_w / bm->bm_h;
+	}
+
+	hud_bitblt_free(cx - w/2, cy - h/2, w, h, bm);
+}
+
+static void race_panel_string(int x, int y, const char *s, int color)
+{
+	gr_set_fontcolor(color, -1);
+	gr_string(x, y, s);
+}
+
+static void race_panel_string_centered(int left, int width, int y, const char *s, int color)
+{
+	int w, h, aw;
+
+	gr_get_string_size(s, &w, &h, &aw);
+	race_panel_string(left + (width - w)/2, y, s, color);
+}
+
+static void race_panel_string_right(int right, int y, const char *s, int color)
+{
+	int w, h, aw;
+
+	gr_get_string_size(s, &w, &h, &aw);
+	race_panel_string(right - w, y, s, color);
+}
+
+// A thin divider in the frame's own accent colour, as the shop panel uses
+// under its title and above its footer.
+static void race_panel_divider(int x1, int x2, int y)
+{
+	gr_setcolor(BM_XRGB(0, 12, 14));
+	gr_rect(x1, y, x2, y + 1);
+}
+
+// One class row: bracketed key, the kit's powerup sprite, the class name with
+// its weapon and what it trades underneath.
+static void race_draw_class_row(int panel_x, int panel_right, int row_y, int row_h,
+								int cls, int selected, int locked)
+{
+	const race_class_info *ci = race_get_class_info(cls);
+	int icon_box = row_h - FSPACY(10);
+	int icon_cx = panel_x + FSPACX(20) + icon_box/2;
+	int label_x = panel_x + FSPACX(20) + icon_box + FSPACX(10);
+	int name_color, text_color;
+	char buf[8];
+
+	if (!ci)
+		return;
+
+	// The row you are on is lit; once you have locked in, only the class you
+	// took stays lit, so the panel reads as "this is what you are racing"
+	// rather than as a menu still offering choices.
+	if (selected)
+	{
+		name_color = locked ? BM_XRGB(0, 28, 31) : BM_XRGB(31, 31, 0);
+		text_color = BM_XRGB(26, 26, 28);
+	}
+	else
+	{
+		name_color = locked ? BM_XRGB(14, 14, 14) : BM_XRGB(24, 24, 24);
+		text_color = locked ? BM_XRGB(12, 12, 12) : BM_XRGB(18, 18, 18);
+	}
+
+	if (selected)
+	{
+		// Translucent, so the menu texture underneath still reads -- a solid
+		// bar would punch a flat hole in nm_draw_background()'s panel.
+		gr_settransblend(14, GR_BLEND_NORMAL);
+		gr_setcolor(locked ? BM_XRGB(0, 16, 18) : BM_XRGB(0, 20, 24));
+		gr_rect(panel_x - FSPACX(2), row_y, panel_right + FSPACX(2), row_y + row_h);
+		gr_settransblend(GR_FADE_OFF, GR_BLEND_NORMAL);
+	}
+
+	sprintf(buf, "[%d]", cls + 1);
+	race_panel_string(panel_x, row_y + row_h/2 - LINE_SPACING/2, buf, name_color);
+
+	race_draw_powerup_icon(icon_cx, row_y + row_h/2, icon_box, ci->powerup);
+
+	race_panel_string(label_x, row_y + FSPACY(5), ci->name, name_color);
+	race_panel_string_right(panel_right, row_y + FSPACY(5), ci->weapon, text_color);
+	race_panel_string(label_x, row_y + FSPACY(5) + LINE_SPACING, ci->perks, text_color);
+}
+
+// Clamps the panel inside the part of the canvas the race HUD owns, so it
+// clears the cockpit and the status bar the same way every other race
+// readout does.
+static int race_panel_y(int panel_h)
+{
+	race_hud_box box;
+	int y;
+
+	race_hud_get_box(&box);
+
+	y = box.top + (box.bottom - box.top - panel_h)/2;
+
+	if (y + panel_h > box.bottom)
+		y = box.bottom - panel_h;
+	if (y < box.top)
+		y = box.top;
+
+	return y;
+}
+
+// The panel's height, summed from exactly the pieces race_draw_lobby() lays
+// out, in the same order, so the frame and its content can never drift apart.
+// The closing pad is generous on purpose: nm_draw_background() draws a
+// bevelled shadow along its bottom edge, and anything flush to the bottom
+// renders underneath it.
+static int race_lobby_panel_h(int row_h, int row_gap)
+{
+	return FSPACY(12)									// top pad
+	     + LINE_SPACING + FSPACY(8)						// title
+	     + FSPACY(8)									// divider under it
+	     + (row_h + row_gap) * RACE_NUM_CLASSES			// the classes
+	     + FSPACY(8)									// divider above the footer
+	     + LINE_SPACING * 2 + FSPACY(4)					// ready count + hint
+	     + FSPACY(16);									// bottom pad, clears the bevel
+}
+
+// The pre-race lobby: pick a class, lock in, then watch the grid fill up.
+// Drawn on the engine's own menu frame -- nm_draw_background() is just a draw
+// call, so this gets the authentic menu chrome without newmenu's blocking
+// event loop, which would stall this machine's packet processing. Same trick,
+// and the same look, as Survival's shop panel.
+static void race_draw_lobby(void)
+{
+	char buf[96];
+	int cursor = race_lobby_cursor_class();
+	int locked = race_player_is_ready(Player_num);
+	int ready = 0, total = 0, secs;
+	int panel_w, panel_h, x, y, inner_x, inner_right, row_y, row_h, row_gap, i;
+
+	gr_set_curfont(GAME_FONT);
+
+	race_lobby_ready_counts(&ready, &total);
+
+	row_h = LINE_SPACING*2 + FSPACY(14);
+	row_gap = FSPACY(7);
+
+	panel_w = FSPACX(360);
+	if (panel_w > GWIDTH - FSPACX(20))
+		panel_w = GWIDTH - FSPACX(20);
+
+	panel_h = race_lobby_panel_h(row_h, row_gap);
+
+	// A cockpit canvas is two thirds of the screen, and the class list only
+	// gets longer -- if the panel no longer fits, the rows give up their
+	// padding first rather than the frame hanging off the bottom.
+	{
+		race_hud_box box;
+		int avail;
+
+		race_hud_get_box(&box);
+		avail = box.bottom - box.top;
+
+		if (panel_h > avail)
+		{
+			int min_row = LINE_SPACING*2 + FSPACY(2);
+			int over = (panel_h - avail + RACE_NUM_CLASSES - 1) / RACE_NUM_CLASSES;
+
+			row_h -= over;
+			if (row_h < min_row)
+				row_h = min_row;
+
+			row_gap = FSPACY(2);
+			panel_h = race_lobby_panel_h(row_h, row_gap);
+		}
+	}
+
+	x = (GWIDTH - panel_w)/2;
+	y = race_panel_y(panel_h);
+
+	nm_draw_background(x, y, x + panel_w, y + panel_h);
+
+	inner_x = x + FSPACX(16);
+	inner_right = x + panel_w - FSPACX(16);
+	row_y = y + FSPACY(12);
+
+	// One voice across the panel: SCREAMING CAPS like the rest of the race
+	// HUD, "GRID" for the field of racers, "LOCK IN" for committing to a
+	// class, and the same M:SS clock the timers use.
+	secs = (int)((race_lobby_time_left() + F1_0 - 1) >> 16);
+	if (locked)
+		snprintf(buf, sizeof(buf), "ON THE GRID -- %d:%02d", secs/60, secs%60);
+	else
+		snprintf(buf, sizeof(buf), "CHOOSE YOUR CLASS -- %d:%02d", secs/60, secs%60);
+
+	race_panel_string_centered(x, panel_w, row_y, buf, BM_XRGB(31, 31, 0));
+	row_y += LINE_SPACING + FSPACY(8);
+
+	race_panel_divider(inner_x, inner_right, row_y - FSPACY(5));
+	row_y += FSPACY(8);
+
+	for (i = 0; i < RACE_NUM_CLASSES; i++)
+	{
+		race_draw_class_row(inner_x, inner_right, row_y, row_h, i, i == cursor, locked);
+		row_y += row_h + row_gap;
+	}
+
+	row_y += FSPACY(8) - row_gap;
+	race_panel_divider(inner_x, inner_right, row_y - FSPACY(5));
+	row_y += FSPACY(8);
+
+	snprintf(buf, sizeof(buf), "%d/%d LOCKED IN", ready, total);
+	race_panel_string(inner_x, row_y, buf, BM_XRGB(31, 31, 31));
+
+	race_panel_string_right(inner_right, row_y,
+							locked ? "WAITING ON THE GRID" : "NOT LOCKED IN",
+							locked ? BM_XRGB(0, 28, 31) : BM_XRGB(27, 24, 0));
+	row_y += LINE_SPACING + FSPACY(4);
+
+	if (locked)
+		strcpy(buf, "THE RACE STARTS WHEN THE GRID IS LOCKED IN");
+	else
+		snprintf(buf, sizeof(buf), "[1]-[%d] OR ARROWS TO PICK   -   [ENTER] TO LOCK IN",
+				 RACE_NUM_CLASSES);
+
+	race_panel_string_centered(x, panel_w, row_y, buf, BM_XRGB(20, 20, 20));
+}
+
+// Bottom-centre readout for trichording: a plain filled bar, nothing but
+// gr_rect() -- no game-data texture lookup, no vclip frame paging. (An
+// earlier version drew this with the blob02/Omega-blob bitmaps; whatever it
+// was doing to fetch or page those in crashed the race HUD as soon as any
+// charge showed on screen, so this drops the texture path entirely rather
+// than chase that down inside piggy's bitmap cache.)
+//
+// Fills left to right as race_trichord_charge() builds from holding a
+// genuine diagonal (see RACE_TRICHORD_CHARGE_* in race.h -- this is the
+// charge meter, not the instant race_trichord_strength() the FOV widening
+// rides, so the readout tracks exactly what race_trichord_charge_scale() is
+// paying out). Nothing draws at zero charge, and once it is full the fill
+// pulses in brightness instead of sitting flat, so a fully charged, held
+// diagonal reads as an event rather than a bar that happened to fill.
+static void race_draw_trichord(const race_hud_box *box)
+{
+	fix charge = race_trichord_charge();
+	fix pulse = F1_0;
+	int cx, y, w, h, fill_w, level;
+
+	if (charge <= 0)
+		return;
+
+	w = FSPACX(70);
+	h = FSPACY(6);
+	cx = (box->left + box->right) / 2;
+	y = box->bottom - FSPACY(4) - h;
+
+	if (race_emp_gauge_hidden())
+	{
+		race_draw_static(cx - w/2, y, cx + w/2, y + h);
+		return;
+	}
+
+	if (charge >= F1_0 - F1_0/32)
+	{
+		fix s, c;
+
+		fix_sincos((fix)((GameTime64 / 6) & 0xFFFF), &s, &c);
+		pulse = F1_0 - F1_0/5 + fixmul(F1_0/5, (s < 0) ? -s : s);
+	}
+
+	level = f2i(fixmul(fixmul(charge, pulse), i2f(31)));
+	if (level > 31)
+		level = 31;
+	if (level < 0)
+		level = 0;
+
+	// Dim outline the full width, gold fill growing across it as charge
+	// builds.
+	gr_setcolor(BM_XRGB(8, 8, 10));
+	gr_rect(cx - w/2, y, cx + w/2, y + h);
+
+	fill_w = f2i(fixmul(charge, i2f(w)));
+	if (fill_w > w)
+		fill_w = w;
+
+	if (fill_w > 0)
+	{
+		gr_setcolor(BM_XRGB(6 + level*25/31, 6 + level*21/31, 8 - level*4/31));
+		gr_rect(cx - w/2, y, cx - w/2 + fill_w, y + h);
+	}
+}
+
 void race_draw_hud()
 {
 	char buf[64];
-	int right, top;
+	race_hud_box box;
+	int right, top, banner_y;
 	race_player_info *rp = &Race_player[Player_num];
+	int emp_hidden = race_emp_gauge_hidden();
 
 	if (HUD_toolong)
 		return;
@@ -1261,12 +1912,39 @@ void race_draw_hud()
 		race_draw_track_labels();
 
 	if (PlayerCfg.RaceMinimap)
-		race_draw_minimap();
+	{
+		if (emp_hidden)
+		{
+			int left, top, size = race_minimap_size();
 
-	// LINE_SPACING is relative to the current font scale, so pin that down
-	// before measuring anything.
-	right = GWIDTH - FSPACX(3);
-	top = LINE_SPACING*2 + FSPACY(2);
+			if (size >= 40)
+			{
+				race_minimap_origin(&left, &top);
+				race_draw_static(left, top, left + size, top + size);
+			}
+		}
+		else
+			race_draw_minimap();
+	}
+
+	// Class picker: the race has not started, so none of the readouts below
+	// (lap, clock, placing, box loot) mean anything yet.
+	if (race_lobby_is_open())
+	{
+		race_draw_lobby();
+		return;
+	}
+
+	// LINE_SPACING is relative to the current font scale, so pin the box down
+	// before measuring anything against it.
+	race_hud_get_box(&box);
+	right = box.right;
+	top = box.top;
+
+	// A third of the way down whatever the race HUD owns, rather than a third
+	// of the canvas: in cockpit mode that put the countdown and the banners
+	// up among the lap counter.
+	banner_y = box.top + (box.bottom - box.top)/3;
 
 	//	--- centre of screen: countdown, then event banners ---
 
@@ -1289,7 +1967,7 @@ void race_draw_hud()
 			strcpy(buf, "GO!");
 
 		race_font_push(4.0f);
-		race_string_centered(GHEIGHT/3, buf, color);
+		race_string_centered(banner_y, buf, color);
 		race_font_pop();
 		return;
 	}
@@ -1310,7 +1988,25 @@ void race_draw_hud()
 			}
 
 			race_font_push(2.0f);
-			race_string_centered(GHEIGHT/3, banner, color);
+			race_string_centered(banner_y, banner, color);
+			race_font_pop();
+		}
+	}
+
+	// The tractor beam has no edge to notice the way a checkpoint or a wall
+	// does -- the only tell is the throttle going soft -- so unlike the
+	// banner above, this reads for the whole hold rather than flashing once.
+	{
+		const char *puller = race_tractor_puller();
+
+		if (puller)
+		{
+			char pulled[32];
+
+			snprintf(pulled, sizeof(pulled), "PULLED BY %s", puller);
+
+			race_font_push(1.5f);
+			race_string_centered(banner_y + LINE_SPACING*3, pulled, BM_XRGB(6, 14, 31));
 			race_font_pop();
 		}
 	}
@@ -1325,7 +2021,7 @@ void race_draw_hud()
 
 		race_font_push(1.75f);
 		{
-			int scaled_right = GWIDTH - FSPACX(2);
+			int scaled_right = box.right;
 
 			if (rp->finished)
 				strcpy(buf, "FINISHED");
@@ -1334,7 +2030,21 @@ void race_draw_hud()
 
 			race_string_right(scaled_right, top, buf, rp->finished ? BM_XRGB(31, 28, 8) : BM_XRGB(6, 31, 6));
 
-			y = race_draw_timer(scaled_right, top + LINE_SPACING + FSPACY(1));
+			y = top + LINE_SPACING + FSPACY(1);
+
+			// The class you locked in at the line, so its numbers are never a
+			// mystery mid-race.
+			{
+				const race_class_info *ci = race_get_class_info(race_get_class(Player_num));
+
+				if (ci)
+				{
+					race_string_right(scaled_right, y, ci->name, BM_XRGB(20, 20, 24));
+					y += LINE_SPACING + FSPACY(2);
+				}
+			}
+
+			y = race_draw_timer(scaled_right, y + FSPACY(1));
 		}
 		race_font_pop();
 
@@ -1358,12 +2068,27 @@ void race_draw_hud()
 
 				race_font_push(4.5f);
 				gr_get_string_size(place, &w, &h, &aw);
-				race_string(right - w, y + FSPACY(2), place, color);
+
+				{
+					int place_y = y + FSPACY(2);
+
+					// The placing is the biggest thing on the HUD, so it is
+					// the first to run out of canvas: pin it inside the box
+					// rather than letting it sit over the weapon readouts.
+					if (place_y + h > box.bottom)
+						place_y = box.bottom - h;
+
+					if (emp_hidden)
+						race_draw_static(right - w, place_y, right, place_y + h);
+					else
+						race_string(right - w, place_y, place, color);
+				}
 				race_font_pop();
 			}
 		}
 	}
 
+	race_draw_trichord(&box);
 	race_draw_items();
 }
 #endif
@@ -1565,6 +2290,9 @@ void hud_show_keys(void)
 
 	grs_bitmap *blue,*yellow,*red;
 	int y=HUD_SCALE_Y_AR(GameBitmaps[ GET_GAUGE_INDEX(GAUGE_LIVES) ].bm_h+2)+FSPACY(1);
+	// Race mode parks its minimap in this corner, so the keys start to the
+	// right of it rather than on top of it. 0 when there is no map up.
+	int x=FSPACX(2)+race_minimap_reserved_width();
 
 	PAGE_IN_GAUGE( KEY_ICON_BLUE );
 	PAGE_IN_GAUGE( KEY_ICON_YELLOW );
@@ -1575,13 +2303,13 @@ void hud_show_keys(void)
 	red=&GameBitmaps[ GET_GAUGE_INDEX(KEY_ICON_RED) ];
 
 	if (Players[pnum].flags & PLAYER_FLAGS_BLUE_KEY)
-		hud_bitblt_free(FSPACX(2),y,HUD_SCALE_X_AR(blue->bm_w),HUD_SCALE_Y_AR(blue->bm_h),blue);
+		hud_bitblt_free(x,y,HUD_SCALE_X_AR(blue->bm_w),HUD_SCALE_Y_AR(blue->bm_h),blue);
 
 	if (Players[pnum].flags & PLAYER_FLAGS_GOLD_KEY)
-		hud_bitblt_free(FSPACX(2)+HUD_SCALE_X_AR(blue->bm_w+3),y,HUD_SCALE_X_AR(yellow->bm_w),HUD_SCALE_Y_AR(yellow->bm_h),yellow);
+		hud_bitblt_free(x+HUD_SCALE_X_AR(blue->bm_w+3),y,HUD_SCALE_X_AR(yellow->bm_w),HUD_SCALE_Y_AR(yellow->bm_h),yellow);
 
 	if (Players[pnum].flags & PLAYER_FLAGS_RED_KEY)
-		hud_bitblt_free(FSPACX(2)+HUD_SCALE_X_AR(blue->bm_w+yellow->bm_w+6),y,HUD_SCALE_X_AR(red->bm_w),HUD_SCALE_Y_AR(red->bm_h),red);
+		hud_bitblt_free(x+HUD_SCALE_X_AR(blue->bm_w+yellow->bm_w+6),y,HUD_SCALE_X_AR(red->bm_w),HUD_SCALE_Y_AR(red->bm_h),red);
 
 }
 
@@ -2079,6 +2807,10 @@ void hud_show_lives()
 		x = HUD_SCALE_X(7);
 	else
 		x = FSPACX(2);
+
+	// Race mode parks its minimap in this corner; start the line to the right
+	// of it rather than printing straight over it. 0 when there is no map up.
+	x += race_minimap_reserved_width();
 
 	if (Game_mode & GM_MULTI) {
 		gr_set_curfont( GAME_FONT );
@@ -3192,6 +3924,18 @@ void hud_show_kill_list()
 		x1 = FSPACX(31);
 
 	save_y = y = grd_curcanv->cv_bitmap.bm_h - n_left*(LINE_SPACING);
+
+	// In a race this list is the standings, and it is on screen for the whole
+	// race rather than glanced at -- so in the full cockpit it clears the
+	// canopy that curves through the bottom corners instead of being printed
+	// over it.
+	if ((Game_mode & GM_RACE) && PlayerCfg.CurrentCockpitMode == CM_FULL_COCKPIT)
+	{
+		int inset_l, inset_t, inset_r, inset_b;
+
+		race_cockpit_inset(&inset_l, &inset_t, &inset_r, &inset_b);
+		save_y = y -= inset_b;
+	}
 
 	if (PlayerCfg.CurrentCockpitMode == CM_FULL_COCKPIT) {
 		save_y = y -= FSPACX(6);
@@ -4889,7 +5633,14 @@ void show_HUD_names()
 		is_friend = (Game_mode & GM_MULTI_COOP || (Game_mode & GM_TEAM && get_team(pnum) == get_team(my_pnum)));
 		show_friend_name = Show_reticle_name;
 		show_enemy_name = Show_reticle_name && Netgame.ShowEnemyNames && !(Players[pnum].flags & PLAYER_FLAGS_CLOAKED);
-		show_name = ((is_friend && show_friend_name) || (!is_friend && show_enemy_name)) || (is_observer() && PlayerCfg.ObsShowNames[get_observer_game_mode()]);
+		// A race isn't a deathmatch: knowing which ship is which is part of
+		// following the field, not an edge you earn by holding the look-at
+		// key or that a host has to opt everyone into. So every other racer's
+		// name is just on, bots included -- the gates below exist for modes
+		// where a name is information you fight for.
+		show_name = (Game_mode & GM_RACE)
+			? !(Players[pnum].flags & PLAYER_FLAGS_CLOAKED)
+			: (((is_friend && show_friend_name) || (!is_friend && show_enemy_name)) || (is_observer() && PlayerCfg.ObsShowNames[get_observer_game_mode()]));
 		show_name_through_walls = (is_observer() || (is_friend && show_friend_name));
 		show_shields = (is_observer() && PlayerCfg.ObsShowShieldText[get_observer_game_mode()]);
 		show_typing = is_friend || !(Players[pnum].flags & PLAYER_FLAGS_CLOAKED);
@@ -4952,10 +5703,16 @@ void show_HUD_names()
 					if (s[0])
 					{
 						gr_get_string_size(s, &w, &h, &aw);
-						gr_set_fontcolor(BM_XRGB(selected_player_rgb[color_num].r,selected_player_rgb[color_num].g,selected_player_rgb[color_num].b),-1 );
 						x1 = f2i(x)-w/2;
 						y1 = f2i(y-dy)+FSPACY(1);
-						gr_string (x1, y1, s);
+
+						if (race_emp_gauge_hidden())
+							race_draw_static(x1, y1, x1 + w, y1 + h);
+						else
+						{
+							gr_set_fontcolor(BM_XRGB(selected_player_rgb[color_num].r,selected_player_rgb[color_num].g,selected_player_rgb[color_num].b),-1 );
+							gr_string (x1, y1, s);
+						}
 					}
 					if (is_observer() && PlayerCfg.ObsShowShieldBar[get_observer_game_mode()] &&
 						(!is_observing_player() || Obs_at_distance || Current_obs_player != pnum)) {
@@ -5208,7 +5965,12 @@ void draw_hud()
 			}
 
 			if (PlayerCfg.CurrentCockpitMode != CM_LETTERBOX)
-				show_reticle(PlayerCfg.ReticleType, 1);
+			{
+				if (race_emp_gauge_hidden())
+					race_draw_static(GWIDTH/2 - FSPACX(10), GHEIGHT/2 - FSPACX(10), GWIDTH/2 + FSPACX(10), GHEIGHT/2 + FSPACX(10));
+				else
+					show_reticle(PlayerCfg.ReticleType, 1);
+			}
 			if (PlayerCfg.CurrentCockpitMode != CM_LETTERBOX && Newdemo_state != ND_STATE_PLAYBACK && (PlayerCfg.MouseControlStyle == MOUSE_CONTROL_FLIGHT_SIM) && PlayerCfg.MouseFSIndicator)
 				show_mousefs_indicator(Controls.raw_mouse_axis[0], Controls.raw_mouse_axis[1], Controls.raw_mouse_axis[2], GWIDTH / 2, GHEIGHT / 2, GHEIGHT / 4);
 		}
@@ -5249,7 +6011,8 @@ void draw_hud()
 	}
 
 	//	Show score so long as not in rearview
-	if ( !Rear_view && PlayerCfg.CurrentCockpitMode!=CM_REAR_VIEW && PlayerCfg.CurrentCockpitMode!=CM_STATUS_BAR) {
+	if ( !Rear_view && PlayerCfg.CurrentCockpitMode!=CM_REAR_VIEW && PlayerCfg.CurrentCockpitMode!=CM_STATUS_BAR
+		 && !race_hides_stock_hud()) {
 		hud_show_score();
 		if (score_time)
 			hud_show_score_added();
@@ -5276,7 +6039,8 @@ void draw_hud()
 			hud_show_shield();
 			hud_show_afterburner();
 			hud_show_weapons();
-			hud_show_keys();
+			if (!race_hides_stock_hud())
+				hud_show_keys();
 			hud_show_cloak_invuln();
 
 			if (Newdemo_state==ND_STATE_RECORDING)
@@ -5286,7 +6050,7 @@ void draw_hud()
 		}
 
 #ifndef RELEASE
-		if (!(Game_mode&GM_MULTI && Show_kill_list))
+		if (!(((Game_mode & GM_MULTI) || race_bots_enabled()) && Show_kill_list))
 			show_time();
 #endif
 
@@ -5298,12 +6062,20 @@ void draw_hud()
 		
 		HUD_render_message_frame();
 
-		if (PlayerCfg.CurrentCockpitMode!=CM_STATUS_BAR)
+		if (PlayerCfg.CurrentCockpitMode!=CM_STATUS_BAR && !race_hides_stock_hud())
 			hud_show_lives();
-		if (Game_mode&GM_MULTI && Show_kill_list)
+		if (((Game_mode & GM_MULTI) || race_bots_enabled()) && Show_kill_list)
 			hud_show_kill_list();
-		if (PlayerCfg.CurrentCockpitMode != CM_LETTERBOX)
-			show_reticle(PlayerCfg.ReticleType, 1);
+		// The class picker owns the screen while it is up, and a reticle over
+		// a menu reads as a bug -- it comes back the moment the grid is
+		// released.
+		if (PlayerCfg.CurrentCockpitMode != CM_LETTERBOX && !race_lobby_is_open())
+		{
+			if (race_emp_gauge_hidden())
+				race_draw_static(GWIDTH/2 - FSPACX(10), GHEIGHT/2 - FSPACX(10), GWIDTH/2 + FSPACX(10), GHEIGHT/2 + FSPACX(10));
+			else
+				show_reticle(PlayerCfg.ReticleType, 1);
+		}
 		if (PlayerCfg.CurrentCockpitMode != CM_LETTERBOX && Newdemo_state != ND_STATE_PLAYBACK && (PlayerCfg.MouseControlStyle == MOUSE_CONTROL_FLIGHT_SIM) && PlayerCfg.MouseFSIndicator)
 			show_mousefs_indicator(Controls.raw_mouse_axis[0], Controls.raw_mouse_axis[1], Controls.raw_mouse_axis[2], GWIDTH/2, GHEIGHT/2, GHEIGHT/4);
 		if (Game_mode & GM_MULTI && PlayerCfg.ObsShowObs[get_observer_game_mode()])

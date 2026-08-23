@@ -38,6 +38,7 @@
 #include "dxma.h"
 #include "game.h"
 #include "multi.h"
+#include "race.h"
 #include "endlevel.h"
 #include "palette.h"
 #include "cntrlcen.h"
@@ -3761,6 +3762,7 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.StaticHelix; len++;
 		buf[len] = Netgame.StaticPhoenix; len++;
 		buf[len] = Netgame.StaticOmega; len++;
+		buf[len] = Netgame.LapsToWin;							len++;
 		buf[len] = Netgame.team_color[0];						len++;
 		buf[len] = Netgame.team_color[1];						len++;
 
@@ -4048,6 +4050,7 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		Netgame.StaticHelix = data[len]; len++;
 		Netgame.StaticPhoenix = data[len]; len++;
 		Netgame.StaticOmega = data[len]; len++;
+		Netgame.LapsToWin = data[len];							len++;
 		Netgame.team_color[0] = data[len];						len++;
 		Netgame.team_color[1] = data[len];						len++;
 
@@ -4585,6 +4588,7 @@ static int opt_spawn_no_invul, opt_spawn_short_invul, opt_spawn_long_invul, opt_
 static int opt_burner_spawn; 
 static int opt_allowprefcolor, opt_ow;
 static int opt_sngtoggles;
+static int opt_race_laps;
 static int opt_spawnwithmenu;
 static int opt_staticpowerupsmenu;
 static int opt_low_vulcan;
@@ -4766,11 +4770,12 @@ void net_udp_more_game_options ()
 	char PlayText[80],KillText[80],srinvul[50],packstring[5];
 	char PrimDupText[80],SecDupText[80],SecCapText[80]; 
 	char HomingUpdateRateText[80];
+	char RaceLapsText[40];
 	
 #ifdef USE_TRACKER
-	newmenu_item m[55];
+	newmenu_item m[57];
 #else
-	newmenu_item m[54];
+	newmenu_item m[56];
 #endif
 
 	snprintf(packstring,sizeof(char)*4,"%d",Netgame.PacketsPerSec);
@@ -4855,6 +4860,10 @@ void net_udp_more_game_options ()
 
 	opt_respawnconcs = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Respawn Concussions"; m[opt].value = Netgame.RespawnConcs; opt++;	
+
+	opt_race_laps = opt;
+	snprintf(RaceLapsText, sizeof(RaceLapsText), "Race Laps: %d", Netgame.LapsToWin ? Netgame.LapsToWin : RACE_DEFAULT_LAPS);
+	m[opt].type = NM_TYPE_SLIDER; m[opt].text = RaceLapsText; m[opt].value = (Netgame.LapsToWin ? Netgame.LapsToWin : RACE_DEFAULT_LAPS) - 1; m[opt].min_value = 0; m[opt].max_value = 9; opt++;
 
 	opt_faircolors = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "All Players Blue"; m[opt].value = Netgame.FairColors; opt++;		
@@ -5007,6 +5016,7 @@ menu:
 
 	Netgame.RetroProtocol = m[opt_retroproto].value;
 	Netgame.RespawnConcs  = m[opt_respawnconcs].value;
+	Netgame.LapsToWin     = m[opt_race_laps].value + 1;
 	Netgame.AllowColoredLighting  = m[opt_allowcolor].value;
 	Netgame.FairColors  = m[opt_faircolors].value;
 	Netgame.BlackAndWhitePyros  = m[opt_blackwhite].value;
@@ -5084,6 +5094,10 @@ int net_udp_more_options_handler( newmenu *menu, d_event *event, void *userdata 
 			{
 				Netgame.HomingUpdateRate=menus[opt_homing_update_rate].value + 20;
 				sprintf( menus[opt_homing_update_rate].text, "Homing Update Rate: %d", Netgame.HomingUpdateRate);
+			} else if (citem == opt_race_laps)
+			{
+				Netgame.LapsToWin = menus[opt_race_laps].value + 1;
+				sprintf( menus[opt_race_laps].text, "Race Laps: %d", Netgame.LapsToWin);
 			} else if (citem == opt_spawn_no_invul) {
 				Netgame.SpawnStyle = SPAWN_STYLE_NO_INVUL;
 			} else if (citem == opt_spawn_short_invul) {
@@ -5376,6 +5390,7 @@ void netgame_set_defaults()
 	Netgame.StaticHelix = 0;
 	Netgame.StaticPhoenix = 0;
 	Netgame.StaticOmega = 0;
+	Netgame.LapsToWin = RACE_DEFAULT_LAPS;
 
 #ifdef USE_TRACKER
 	Netgame.Tracker = 1;

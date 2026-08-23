@@ -43,6 +43,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "text.h"
 #include "multi.h"
 #include "endlevel.h"
+#include "race.h"
 #include "cntrlcen.h"
 #include "powerup.h"
 #include "laser.h"
@@ -896,7 +897,11 @@ void game_render_frame_mono(int flip)
 	if (is_observer() && !can_draw_observer_cockpit()) {
 		// Do not render gauges.
 	} else {
-		if (PlayerCfg.CurrentCockpitMode == CM_FULL_COCKPIT || PlayerCfg.CurrentCockpitMode == CM_STATUS_BAR)
+		// A strong-enough EMP blanks the gauges: one clean drop-out as
+		// strength crosses the threshold, one clean return as it fades back
+		// below it -- see race_emp_gauge_hidden().
+		if ((PlayerCfg.CurrentCockpitMode == CM_FULL_COCKPIT || PlayerCfg.CurrentCockpitMode == CM_STATUS_BAR) &&
+			!race_emp_gauge_hidden())
 			render_gauges();
 	}
 

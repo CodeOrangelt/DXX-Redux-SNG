@@ -2030,6 +2030,13 @@ int ReadControls(d_event *event)
 		{
 			return multi_message_input_sub(key);
 		}
+
+		// The class picker gets first refusal on a key, but only claims the
+		// ones it owns -- ESC, chat and the rest still work behind it, and
+		// flight/firing are held by their own gates rather than by taking
+		// the whole keyboard.
+		if (race_lobby_handle_key(key))
+			return 1;
 #endif
 
 #ifndef RELEASE
@@ -2080,6 +2087,11 @@ int ReadControls(d_event *event)
 			should_read_controls = 1; 
 		}
 	}
+
+	// The class picker takes priority over that spawn-preview override too:
+	// nothing on the grid flies, turns or fires until the lobby closes.
+	if (race_lobby_blocks_input())
+		should_read_controls = 0;
 	#endif
 
 	if (should_read_controls)

@@ -72,6 +72,75 @@
 #define RACE_BOX_RESPAWN_TIME   F1_0		// mystery box is back 1 second after being taken
 #define RACE_BOOST_TIME         (F1_0*3)	// boost pad lasts 3 seconds
 
+// The start of a race: everyone, human and bot, gets a few seconds where
+// nothing can wreck them and a boost-pad-strength push off the line, so the
+// scrum through the first corner off a stacked grid isn't an insurance
+// write-off for whoever got bumped.
+#define RACE_START_INVULN_TIME  (F1_0*3)
+#define RACE_START_BOOST_TIME   (F1_0*3)
+
+// Trichording: pushing forward, sideways and vertical thrust all at once is
+// what let Descent's original physics fly faster than a forward-only stick
+// ever could -- the axes are added as vectors, not capped as one. This pays
+// out an extra speed bonus on top of that for holding a genuinely balanced,
+// near-full-deflection push across all three axes at once, the same idea as
+// "splitstream" tech in other mods. `ratio` is 0..F1_0: how far the smallest
+// of the three axes is from the largest, so 0 is a single-axis push and F1_0
+// is a perfectly even three-way split. Below RACE_TRICHORD_FLOOR nothing is
+// paid out -- a graze past a diagonal shouldn't quietly become the new
+// normal speed -- and it ramps to the full bonus at a true, sustained
+// diagonal.
+#define RACE_TRICHORD_FLOOR     ((F1_0*6)/10)
+#define RACE_TRICHORD_FOV       0x2c00			// FOV widening at full strength -- wider than the boost pad's
+												// own 0x2000, since holding a perfect trichord is the harder
+												// trick and should read as the bigger event of the two
+// How fast the FOV widening chases the trichord strength, in full swings per
+// second. A perfect diagonal is easy to clip in and out of for a frame at a
+// time; easing this fast keeps every little wobble reading as a flicker
+// rather than the screen visibly snapping in and out.
+#define RACE_TRICHORD_FOV_EASE  (F1_0*5)
+
+// Holding the floor charges a bar (0..F1_0). No boost applies while it
+// charges -- when it hits full it fires a RACE_TRICHORD_BOOST_TIME burst,
+// resets to zero, and charges again. Losing the angle wipes the charge
+// instantly. One mechanic for the whole field: the local player and every
+// bot each keep their own charge meter and boost timer.
+#define RACE_TRICHORD_CHARGE_TIME       ((F1_0*5)/2)	// ~2.5s to fill at a perfect diagonal
+#define RACE_TRICHORD_CHARGE_BONUS      (F1_0/2)	// +50% forward burst
+#define RACE_TRICHORD_BOOST_TIME        (F1_0*3)	// how long the burst lasts
+#define RACE_TRICHORD_BLOBS             6			// HUD resolution: dings race_note_trichord() fires as charge builds
+
+// Advances a charge meter (0..F1_0) by one frame off this frame's trichord
+// ratio. When the charge reaches F1_0 it fires: `boost_until` is set to
+// GameTime64 + RACE_TRICHORD_BOOST_TIME and the charge resets to 0.
+// `charge` and `boost_until` belong to the caller (Race_trichord_charge /
+// Race_trichord_boost_until for the local player, race_bot fields per bot).
+fix race_trichord_advance_charge(fix charge, fix ratio, fix64 *boost_until);
+
+// Thrust multiplier from the boost timer: F1_0+RACE_TRICHORD_CHARGE_BONUS
+// while boost_until is in the future, F1_0 otherwise.
+fix race_trichord_scale_from_boost(fix64 boost_until);
+
+// Local player only: notes this frame's trichord ratio (see
+// race_trichord_advance_charge() above) so race_get_fov_bonus() can widen
+// the view to match, and so Race_trichord_charge (behind
+// race_trichord_charge_scale() below) can build or drain. Call once a frame
+// from read_flying_controls(); anything that isn't a decision to trichord
+// (dying, the class lobby, the countdown) should note a ratio of 0.
+void race_note_trichord(fix ratio);
+
+// The same eased 0..F1_0 strength the FOV widening rides, for the HUD to
+// draw a readout off of (see race_draw_trichord() in gauges.c).
+fix race_trichord_strength(void);
+
+// Local player only: 0..F1_0, the current charge fill. Returns F1_0 while a
+// boost burst is active so the HUD bar stays full during the burst.
+fix race_trichord_charge(void);
+
+// Local player only: thrust multiplier from the active boost timer.
+// What controls.c actually scales thrust by.
+fix race_trichord_charge_scale(void);
+
 #define RACE_MAX_CHECKPOINTS    32	// limited by the per-lap capture bitmask
 #define RACE_MAX_LABELS         64	// floating in-world track labels
 #define RACE_MAX_SPLITS         16	// per-lap times we keep for the local player
@@ -163,6 +232,15 @@ int race_checkpoint_is_target(int cp);
 // Which checkpoint (if any) owns `segnum`; -1 for a segment that isn't one.
 int race_checkpoint_of_segment(int segnum);
 
+// A segment belonging to checkpoint `cp`, or -1. One checkpoint can be several
+// connected segments; this is the one that stands for it, which is what
+// anything routing through the track wants rather than all of them.
+int race_checkpoint_segment(int cp);
+
+// How many checkpoints the level has, including the one standing in as the
+// start/finish line if it marks none -- so a route can walk the whole set.
+int race_checkpoint_count(void);
+
 // How many checkpoints make up one lap. Every matcen, unless the level marks
 // no line and one of them is standing in as it.
 int race_checkpoint_total(void);
@@ -187,6 +265,66 @@ void race_box_taken(int box, int pnum, int broadcast);
 // with 1 by far the most likely.
 void race_box_roll(void);
 
+// One draw off that same loot table for `pnum`, weighted by their class and
+// their place in the field, for a racer with no weapon rack to put it in.
+// Returns 0 if the table has nothing to offer them.
+int race_roll_box_item(int pnum, int *wclass, int *index);
+
+//	--- box powers ---
+
+// A box can also hand out a power: an effect that fires the instant it is
+// rolled and hits the rest of the field, rather than a weapon that goes into
+// the rack. They ride the same loot table as the weapons, in a third "rack"
+// of their own, so the rubber band that hands the back-marker megas hands
+// them these too.
+#define CLASS_POWER             2	// alongside CLASS_PRIMARY / CLASS_SECONDARY
+
+#define RACE_POWER_EMP          0	// EMP: scrambles everyone else's display
+#define RACE_POWER_TRACTOR      1	// tractor beam: halves everyone else's speed
+#define RACE_NUM_POWERS         2
+
+// A tractor beam lasts five seconds, same as it always has -- it is a straight
+// speed penalty, so a racer knows exactly what it costs the moment it lands.
+// An EMP is worse to be caught in and rarer to draw (see the loot weights in
+// race.c) -- it is the box's real punishment, not the tractor's smaller
+// cousin, so it runs longer: enough to bloom, disorient, and clear.
+#define RACE_POWER_TIME          (F1_0*5)
+#define RACE_POWER_EMP_TIME    (F1_0*9)
+
+// How long an early clear eases out over, instead of snapping to nothing.
+// Well under a third of either RACE_POWER_TIME or RACE_POWER_EMP_TIME.
+#define RACE_POWER_RELEASE_TIME  (F1_0/2)
+#define RACE_TRACTOR_SCALE      (F1_0/2)	// -50% thrust while held
+
+// Fires power `power`, rolled by `pnum`. Everyone but the roller (and
+// observers, who are only watching) takes it. `broadcast` sends it on to the
+// other machines; a received packet applies with 0.
+void race_power_trigger(int power, int pnum, int broadcast);
+
+// Applies a received MULTI_RACE_POWER packet.
+void multi_do_race_power(const ubyte *buf);
+
+// 0 when not jammed, F1_0 at full strength, fading in and back out over the
+// life of the effect. Drawn as a screen glitch by race_draw_hud() (gauges.c).
+fix race_emp_strength(void);
+
+// True once the EMP is strong enough to blank the gauges, false otherwise.
+// race_emp_strength() ramps smoothly, so this makes exactly one on/off
+// transition per EMP -- not a repeating flicker. Gates the render_gauges()
+// call site in gamerend.c. Deliberately NOT tied to any per-frame toggle:
+// rapid on/off strobing is a real photosensitive-seizure risk, so nothing
+// in this effect flashes more than twice in an EMP's whole run.
+int race_emp_gauge_hidden(void);
+
+// Same shape for the tractor beam's blue wash, and the thrust multiplier that
+// goes with it (F1_0 when not held). The scale is applied in
+// read_flying_controls() (controls.c), next to the class one.
+fix race_tractor_strength(void);
+
+// See race.c: who is pulling the local player right now, or NULL.
+const char *race_tractor_puller(void);
+fix race_power_speed_scale(void);
+
 // Strips a ship down to no weapons at all -- no laser, no concussions. Race
 // starts empty and everything you fire comes out of a box.
 void race_strip_loadout(int pnum);
@@ -197,6 +335,150 @@ fix64 race_get_item_remaining(int wclass, int index);
 int race_item_powerup(int wclass, int index);
 int race_get_item_ammo(int wclass, int index);
 const char *race_item_name(int wclass, int index);
+
+//	--- classes and the pre-race lobby ---
+
+// A race starts with everyone held on the grid picking a class; the countdown
+// only begins once every connected player has locked one in (or the lobby's
+// hard cap expires, so one AFK player cannot stall the grid). The class then
+// lasts the whole race.
+#define RACE_CLASS_NONE     (-1)
+#define RACE_NUM_CLASSES    7
+#define RACE_LOBBY_TIMEOUT  (F1_0*60)	// hard cap on the wait for stragglers
+// How long past that cap a client will keep waiting for the host to release
+// the grid before releasing itself. Only ever reached if the host has gone.
+#define RACE_LOBBY_HOST_GRACE (F1_0*10)
+
+// The Trapper's mine trickle. The caps are deliberately well under the racks'
+// own maximums: the class is meant to pick its corner and lay one, not bank a
+// minefield over a slow lap. Smart mines come slower and in smaller numbers,
+// being the nastier of the two.
+#define RACE_TRAPPER_PROX_TIME  (F1_0*15)
+#define RACE_TRAPPER_PROX_CAP   4
+#define RACE_TRAPPER_SMART_TIME (F1_0*25)
+#define RACE_TRAPPER_SMART_CAP  2
+
+// How many secondaries a class kit can carry.
+#define RACE_MAX_KIT_SECONDARIES 2
+
+// One secondary a class kit carries: it starts with half a load, tops itself
+// back up on a timer, and never expires the way box loot does.
+typedef struct race_kit_secondary {
+	int		index;			// secondary weapon index, or -1 for an unused slot
+	int		cap;			// most of it the kit ever holds at once
+	fix64	refill;			// how often one more arrives (0 = never)
+} race_kit_secondary;
+
+typedef struct race_class_info {
+	const char	*name;				// "HEAVY HITTER"
+	const char	*weapon;			// the kit it races with
+	const char	*perks;				// one line of what it trades
+	int			primary;			// primary weapon index granted on every spawn
+	int			powerup;			// powerup sprite that stands for the kit, for the lobby panel
+	int			player_flags;		// extra PLAYER_FLAGS_* the kit comes with
+	race_kit_secondary secondary[RACE_MAX_KIT_SECONDARIES];
+	int			shield_pct;			// shields as a % of the netgame's own starting value (0 = stock)
+	int			box_extra_rolls;	// extra mystery box items on every roll
+	fix			box_item_time;		// multiplier on how long box loot lasts
+	fix			boost_time;			// multiplier on how long a boost pad lasts
+	fix			boost_power;		// multiplier on how hard it pushes
+	fix			speed;				// thrust multiplier
+	fix			turn;				// rotation-thrust multiplier (0 counts as no change)
+	fix			damage_taken;		// incoming damage multiplier
+	fix			damage_dealt;		// outgoing damage multiplier
+	fix			afterburner_drain;	// afterburner burn rate multiplier (lower lasts longer)
+} race_class_info;
+
+// The table entry for a class, or NULL for RACE_CLASS_NONE / out of range.
+const race_class_info *race_get_class_info(int cls);
+
+// Which class a player is racing, or RACE_CLASS_NONE. Synced, so this is
+// answerable for every player on every machine.
+int race_get_class(int pnum);
+
+// Multipliers for the local player's class, all F1_0 when they have none.
+// Call sites: read_flying_controls() (controls.c) for both of the first two,
+// apply_damage_to_player() (collide.c) for the damage one, which takes the
+// object that dealt it so the shooter's class counts too.
+fix race_class_speed_scale(void);
+fix race_class_turn_scale(void);
+fix race_class_afterburner_drain_scale(void);
+fix race_scale_damage(const object *killer, fix damage);
+
+// The same, for any racer -- the bot field takes its damage in racebot.c
+// rather than through apply_damage_to_player()'s local-player path, and a
+// class that trades shields for speed has to mean the same thing there.
+fix race_scale_damage_for(int pnum, const object *killer, fix damage);
+
+// Earthshaker targeting. A shaker in a race is the back-marker's answer to
+// whoever is running away with it, so it ignores the nearest ship and flies
+// at the leader instead -- and it flies at them whether or not the HAM gave
+// the missile a homing flag, which is what race_force_homing() is for.
+// race_homing_target() returns the objnum to fly at, or -1 to leave the
+// engine's own tracking alone.
+int race_homing_target(const object *tracker);
+int race_force_homing(const object *obj);
+
+// Where to steer a race-mode shaker that has already picked target_objnum
+// (from race_homing_target() above) as its leader. Routes it through the
+// track's own segment graph instead of straight through whatever's between
+// here and there, falling back to the target's own position -- the old
+// straight-line behaviour -- if no path can be built. Always fills *aim.
+void race_homing_aim_point(object *tracker, int target_objnum, vms_vector *aim);
+
+// How much quicker a homing missile flies in a race than the HAM says. A homer
+// chasing a ship at racing speed needs to be able to catch it.
+#define RACE_HOMING_SPEED       (F1_0 + F1_0/2)		// +50%
+
+// Weapon `weapon_id`'s flight speed: the HAM's own number everywhere, scaled
+// by the above for a homing missile in a race. Call this instead of reading
+// Weapon_info[].speed[] directly anywhere a weapon's speed is set or capped.
+fix race_weapon_speed(int weapon_id);
+
+// Hands `pnum` their class weapon. Call right after race_strip_loadout() on
+// every spawn: box loot is lost on death, the class kit never is.
+void race_grant_class_loadout(int pnum);
+
+// True if a loose powerup is one the local player may pick up: everything
+// except another class's primary weapon. Call before do_powerup() so a racer
+// can never end up carrying a gun their class doesn't race with.
+int race_powerup_allowed(int powerup_id);
+
+// Sets `pnum`'s class. The lobby uses it for the local player and the ready
+// packet for everyone else; the bot field uses it to put each CPU racer in a
+// kit of its own.
+void race_set_player_class(int pnum, int cls);
+
+// Closes out `pnum`'s race: marks them finished on our clock, hands them the
+// next finishing place and announces it. The local player goes through
+// race_check_checkpoint(); this is the door for everyone else.
+void race_finish_player(int pnum);
+
+// True if this is the local player's class weapon, which box loot expiry must
+// leave alone.
+int race_is_class_weapon(int wclass, int index);
+
+// True while the grid is still picking classes. race_lobby_blocks_input() is
+// the one to gate flight control, firing and key handling on -- it is the
+// same for everyone but an observer, who is only watching.
+int race_lobby_is_open(void);
+int race_lobby_blocks_input(void);
+
+// Routes a key to the lobby (1/2/3 or the arrows to pick, ENTER to lock in).
+// Returns 1 if the lobby consumed it; anything it doesn't own falls through,
+// so the menu, chat and the rest keep working while the grid fills up.
+int race_lobby_handle_key(int key);
+
+// What the lobby panel draws: the class the local player is looking at, how
+// many players are in out of how many, whether one player is in, and how long
+// is left on the hard cap.
+int race_lobby_cursor_class(void);
+int race_lobby_ready_counts(int *ready, int *total);
+int race_player_is_ready(int pnum);
+fix64 race_lobby_time_left(void);
+
+// Applies a received MULTI_RACE_READY packet (a player locked in a class).
+void multi_do_race_ready(const ubyte *buf);
 
 // Floating in-world labels over checkpoints, the finish line and boost pads.
 // Segments of the same kind that touch are merged into one label centred
@@ -224,6 +506,14 @@ fix race_get_fov_bonus(void);
 // and returns 1; returns 0 (leaving the outputs untouched) if they have not
 // captured one yet, so the caller falls back to a normal spawn point.
 int race_get_respawn(vms_vector *pos, vms_matrix *orient, int *segnum);
+
+// Nudges *pos to player slot `pnum`'s own fixed point on a ring around
+// wherever it already is, riding *orient's rvec/uvec, and updates *segnum to
+// match -- so two racers respawning at the same checkpoint don't land inside
+// each other. Leaves both untouched if the offset doesn't land somewhere
+// real (find_point_seg() fails) or pnum is 0. Shared by race_get_respawn()
+// (the local player) and race_bot_place() (racebot.c, the bot field).
+void race_spread_respawn(vms_vector *pos, const vms_matrix *orient, int pnum, int *segnum);
 
 // Formats a fix-seconds race time as "M:SS.hh" (or "--:--.--" for 0).
 void race_format_time(char *buf, int bufsz, fix64 t);
