@@ -44,6 +44,8 @@ int Race_finish_marked = 0;			// level marks its line with repair centers
 static int Race_respawn_segnum = -1;	// segment of the last checkpoint the local player took
 int Race_num_boxes = 0;
 int Race_laps_to_win = RACE_DEFAULT_LAPS;
+int Race_powerup_chance = 100;
+int Race_allowed_items = RACE_ALLOWED_ITEMS_ALL;
 
 static fix Race_countdown_timer = 0;	// seconds remaining, fix; only meaningful while Race_counting_down
 static int Race_counting_down = 0;
@@ -531,6 +533,13 @@ static const race_item *race_pick_item_for(int pnum)
 	fix catchup = race_catchup_factor_for(pnum);
 	int total = 0, roll, i;
 
+	// The "powerup chance" advanced option: below 100%, a roll can come up
+	// empty entirely -- one gate here covers both race_box_roll() (the local
+	// player) and race_roll_box_item() (the bot field), since both route
+	// through this function.
+	if (Race_powerup_chance < 100 && (d_rand() % 100) >= (unsigned)Race_powerup_chance)
+		return NULL;
+
 	// Weighted over what this racer can actually carry, not over the whole
 	// table -- rolling and then rejecting would quietly bias the draw towards
 	// whatever came first.
@@ -599,12 +608,12 @@ static void race_init_items(void)
 	// blanks half the mine when it's the EMP drawn instead of tractor, so
 	// both are kept well down the odds -- the shaker rarest of all, since it
 	// is the one item that can end a good lap from off-screen.
-	static const struct { ubyte index; ubyte front, back; } base[] = {
-		{ HOMING_INDEX,    12,  4 },
-		{ SMART_INDEX,      8,  7 },
-		{ SMISSILE4_INDEX,  5,  9 },	// mercury
-		{ MEGA_INDEX,       3, 11 },
-		{ SMISSILE5_INDEX,  1,  4 },	// earthshaker -- the rarest draw in the box
+	static const struct { ubyte index; ubyte front, back; ubyte slot; } base[] = {
+		{ HOMING_INDEX,    12,  4, RACE_ITEM_HOMING },
+		{ SMART_INDEX,      8,  7, RACE_ITEM_SMART },
+		{ SMISSILE4_INDEX,  5,  9, RACE_ITEM_MERCURY },	// mercury
+		{ MEGA_INDEX,       3, 11, RACE_ITEM_MEGA },
+		{ SMISSILE5_INDEX,  1,  4, RACE_ITEM_EARTHSHAKER },	// earthshaker -- the rarest draw in the box
 	};
 	int i;
 
@@ -613,15 +622,18 @@ static void race_init_items(void)
 	memset(Race_expire_sec, 0, sizeof(Race_expire_sec));
 
 	for (i = 0; i < (int)(sizeof(base)/sizeof(base[0])); i++)
-		race_add_item(CLASS_SECONDARY, base[i].index, base[i].front, base[i].back);
+		if (Race_allowed_items & (1 << base[i].slot))
+			race_add_item(CLASS_SECONDARY, base[i].index, base[i].front, base[i].back);
 
 	// The two powers ride the same rubber band as the missiles: rare out
 	// front, more common at the back. The tractor is unavailable to front-
 	// runners (weight 0) and scales up with lap count so longer races see
 	// more of it -- a 3-lap race keeps it very rare, a 10-lap race hands it
 	// out more freely at the back.
-	race_add_item(CLASS_POWER, RACE_POWER_EMP, 2, 6);
-	race_add_item(CLASS_POWER, RACE_POWER_TRACTOR, 0, max(1, Race_laps_to_win / 2));
+	if (Race_allowed_items & (1 << RACE_ITEM_EMP))
+		race_add_item(CLASS_POWER, RACE_POWER_EMP, 2, 6);
+	if (Race_allowed_items & (1 << RACE_ITEM_TRACTOR))
+		race_add_item(CLASS_POWER, RACE_POWER_TRACTOR, 0, max(1, Race_laps_to_win / 2));
 }
 
 // Maps a powerup type to the weapon it stands for. Returns 0 if that powerup
@@ -2727,8 +2739,18 @@ void race_init_level(void)
 	race_init_checkpoints();
 	race_pick_finish();
 
-	if ((Game_mode & GM_MULTI) && Netgame.LapsToWin > 0)
-		Race_laps_to_win = Netgame.LapsToWin;
+	if (Game_mode & GM_MULTI)
+	{
+		if (Netgame.LapsToWin > 0)
+			Race_laps_to_win = Netgame.LapsToWin;
+
+		Race_powerup_chance = Netgame.RacePowerupChance;
+		Race_allowed_items = Netgame.RaceAllowedItems;
+	}
+
+	// race_init_items() reads Race_laps_to_win/Race_allowed_items, so rebuild
+	// the loot table for whatever this level's settings just became.
+	race_init_items();
 
 	for (i = 0; i < MAX_PLAYERS; i++)
 	{

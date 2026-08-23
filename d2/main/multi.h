@@ -60,7 +60,7 @@ extern int multi_protocol; // set and determinate used protocol
 #define MULTI_PROTO_UDP 1 // UDP protocol
 
 // What version of the multiplayer protocol is this? Increment each time something drastic changes in Multiplayer without the version number changes. Can be reset to 0 each time the version of the game changes
-#define MULTI_PROTO_VERSION 30011 // + Race mode (LapsToWin byte in netgame_info/game-info packet, MULTI_RACE_* messages)
+#define MULTI_PROTO_VERSION 30012 // + Race options (RacePowerupChance/RaceAllowedItems bytes in netgame_info/game-info packet)
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -633,6 +633,8 @@ typedef struct netgame_info
 	ubyte						StaticPhoenix;
 	ubyte						StaticOmega;
 	ubyte						LapsToWin;		// race mode: laps needed to finish (0 = use default)
+	ubyte						RacePowerupChance;	// race mode: odds (0-100) a mystery box/bot draw yields anything (0 = use default)
+	ubyte						RaceAllowedItems;	// race mode: bitmask of RACE_ITEM_* slots the loot table may offer (0 = use default)
 	ubyte						team_color[2];
 } __pack__ netgame_info;
 
