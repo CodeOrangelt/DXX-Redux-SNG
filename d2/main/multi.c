@@ -7298,6 +7298,10 @@ multi_process_data(const ubyte *buf, int len)
 			if (!Endlevel_sequence) multi_do_race_state(buf); break;
 		case MULTI_RACE_BOX:
 			if (!Endlevel_sequence) multi_do_race_box(buf); break;
+		case MULTI_RACE_READY:
+			if (!Endlevel_sequence) multi_do_race_ready(buf); break;
+		case MULTI_RACE_POWER:
+			if (!Endlevel_sequence) multi_do_race_power(buf); break;
 		case MULTI_ORB_BONUS:
 			if (!Endlevel_sequence) multi_do_orb_bonus(buf); break;
 		case MULTI_GOT_FLAG:

@@ -215,6 +215,13 @@ void kmatrix_redraw(kmatrix_screen *km)
 	int sorted[MAX_PLAYERS];
 
 	gr_set_current_canvas(NULL);
+	// Tried keeping the live cockpit on screen behind the standings instead
+	// of the dedicated results background -- it read as the gameplay HUD
+	// shouldering the results screen out of the way rather than as
+	// "persistent," and fought the table for attention regardless of how
+	// it was dimmed. Back to the plain background this screen was designed
+	// around; Game_wind is still hidden for the duration (see
+	// race_show_summary()), it just isn't drawn as a backdrop here anymore.
 	show_fullscr(&km->background);
 
 	if(Netgame.BlackAndWhitePyros) 
@@ -285,7 +292,12 @@ void kmatrix_draw_race_item(int i, int *sorted)
 
 	y = FSPACY(50+i*9);
 	sprintf(name, "%d. %s", i+1, Players[pnum].callsign);
-	gr_printf( FSPACX(CENTERING_OFFSET(N_players)), y, "%s", name );
+	// CENTERING_OFFSET() is tuned for the deathmatch kill matrix, which
+	// widens with N_players -- for a race's fixed two-column LAPS/TIME
+	// layout it puts the name hard against the left edge, stranded well
+	// away from the columns it's naming. Anchored off CENTERSCREEN instead,
+	// same as LAPS and TIME are, so the row reads as one line.
+	gr_printf( CENTERSCREEN-FSPACX(110), y, "%s", name );
 
 	x = CENTERSCREEN-FSPACX(15);
 	gr_set_fontcolor( BM_XRGB(60,40,10),-1 );
@@ -506,9 +518,10 @@ void kmatrix_view(int network)
 		d_free(km);
 		return;
 	}
-	
+
 	while (window_exists(wind))
 		event_process();
+
 	gr_free_bitmap_data(&km->background);
 	d_free(km);
 }

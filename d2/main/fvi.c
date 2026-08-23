@@ -860,8 +860,6 @@ int fvi_sub(vms_vector *intp,int *ints,vms_vector *p0,int startseg,vms_vector *p
 						closest_d = d;
 						closest_hit_point = hit_point;
 						hit_type=HIT_OBJECT;
-
-						con_printf(CON_DEBUG, "fvi.c: hit_type = HIT_OBJECT\n"); 
 					}
 			}
 

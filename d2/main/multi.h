@@ -148,8 +148,10 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_SHIP_STATUS          , 43)  \
 	VALUE(MULTI_CREATE_EXPLOSION2    , 24)  \
 	VALUE(MULTI_RACE_UPDATE          , 5)  \
-	VALUE(MULTI_RACE_STATE           , 2 + 3*MAX_PLAYERS)  \
+	VALUE(MULTI_RACE_STATE           , 3 + 4*MAX_PLAYERS)  \
 	VALUE(MULTI_RACE_BOX             , 3)  \
+	VALUE(MULTI_RACE_READY           , 3)  \
+	VALUE(MULTI_RACE_POWER           , 3)  \
 	AFTER
 for_each_multiplayer_command(enum {, define_multiplayer_command, });
 
@@ -630,6 +632,7 @@ typedef struct netgame_info
 	ubyte						StaticHelix;
 	ubyte						StaticPhoenix;
 	ubyte						StaticOmega;
+	ubyte						LapsToWin;		// race mode: laps needed to finish (0 = use default)
 	ubyte						team_color[2];
 } __pack__ netgame_info;
 

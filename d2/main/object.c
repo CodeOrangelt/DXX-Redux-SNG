@@ -50,6 +50,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "powerup.h"
 #include "fuelcen.h"
 #include "race.h"
+#include "racebot.h"
 #include "endlevel.h"
 #include "sounds.h"
 #include "collide.h"
@@ -2036,25 +2037,48 @@ void object_move_one( object * obj )
 	// also check in player under a lavafall
 	if (obj->type == OBJ_PLAYER && obj->movement_type==MT_PHYSICS)	{
 
+#ifdef NETWORK
+		// Walk every segment physics moved us through this frame, not just
+		// the one we ended in, and do it whether or not the net result left
+		// us in a new segment. Gating this on previous_segment != obj->segnum
+		// (as the trigger walk below still does) misses a crossing whenever
+		// this frame's motion brings the ship back to where it started --
+		// e.g. a ship at very low closing speed on the line, or one whose
+		// forward crossing gets cancelled the same frame by the recoil of
+		// firing a heavy weapon. phys_seglist still has the finish segment in
+		// it even though obj->segnum nets out unchanged, so read it
+		// unconditionally; race_check_checkpoint()/race_bot_check_segment()
+		// already dedup on segment number so this costs nothing extra on a
+		// normal frame.
+		if ((Game_mode & GM_RACE) && Player_num == obj->id)
+		{
+			int s;
+
+			for (s = 0; s < n_phys_segs; s++)
+				if (phys_seglist[s] >= 0 && phys_seglist[s] <= Highest_segment_index)
+					race_check_checkpoint(&Segments[phys_seglist[s]]);
+
+			race_check_checkpoint(&Segments[obj->segnum]);
+		}
+		// A bot crosses a thin checkpoint inside one frame for exactly the
+		// same reason, and a bot that misses one silently drops a lap
+		// behind the field it is supposed to be racing.
+		else if ((Game_mode & GM_RACE) && race_object_is_bot(obj))
+		{
+			int s;
+
+			for (s = 0; s < n_phys_segs; s++)
+				if (phys_seglist[s] >= 0 && phys_seglist[s] <= Highest_segment_index)
+					race_bot_check_segment(obj->id, phys_seglist[s]);
+
+			race_bot_check_segment(obj->id, obj->segnum);
+		}
+#endif
+
 		if (previous_segment != obj->segnum) {
 			int	connect_side,i;
 #ifdef NETWORK
 			int	old_level = Current_level_num;
-
-			// Walk every segment physics moved us through this frame, not
-			// just the one we ended in: at race speeds a ship crosses a thin
-			// checkpoint cube inside a single frame, and missing it makes
-			// every checkpoint after that one look out of order.
-			if ((Game_mode & GM_RACE) && Player_num == obj->id)
-			{
-				int s;
-
-				for (s = 0; s < n_phys_segs; s++)
-					if (phys_seglist[s] >= 0 && phys_seglist[s] <= Highest_segment_index)
-						race_check_checkpoint(&Segments[phys_seglist[s]]);
-
-				race_check_checkpoint(&Segments[obj->segnum]);
-			}
 #endif
 			for (i=0;i<n_phys_segs-1;i++) {
 				connect_side = find_connect_side(&Segments[phys_seglist[i+1]], &Segments[phys_seglist[i]]);

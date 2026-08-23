@@ -52,6 +52,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "multi.h"
 #include "playsave.h"
 #include "hudmsg.h"
+#include "race.h"
 
 #define NEWHOMER
 
@@ -813,7 +814,7 @@ int Laser_create_new( vms_vector * direction, vms_vector * position, int segnum,
 	} else
 		parent_speed = 0;
 
-	weapon_speed = Weapon_info[obj->id].speed[Difficulty_level];
+	weapon_speed = race_weapon_speed(obj->id);
 	if (Weapon_info[obj->id].speedvar != 128) {
 		fix	randval;
 
@@ -1506,7 +1507,9 @@ void Laser_do_weapon_sequence(object *obj, int doHomerFrame, fix idealHomerFrame
 	}
 
 	//	For homing missiles, turn towards target. (unless it's the guided missile)
-	if (Weapon_info[obj->id].homing_flag && !(obj->id==GUIDEDMISS_ID && obj->ctype.laser_info.parent_type==OBJ_PLAYER && obj==Guided_missile[Objects[obj->ctype.laser_info.parent_num].id] && obj->signature==Guided_missile[Objects[obj->ctype.laser_info.parent_num].id]->signature))
+	//	race_force_homing() flies the race mode earthshaker with this code even
+	//	though the HAM does not mark it as a homer -- see race_homing_target().
+	if ((Weapon_info[obj->id].homing_flag || race_force_homing(obj)) && !(obj->id==GUIDEDMISS_ID && obj->ctype.laser_info.parent_type==OBJ_PLAYER && obj==Guided_missile[Objects[obj->ctype.laser_info.parent_num].id] && obj->signature==Guided_missile[Objects[obj->ctype.laser_info.parent_num].id]->signature))
 	{
 		vms_vector		vector_to_object, temp_vec;
 		fix				dot=F1_0;
@@ -1522,8 +1525,23 @@ void Laser_do_weapon_sequence(object *obj, int doHomerFrame, fix idealHomerFrame
 				obj->mtype.phys_info.flags &= ~PF_BOUNCE;
 			}
 
-			// CED -- Slow retro homers track cone check to idealHomerFPS
-			if(doHomerFrame) {
+			//	A race mode earthshaker does not look for a target: it has
+			//	one, the player leading the race, and it keeps it for its whole
+			//	life. dot is forced level so the turn costs it none of its
+			//	lifetime -- it is meant to arrive.
+			int	race_goal = race_homing_target(obj);
+
+			if (race_goal >= 0) {
+				track_goal = race_goal;
+				obj->ctype.laser_info.track_goal = race_goal;
+				dot = F1_0;
+			}
+			// CED -- Slow retro homers track cone check to idealHomerFPS.
+			//	The homing_flag test keeps a race earthshaker with no leader to
+			//	chase (a one-ship race, or the leader fired it and is alone out
+			//	front) out of the tracking search, which asserts on a weapon the
+			//	HAM never marked as a homer. It just flies straight.
+			else if(doHomerFrame && Weapon_info[obj->id].homing_flag) {
 				//	Make sure the object we are tracking is still trackable.
 				track_goal = track_track_goal(track_goal, obj, &dot, homerFrameCount);
 			
@@ -1544,14 +1562,24 @@ void Laser_do_weapon_sequence(object *obj, int doHomerFrame, fix idealHomerFrame
 			}
 
             // CED -- Slow guidance to idealHomerFPS
-			if (track_goal != -1 && doHomerFrame) {
+			if (track_goal != -1 && (doHomerFrame || race_goal >= 0)) {
 #ifdef NEWHOMER
-				vm_vec_sub(&vector_to_object, &Objects[track_goal].pos, &obj->pos);
+				// A race earthshaker steers at a waypoint along the track's
+				// own layout to its leader rather than the leader's raw
+				// position, so it navigates the level instead of flying
+				// straight into whatever wall is between here and them.
+				if (race_goal >= 0) {
+					vms_vector aim_point;
+
+					race_homing_aim_point(obj, track_goal, &aim_point);
+					vm_vec_sub(&vector_to_object, &aim_point, &obj->pos);
+				} else
+					vm_vec_sub(&vector_to_object, &Objects[track_goal].pos, &obj->pos);
 
 				vm_vec_normalize_quick(&vector_to_object);
 				temp_vec = obj->mtype.phys_info.velocity;
 				speed = vm_vec_normalize_quick(&temp_vec);
-				max_speed = Weapon_info[obj->id].speed[Difficulty_level];
+				max_speed = race_weapon_speed(obj->id);
 				if( (Game_mode & GM_MULTI) && Netgame.OriginalD1Weapons) {
 					if(obj->id == 12) { // Spread
 						max_speed = 200 * F1_0; 
@@ -1595,7 +1623,7 @@ void Laser_do_weapon_sequence(object *obj, int doHomerFrame, fix idealHomerFrame
 				vm_vec_normalize_quick(&vector_to_object);
 				temp_vec = obj->mtype.phys_info.velocity;
 				speed = vm_vec_normalize_quick(&temp_vec);
-				max_speed = Weapon_info[obj->id].speed[Difficulty_level];
+				max_speed = race_weapon_speed(obj->id);
 				if (speed+F1_0 < max_speed) {
 					speed += fixmul(max_speed, FrameTime/2);
 					if (speed > max_speed)
@@ -1634,7 +1662,7 @@ void Laser_do_weapon_sequence(object *obj, int doHomerFrame, fix idealHomerFrame
 	{
 		fix	weapon_speed;
 
-		fix max_weapon_speed = Weapon_info[obj->id].speed[Difficulty_level];
+		fix max_weapon_speed = race_weapon_speed(obj->id);
 		if( (Game_mode & GM_MULTI) && Netgame.OriginalD1Weapons) {
 			if(obj->id == 12) { // Spread
 				max_weapon_speed = 200 * F1_0; 

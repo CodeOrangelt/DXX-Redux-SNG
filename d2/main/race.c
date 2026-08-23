@@ -8,6 +8,7 @@
 #include <stdio.h>
 
 #include "race.h"
+#include "racebot.h"
 #include "game.h"
 #include "player.h"
 #include "object.h"
@@ -28,7 +29,12 @@
 #include "weapon.h"
 #include "maths.h"
 #include "laser.h"
+#include "ai.h"
+#include "aistruct.h"
 #include "u_mem.h"
+#include "console.h"
+#include "key.h"
+#include "gauges.h"
 
 race_player_info Race_player[MAX_PLAYERS];
 int Race_num_checkpoints = 0;
@@ -42,6 +48,7 @@ int Race_laps_to_win = RACE_DEFAULT_LAPS;
 static fix Race_countdown_timer = 0;	// seconds remaining, fix; only meaningful while Race_counting_down
 static int Race_counting_down = 0;
 static int Race_go_announced = 0;
+static int Race_countdown_voice = -1;	// last whole second the start voice called out
 static ubyte Race_next_place = 1;		// host-side: place to hand out to the next finisher
 static fix64 Race_wrongway_next_warn[MAX_PLAYERS];
 
@@ -61,6 +68,13 @@ static fix64 Race_boost_until = 0;
 static fix64 Race_boost_started = 0;
 static int Race_last_boost_seg = -1;	// segment race_check_boost_pad() last looked at
 static int Race_last_seg_checked = -1;	// segment race_check_checkpoint() last looked at
+// A crossing just processed the finish line -- ignore it again until this
+// passes, so a ship that lingers there doesn't read its own recent crossing
+// as a fresh one that skipped every checkpoint. One second is comfortably
+// more than it takes to clear the line's segment(s) and nowhere near a real
+// lap time, even on a tiny track.
+#define RACE_FINISH_GRACE_TIME (F1_0*1)
+static fix64 Race_finish_grace_until = 0;
 static fix64 Race_next_state_send = 0;
 
 // Local player's race clock. Everything is measured off GameTime64, which is
@@ -87,6 +101,14 @@ static int Race_banner_style = RACE_BANNER_NORMAL;
 
 // Progress metric shared by ranking and by the host state broadcast. Strictly
 // increases as a player advances, so it is safe to use to reject stale state.
+// Defined with the rest of the class code below; the mystery box loot above
+// needs it to know whose fuse it is lighting.
+static const race_class_info *race_my_class(void);
+
+// Defined with the loot table below, where the powerup-to-weapon mapping lives.
+static int race_weapon_of_powerup(int powerup_id, int *wclass, int *index);
+static void race_init_items(void);
+
 static int race_progress_of(const race_player_info *rp)
 {
 	// Stride is one more than the set size: checkpoints_hit reaches the full
@@ -319,14 +341,20 @@ void multi_do_race_box(const ubyte *buf)
 //	Mystery box loot
 //	-------------------------------------------------------------------------
 
-// What a box can hand out. The eight missiles below are always in the table;
-// anything the level itself has lying around gets absorbed into it too, so a
-// track built with vulcans and plasma on the floor still offers them -- just
-// out of a box on a fuse instead of as a permanent pickup.
+// What a box can hand out. The standing missile table below is always in it;
+// anything the level itself has lying around gets absorbed too, so a track
+// built with vulcans and plasma on the floor still offers them -- just out of
+// a box on a fuse instead of as a permanent pickup, and only to the class
+// that races with that gun.
 typedef struct race_item {
 	ubyte		wclass;		// CLASS_PRIMARY / CLASS_SECONDARY
 	ubyte		index;
-	ubyte		weight;		// relative odds of this entry coming up
+	// Relative odds, at the front of the field and at the back of it. Every
+	// draw interpolates between the two by the roller's place, so the leader
+	// gets the light stuff and whoever is last gets the heavy stuff -- the
+	// catch-up rubber band every kart racer runs on.
+	ubyte		weight_front;
+	ubyte		weight_back;
 	const char	*name;
 } race_item;
 
@@ -334,10 +362,9 @@ typedef struct race_item {
 // common no matter how much hardware a level happens to have lying around.
 // Without this, absorbing a level's guns quietly made megas and shakers rarer
 // every time the pool grew.
-#define RACE_WEIGHT_BASE        6
 #define RACE_WEIGHT_HARVESTED   1
 
-#define RACE_MAX_ITEMS (MAX_PRIMARY_WEAPONS + MAX_SECONDARY_WEAPONS)
+#define RACE_MAX_ITEMS (MAX_PRIMARY_WEAPONS + MAX_SECONDARY_WEAPONS + RACE_NUM_POWERS)
 
 static const char *const Race_primary_names[MAX_PRIMARY_WEAPONS] = {
 	"LASER", "VULCAN", "SPREADFIRE", "PLASMA", "FUSION",
@@ -349,8 +376,21 @@ static const char *const Race_secondary_names[MAX_SECONDARY_WEAPONS] = {
 	"FLASH MISSILE", "GUIDED MISSILE", "SMART MINE", "MERCURY MISSILE", "EARTHSHAKER"
 };
 
+static const char *const Race_power_names[RACE_NUM_POWERS] = {
+	"EMP", "TRACTOR BEAM"
+};
+
 static race_item Race_item_pool[RACE_MAX_ITEMS];
 static int Race_num_items = 0;
+
+// The powers currently on the local player, as the GameTime64 they end at.
+// Both are set by somebody else's roll -- the roller is the one player they
+// never touch.
+static fix64 Race_emp_started = 0;
+static fix64 Race_emp_until = 0;
+static fix64 Race_tractor_started = 0;
+static fix64 Race_tractor_until = 0;
+static int   Race_tractor_by = -1;		// who is pulling us, for the on-screen callout
 
 // GameTime64 at which each held weapon evaporates; 0 = not held from a box.
 static fix64 Race_expire_pri[MAX_PRIMARY_WEAPONS];
@@ -358,13 +398,16 @@ static fix64 Race_expire_sec[MAX_SECONDARY_WEAPONS];
 
 const char *race_item_name(int wclass, int index)
 {
+	if (wclass == CLASS_POWER)
+		return (index >= 0 && index < RACE_NUM_POWERS) ? Race_power_names[index] : "POWER";
+
 	if (wclass == CLASS_PRIMARY)
 		return (index >= 0 && index < MAX_PRIMARY_WEAPONS) ? Race_primary_names[index] : "WEAPON";
 
 	return (index >= 0 && index < MAX_SECONDARY_WEAPONS) ? Race_secondary_names[index] : "WEAPON";
 }
 
-static void race_add_item(int wclass, int index, int weight)
+static void race_add_item(int wclass, int index, int weight_front, int weight_back)
 {
 	int i;
 
@@ -377,18 +420,125 @@ static void race_add_item(int wclass, int index, int weight)
 
 	Race_item_pool[Race_num_items].wclass = (ubyte)wclass;
 	Race_item_pool[Race_num_items].index = (ubyte)index;
-	Race_item_pool[Race_num_items].weight = (ubyte)weight;
+	Race_item_pool[Race_num_items].weight_front = (ubyte)weight_front;
+	Race_item_pool[Race_num_items].weight_back = (ubyte)weight_back;
 	Race_item_pool[Race_num_items].name = race_item_name(wclass, index);
 	Race_num_items++;
 }
 
-// Weighted draw from the loot table.
-static const race_item *race_pick_item(void)
+// Where the local player is in the field, as 0 (leading) to F1_0 (last).
+// Everything that rubber-bands reads this. A one-player race is always 0:
+// there is nobody to catch.
+static fix race_catchup_factor_for(int pnum)
 {
+	int rank, field;
+
+	// A bot field is a field: the rubber band is the whole point of racing
+	// one, so it reads the grid size rather than whether this is a netgame.
+	if (!(Game_mode & GM_MULTI))
+		field = race_bot_field_size();
+	else
+		field = N_players - (Netgame.host_is_obs ? 1 : 0);
+
+	if (field < 2)
+		return 0;
+
+	rank = race_get_rank(pnum);
+
+	if (rank < 1)
+		return 0;
+
+	if (rank > field)
+		rank = field;
+
+	return fixdiv(i2f(rank - 1), i2f(field - 1));
+}
+
+static fix race_catchup_factor(void)
+{
+	return race_catchup_factor_for(Player_num);
+}
+
+// This entry's odds for whoever is rolling, interpolated between its
+// front-runner and back-marker weights.
+static int race_item_weight(const race_item *item, fix catchup)
+{
+	int front = item->weight_front;
+	int back = item->weight_back;
+
+	return front + f2i(fixmul(i2f(back - front), catchup));
+}
+
+// Weighted draw from the loot table.
+// True if a loose powerup is something a racer may pick up at all. Only ever
+// says no to another class's primary -- see race_item_allowed(). Loose weapon
+// powerups are rare in a race (the level's own are harvested into the box
+// table at load, and a wreck drops nothing), so this is the backstop for the
+// ones that get spawned some other way.
+int race_powerup_allowed(int powerup_id)
+{
+	const race_class_info *ci = race_my_class();
+	int wclass, index;
+
+	if (!(Game_mode & GM_RACE) || !ci)
+		return 1;
+
+	if (!race_weapon_of_powerup(powerup_id, &wclass, &index))
+		return 1;			// not a weapon: energy, shields, a key, ...
+
+	return wclass != CLASS_PRIMARY || index == ci->primary;
+}
+
+// What a racer is allowed to take out of a box. A class is defined by the gun
+// it races with, so the only primary a box will ever hand you is your own --
+// rolling it tops up its ammo instead of handing you somebody else's kit.
+// Secondaries stay open to everyone: missiles are the race's item game.
+// True if there is anybody ahead of `pnum` for a shaker to fly at. A shaker is
+// the catch-up weapon: it exists to go after whoever is running away with the
+// race. Handed to the leader it has nowhere to go but back down the field, or
+// at nobody at all, so it simply is not offered to them.
+static int race_has_someone_ahead(int pnum)
+{
+	int field, rank;
+
+	if (!(Game_mode & GM_MULTI))
+		field = race_bot_field_size();
+	else
+		field = N_players - (Netgame.host_is_obs ? 1 : 0);
+
+	if (field < 2)
+		return 0;
+
+	rank = race_get_rank(pnum);
+
+	return rank > 1;
+}
+
+static int race_item_allowed_for(const race_item *item, const race_class_info *ci, int pnum)
+{
+	if (item->wclass == CLASS_SECONDARY && item->index == SMISSILE5_INDEX)
+		if (!race_has_someone_ahead(pnum))
+			return 0;
+
+	if (!ci || item->wclass != CLASS_PRIMARY)
+		return 1;
+
+	return item->index == ci->primary;
+}
+
+static const race_item *race_pick_item_for(int pnum)
+{
+	const race_class_info *ci = race_get_class_info(race_get_class(pnum));
+	const race_item *last = NULL;
+	fix catchup = race_catchup_factor_for(pnum);
 	int total = 0, roll, i;
 
+	// Weighted over what this racer can actually carry, not over the whole
+	// table -- rolling and then rejecting would quietly bias the draw towards
+	// whatever came first.
 	for (i = 0; i < Race_num_items; i++)
-		total += Race_item_pool[i].weight;
+		if (race_item_allowed_for(&Race_item_pool[i], ci, pnum))
+			total += race_item_weight(&Race_item_pool[i], catchup);
 
 	if (total <= 0)
 		return NULL;
@@ -397,20 +547,66 @@ static const race_item *race_pick_item(void)
 
 	for (i = 0; i < Race_num_items; i++)
 	{
-		roll -= Race_item_pool[i].weight;
+		if (!race_item_allowed_for(&Race_item_pool[i], ci, pnum))
+			continue;
+
+		last = &Race_item_pool[i];
+		roll -= race_item_weight(&Race_item_pool[i], catchup);
+
 		if (roll < 0)
-			return &Race_item_pool[i];
+			return last;
 	}
 
-	return &Race_item_pool[Race_num_items - 1];
+	return last;
+}
+
+static const race_item *race_pick_item(void)
+{
+	return race_pick_item_for(Player_num);
+}
+
+// One draw off the same loot table the local player rolls from, for a racer
+// who has no weapon rack to put it in. Returns 0 if the table has nothing to
+// offer them.
+int race_roll_box_item(int pnum, int *wclass, int *index)
+{
+	const race_item *item;
+
+	if (!Race_num_items)
+		race_init_items();
+
+	item = race_pick_item_for(pnum);
+
+	if (!item)
+		return 0;
+
+	*wclass = item->wclass;
+	*index = item->index;
+
+	return 1;
 }
 
 // The eight missiles every race offers regardless of what the level holds.
 static void race_init_items(void)
 {
-	static const ubyte base[] = {
-		CONCUSSION_INDEX, HOMING_INDEX, PROXIMITY_INDEX, SMART_INDEX,
-		MEGA_INDEX, SMART_MINE_INDEX, SMISSILE4_INDEX, SMISSILE5_INDEX
+	// The standing missile table, front-runner weight then back-marker weight.
+	// Concussions, proximity bombs and smart mines are deliberately absent:
+	// the first is filler, and the two mines belong to the Trapper's kit --
+	// handing them to everyone out of a box makes that class's whole identity
+	// common property.
+	//
+	// The weights are what makes the rubber band: out front you mostly draw
+	// homing missiles, at the back you mostly draw shakers and megas.
+	// The earthshaker homes in on the leader from anywhere on the track and
+	// blanks half the mine when it's the EMP drawn instead of tractor, so
+	// both are kept well down the odds -- the shaker rarest of all, since it
+	// is the one item that can end a good lap from off-screen.
+	static const struct { ubyte index; ubyte front, back; } base[] = {
+		{ HOMING_INDEX,    12,  4 },
+		{ SMART_INDEX,      8,  7 },
+		{ SMISSILE4_INDEX,  5,  9 },	// mercury
+		{ MEGA_INDEX,       3, 11 },
+		{ SMISSILE5_INDEX,  1,  4 },	// earthshaker -- the rarest draw in the box
 	};
 	int i;
 
@@ -419,7 +615,15 @@ static void race_init_items(void)
 	memset(Race_expire_sec, 0, sizeof(Race_expire_sec));
 
 	for (i = 0; i < (int)(sizeof(base)/sizeof(base[0])); i++)
-		race_add_item(CLASS_SECONDARY, base[i], RACE_WEIGHT_BASE);
+		race_add_item(CLASS_SECONDARY, base[i].index, base[i].front, base[i].back);
+
+	// The two powers ride the same rubber band as the missiles: rare out
+	// front, more common at the back. The tractor is unavailable to front-
+	// runners (weight 0) and scales up with lap count so longer races see
+	// more of it -- a 3-lap race keeps it very rare, a 10-lap race hands it
+	// out more freely at the back.
+	race_add_item(CLASS_POWER, RACE_POWER_EMP, 2, 6);
+	race_add_item(CLASS_POWER, RACE_POWER_TRACTOR, 0, max(1, Race_laps_to_win / 2));
 }
 
 // Maps a powerup type to the weapon it stands for. Returns 0 if that powerup
@@ -491,7 +695,7 @@ static void race_harvest_level_weapons(void)
 		if (!race_weapon_of_powerup(Objects[i].id, &wclass, &index))
 			continue;
 
-		race_add_item(wclass, index, RACE_WEIGHT_HARVESTED);
+		race_add_item(wclass, index, RACE_WEIGHT_HARVESTED, RACE_WEIGHT_HARVESTED);
 		Objects[i].flags |= OF_SHOULD_BE_DEAD;
 	}
 }
@@ -499,6 +703,9 @@ static void race_harvest_level_weapons(void)
 // Which powerup bitmap stands for this weapon on the HUD.
 int race_item_powerup(int wclass, int index)
 {
+	if (wclass == CLASS_POWER)
+		return (index == RACE_POWER_TRACTOR) ? POW_SHIELD_BOOST : POW_MISSILE_1;
+
 	if (wclass == CLASS_SECONDARY)
 		return (index >= 0 && index < MAX_SECONDARY_WEAPONS)
 			? Secondary_weapon_to_powerup[index] : POW_ENERGY;
@@ -513,6 +720,9 @@ int race_item_powerup(int wclass, int index)
 fix64 race_get_item_remaining(int wclass, int index)
 {
 	fix64 expire;
+
+	if (wclass == CLASS_POWER)
+		return 0;			// fires on the roll; never sits in the rack
 
 	if (wclass == CLASS_PRIMARY)
 	{
@@ -536,6 +746,9 @@ fix64 race_get_item_remaining(int wclass, int index)
 // How much ammo the player is carrying for a held weapon, for the HUD.
 int race_get_item_ammo(int wclass, int index)
 {
+	if (wclass == CLASS_POWER)
+		return 1;
+
 	if (wclass == CLASS_SECONDARY)
 		return Players[Player_num].secondary_ammo[index];
 
@@ -547,6 +760,212 @@ int race_get_item_ammo(int wclass, int index)
 	return 1;	// energy weapons have no ammo count to show
 }
 
+//	-------------------------------------------------------------------------
+//	Box powers
+//	-------------------------------------------------------------------------
+//
+// A power is the one thing a box hands out that never enters the rack: it
+// goes off the moment it is rolled, and it goes off on everybody else. The
+// roller is immune, which is the whole point of picking one up -- an EMP
+// that jammed its own thrower would just be a mine you stood on.
+//
+// Both are applied on each machine to its own player. The roller broadcasts
+// one packet; every other machine starts its own timer off it. Nothing about
+// them is scored, so a dropped packet costs one player five seconds of
+// inconvenience rather than desyncing the race.
+
+// Shared shape for both powers: fades in over the first fifth of the effect
+// and back out over the last third, so an EMP blooms and clears instead of
+// snapping into the glitch and snapping off. Both windows are a fraction of
+// `duration` -- the effect's OWN length -- rather than a single shared
+// constant: the EMP and the tractor no longer run the same length (see
+// RACE_POWER_EMP_TIME), and a fixed fade window sized for the shorter one
+// was a barely-there flicker at the end of the longer one.
+static fix race_power_strength(fix64 started, fix64 until, fix64 duration)
+{
+	fix64 remaining, elapsed;
+	fix strength = F1_0;
+
+	if (!until || GameTime64 >= until)
+		return 0;
+
+	remaining = until - GameTime64;
+	elapsed = GameTime64 - started;
+
+	if (remaining < duration/3)
+		strength = fixdiv((fix)remaining, (fix)(duration/3));
+	if (elapsed < duration/5)
+	{
+		fix ramp = fixdiv((fix)elapsed, (fix)(duration/5));
+
+		if (ramp < strength)
+			strength = ramp;
+	}
+
+	return strength;
+}
+
+fix race_emp_strength(void)
+{
+	if (!(Game_mode & GM_RACE))
+		return 0;
+
+	return race_power_strength(Race_emp_started, Race_emp_until, RACE_POWER_EMP_TIME);
+}
+
+// Above this fraction of full strength, the EMP is strong enough to blank
+// the gauges. race_emp_strength() ramps smoothly (bloom in, hold, fade
+// out -- see race_power_strength()), so thresholding it gives exactly ONE
+// transition each way per EMP: the gauges drop out once as strength climbs
+// through this, and come back once as it falls back through it on the way
+// out. Deliberately not a repeating flicker -- rapid on/off strobing is a
+// real photosensitive-seizure risk (WCAG flags anything flashing more than
+// ~3 times a second), not just a matter of taste, so this never toggles
+// more than twice in an EMP's whole ~9-second run.
+#define RACE_EMP_GAUGE_HIDE_THRESHOLD (F1_0*3/4)
+
+int race_emp_gauge_hidden(void)
+{
+	return race_emp_strength() > RACE_EMP_GAUGE_HIDE_THRESHOLD;
+}
+
+fix race_tractor_strength(void)
+{
+	if (!(Game_mode & GM_RACE))
+		return 0;
+
+	return race_power_strength(Race_tractor_started, Race_tractor_until, RACE_POWER_TIME);
+}
+
+// Thrust multiplier from the tractor beam. Full strength for the whole effect
+// rather than ramped with the tint: the fade is there so the screen doesn't
+// snap, but a slow that eased itself off would be far harder to read than one
+// that simply ends.
+fix race_power_speed_scale(void)
+{
+	if (!(Game_mode & GM_RACE) || !Race_tractor_until || GameTime64 >= Race_tractor_until)
+		return F1_0;
+
+	return RACE_TRACTOR_SCALE;
+}
+
+// The callsign of whoever is pulling us right now, or NULL if nobody is. For
+// the center-screen callout -- race_tractor_strength() says how strong the
+// effect is, this says who to blame for it.
+const char *race_tractor_puller(void)
+{
+	if (!(Game_mode & GM_RACE) || !Race_tractor_until || GameTime64 >= Race_tractor_until)
+		return NULL;
+
+	if (Race_tractor_by < 0 || Race_tractor_by >= MAX_PLAYERS)
+		return NULL;
+
+	return Players[Race_tractor_by].callsign;
+}
+
+// Starts or extends a power effect timed as (started, until) and read
+// through race_power_strength(). The bug this exists to make impossible: a
+// second hit landing while the first is still running used to overwrite
+// `started` unconditionally, which reset race_power_strength()'s elapsed-
+// since-started ramp-IN -- so on a track with several bots each able to roll
+// an EMP or a tractor, a second hit read as the glitch visibly settling down
+// for a moment (the ramp restarting) before flaring back up to full
+// strength, not as "still jammed." With seven bots cycling through mystery
+// boxes, a 9-second EMP had plenty of time to take a second hit before it
+// ran out, which is what made it feel like it kept cutting out instead of
+// just running.
+//
+// `started` only moves when the effect wasn't already running; a hit that
+// lands mid-effect just pushes `until` back out to a fresh full window,
+// leaving the in-progress strength exactly where it was.
+static void race_power_apply(fix64 *started, fix64 *until, fix64 duration)
+{
+	if (!*until || GameTime64 >= *until)
+		*started = GameTime64;
+
+	*until = GameTime64 + duration;
+}
+
+// Releases a power effect early -- the roller's own pickup lifting whatever
+// was already on them (see race_power_trigger() below). Eases out over
+// RACE_POWER_RELEASE_TIME through race_power_strength()'s own fade-out math
+// rather than zeroing `until` outright, which would skip the fade and cut
+// the effect instead of clearing it. A no-op if the effect isn't actually
+// running, so it can't flash an already-expired timer back to life.
+static void race_power_release(fix64 *until)
+{
+	if (*until && GameTime64 < *until)
+		*until = GameTime64 + RACE_POWER_RELEASE_TIME;
+}
+
+void race_power_trigger(int power, int pnum, int broadcast)
+{
+	if (!(Game_mode & GM_RACE) || power < 0 || power >= RACE_NUM_POWERS)
+		return;
+
+	// The roller is the one racer a power never lands on. Said once, here,
+	// rather than left to fall out of the branches below: a power that caught
+	// its own thrower would be a box that punishes you for opening it. The
+	// clear is deliberate -- if one was already on us when we rolled ours, our
+	// own roll lifts it.
+	if (pnum == Player_num)
+	{
+		race_power_release(&Race_emp_until);
+		race_power_release(&Race_tractor_until);
+		Race_tractor_by = -1;
+
+		if (!is_observer())
+			HUD_init_message(HM_DEFAULT, "%s -- FIELD %s", race_item_name(CLASS_POWER, power),
+							 (power == RACE_POWER_EMP) ? "JAMMED" : "SLOWED");
+	}
+	else if (!is_observer())
+	{
+		const char *who = (pnum >= 0 && pnum < MAX_PLAYERS) ? Players[pnum].callsign : "SOMEONE";
+
+		if (power == RACE_POWER_EMP)
+		{
+			race_power_apply(&Race_emp_started, &Race_emp_until, RACE_POWER_EMP_TIME);
+			HUD_init_message(HM_DEFAULT, "%s SET OFF AN EMP", who);
+			digi_play_sample(SOUND_BADASS_EXPLOSION, F1_0);
+		}
+		else
+		{
+			race_power_apply(&Race_tractor_started, &Race_tractor_until, RACE_POWER_TIME);
+			Race_tractor_by = pnum;
+			// Kept under 38 characters even with a full 8-char callsign:
+			// the race HUD (lap counter, minimap, timer, everything
+			// race_draw_hud() draws) bails out whenever the top HUD
+			// message is longer than that (HUD_render_message_frame(),
+			// hud.c) -- a stock guard meant to keep a long message clear
+			// of the cockpit's own weapon icons, not something race mode
+			// asked for. The old, longer wording tripped it on every
+			// tractor hit, which is what "the whole HUD blinks out" was:
+			// not a race mode bug, a message a few characters too long.
+			HUD_init_message(HM_DEFAULT, "%s TRACTOR BEAM -- 50%% SPEED", who);
+			digi_play_sample(SOUND_CLOAK_OFF, F1_0);
+		}
+	}
+
+	// The bot field takes it too -- everyone but whoever rolled it.
+	race_bots_take_power(power, pnum);
+
+	if (broadcast && race_is_multi() && !is_observer())
+	{
+		multibuf[0] = MULTI_RACE_POWER;
+		multibuf[1] = (ubyte)pnum;
+		multibuf[2] = (ubyte)power;
+		multi_send_data(multibuf, 3, 2);
+	}
+}
+
+void multi_do_race_power(const ubyte *buf)
+{
+	if (!(Game_mode & GM_RACE))
+		return;
+
+	race_power_trigger(buf[2], buf[1], 0);
+}
+
 // Drop a weapon out of the rack, and move the player off it if it was the one
 // they had selected.
 static void race_drop_item(int wclass, int index)
@@ -556,6 +975,12 @@ static void race_drop_item(int wclass, int index)
 	if (wclass == CLASS_SECONDARY)
 	{
 		Race_expire_sec[index] = 0;
+
+		// The kit is not loot: a Trapper's mines stay when a box copy of the
+		// same rack slot expires.
+		if (race_is_class_weapon(CLASS_SECONDARY, index))
+			return;
+
 		p->secondary_ammo[index] = 0;
 		p->secondary_weapon_flags &= ~HAS_FLAG(index);
 
@@ -566,6 +991,12 @@ static void race_drop_item(int wclass, int index)
 	}
 
 	Race_expire_pri[index] = 0;
+
+	// The class kit is not loot: a Glass Cannon who rolls a Vulcan out of a
+	// box keeps their Vulcan when the box copy's fuse runs out.
+	if (race_is_class_weapon(CLASS_PRIMARY, index))
+		return;
+
 	p->primary_weapon_flags &= ~HAS_FLAG(index);
 
 	if (index == LASER_INDEX || index == SUPER_LASER_INDEX)
@@ -580,10 +1011,28 @@ static void race_drop_item(int wclass, int index)
 static void race_grant_item(int wclass, int index)
 {
 	player *p = &Players[Player_num];
+	const race_class_info *ci = race_my_class();
+
+	// A power never reaches the rack: rolling it is firing it.
+	if (wclass == CLASS_POWER)
+	{
+		race_power_trigger(index, Player_num, 1);
+		return;
+	}
+
 	// The engine's own super split in both racks: primaries from the super
 	// laser up, secondaries from the flash missile up.
 	fix64 life = (index >= (wclass == CLASS_PRIMARY ? SUPER_LASER_INDEX : SUPER_WEAPON))
 		? RACE_ITEM_SUPER_TIME : RACE_ITEM_NORMAL_TIME;
+
+	// A racer carries their class's gun and no other, whatever a box or a
+	// stray powerup tries to hand them.
+	if (ci && wclass == CLASS_PRIMARY && index != ci->primary)
+		return;
+
+	// A class can run a longer fuse on everything it picks up.
+	if (ci && ci->box_item_time && ci->box_item_time != F1_0)
+		life = fixmul64((fix)life, ci->box_item_time);
 
 	if (wclass == CLASS_SECONDARY)
 	{
@@ -593,8 +1042,11 @@ static void race_grant_item(int wclass, int index)
 		p->secondary_weapon_flags |= HAS_FLAG(index);
 
 		// A fresh pickup restarts the fuse rather than stacking onto it, so
-		// camping boxes can't bank an indefinite arsenal.
-		Race_expire_sec[index] = GameTime64 + life;
+		// camping boxes can't bank an indefinite arsenal -- unless this is
+		// the player's own kit, which never had a fuse: a box copy of it just
+		// tops the rack up.
+		if (!race_is_class_weapon(CLASS_SECONDARY, index))
+			Race_expire_sec[index] = GameTime64 + life;
 
 		return;
 	}
@@ -622,7 +1074,8 @@ static void race_grant_item(int wclass, int index)
 			break;
 	}
 
-	Race_expire_pri[index] = GameTime64 + life;
+	if (!race_is_class_weapon(CLASS_PRIMARY, index))
+		Race_expire_pri[index] = GameTime64 + life;
 }
 
 void race_box_roll(void)
@@ -634,15 +1087,30 @@ void race_box_roll(void)
 	int had_sec = (Players[Player_num].secondary_weapon_flags != 0);
 	int i;
 
-	// Should never be empty -- race_init_level() seeds the eight missiles --
-	// but a roll that silently hands out nothing is invisible to the player
-	// and maddening to diagnose, so rebuild rather than return.
+	// Should never be empty -- race_init_level() seeds the standing missile
+	// table -- but a roll that silently hands out nothing is invisible to the
+	// player and maddening to diagnose, so rebuild rather than return.
 	if (!Race_num_items)
 		race_init_items();
 
-	// One item is the common case; three is a treat.
-	if (roll >= 60)
-		rolls = (roll >= 90) ? 3 : 2;
+	// One item is the common case out front; at the back of the field two and
+	// three become as likely as one. Same rubber band as the loot weights --
+	// see race_catchup_factor().
+	{
+		fix catchup = race_catchup_factor();
+		int two = 60 - f2i(fixmul(i2f(25), catchup));	// 60% -> 35% chance of just one
+		int three = 90 - f2i(fixmul(i2f(25), catchup));	// 10% -> 35% chance of three
+
+		if (roll >= two)
+			rolls = (roll >= three) ? 3 : 2;
+	}
+
+	{
+		const race_class_info *ci = race_my_class();
+
+		if (ci)
+			rolls += ci->box_extra_rolls;
+	}
 
 	for (i = 0; i < rolls; i++)
 	{
@@ -654,6 +1122,10 @@ void race_box_roll(void)
 
 		race_grant_item(item->wclass, item->index);
 		life = race_get_item_remaining(item->wclass, item->index);
+
+		// A power has already announced itself (and has no rack slot to arm).
+		if (item->wclass == CLASS_POWER)
+			continue;
 
 		if (first_index < 0)
 		{
@@ -793,7 +1265,17 @@ void race_check_boost_pad(segment *segp)
 	if (GameTime64 >= Race_boost_until)
 		Race_boost_started = GameTime64;	// fresh boost, so ramp it in
 
-	Race_boost_until = GameTime64 + RACE_BOOST_TIME;
+	{
+		const race_class_info *ci = race_my_class();
+		fix64 time = RACE_BOOST_TIME;
+
+		// A class can hold a pad's push for longer -- the one thing in the
+		// mode that rewards knowing where the pads are.
+		if (ci && ci->boost_time && ci->boost_time != F1_0)
+			time = fixmul64((fix)time, ci->boost_time);
+
+		Race_boost_until = GameTime64 + time;
+	}
 	digi_play_sample(SOUND_AFTERBURNER_IGNITE, F1_0);
 }
 
@@ -822,8 +1304,14 @@ static fix race_boost_strength(void)
 
 fix race_get_boost_scale(void)
 {
+	const race_class_info *ci = race_my_class();
 	// Up to 2.25x forward thrust, a bit stronger than the afterburner's 2x.
-	return F1_0 + fixmul(race_boost_strength(), F1_0 + F1_0/4);
+	fix push = F1_0 + F1_0/4;
+
+	if (ci && ci->boost_power && ci->boost_power != F1_0)
+		push = fixmul(push, ci->boost_power);
+
+	return F1_0 + fixmul(race_boost_strength(), push);
 }
 
 void race_cancel_boost(void)
@@ -835,11 +1323,183 @@ void race_cancel_boost(void)
 	}
 }
 
+// Local player's trichord state, refreshed once a frame by
+// race_note_trichord() (controls.c). Eased rather than snapped straight to
+// the input: a real diagonal push clips in and out of the floor for a frame
+// at a time even when it's genuinely being held, and the charge meter below
+// stays exactly that responsive on purpose (it's what pays the speed bonus)
+// -- it's the FOV chasing every one of those blips that read as a flicker
+// instead of a held effect.
+static fix Race_trichord_strength = 0;
+
+// Charge bar fill (0..F1_0) -- resets to 0 when it fires a burst.
+static fix Race_trichord_charge = 0;
+
+// GameTime64 until the local player's active trichord burst expires.
+static fix64 Race_trichord_boost_until = 0;
+
+// How many HUD blobs were lit last frame, for the per-threshold ding.
+static int Race_trichord_blobs_lit = 0;
+
+// 0..F1_0 build target from `ratio`: zero below the floor, ramping to F1_0.
+static fix race_trichord_target(fix ratio)
+{
+	fix target;
+
+	if (ratio <= RACE_TRICHORD_FLOOR)
+		return 0;
+
+	target = fixdiv(ratio - RACE_TRICHORD_FLOOR, F1_0 - RACE_TRICHORD_FLOOR);
+
+	if (target > F1_0)
+		target = F1_0;
+
+	return target;
+}
+
+// Advances one entity's own charge meter by a frame, off this frame's
+// trichord ratio -- fills toward F1_0 at a rate scaled by how good the
+// diagonal is (so a marginal one crawls and a perfect one takes
+// RACE_TRICHORD_CHARGE_TIME), and empties at a flat, faster rate the instant
+// it drops off, rather than easing back down to meet a lower target, so
+// letting go costs the built-up speed right away instead of bleeding off
+// slowly. Shared by the local player (race_note_trichord() below, off real
+// stick balance) and the bot field (racebot.c, each bot keeping its own
+// charge in race_bot::trichord_charge, off how hard it's leaning into its
+// current crab) -- one mechanic, fed two different ratios, since a bot never
+// adds the vertical axis a human stick can (see the crab comments in
+// racebot.c for why).
+fix race_trichord_advance_charge(fix charge, fix ratio, fix64 *boost_until)
+{
+	fix target;
+
+	// No charging during an active boost -- prevents re-firing before the burst expires.
+	if (GameTime64 < *boost_until)
+		return 0;
+
+	target = race_trichord_target(ratio);
+
+	if (target > 0)
+	{
+		charge += fixmul(FrameTime, fixdiv(target, RACE_TRICHORD_CHARGE_TIME));
+		if (charge >= F1_0)
+		{
+			*boost_until = GameTime64 + RACE_TRICHORD_BOOST_TIME;
+			return 0;	// bar resets after firing
+		}
+	}
+	else
+	{
+		return 0;	// angle lost -- wipe charge instantly
+	}
+
+	return charge;
+}
+
+// Thrust multiplier from the boost timer.
+fix race_trichord_scale_from_boost(fix64 boost_until)
+{
+	if (GameTime64 < boost_until)
+		return F1_0 + RACE_TRICHORD_CHARGE_BONUS;
+	return F1_0;
+}
+
+void race_note_trichord(fix ratio)
+{
+	fix target = race_trichord_target(ratio);
+	fix step = fixmul(FrameTime, RACE_TRICHORD_FOV_EASE);
+	fix64 old_boost = Race_trichord_boost_until;
+	int lit;
+
+	if (target > Race_trichord_strength)
+	{
+		Race_trichord_strength += step;
+		if (Race_trichord_strength > target)
+			Race_trichord_strength = target;
+	}
+	else if (target < Race_trichord_strength)
+	{
+		Race_trichord_strength -= step;
+		if (Race_trichord_strength < target)
+			Race_trichord_strength = target;
+	}
+
+	Race_trichord_charge = race_trichord_advance_charge(Race_trichord_charge, ratio, &Race_trichord_boost_until);
+
+	if (Race_trichord_boost_until != old_boost)
+	{
+		digi_play_sample(SOUND_AFTERBURNER_IGNITE, F1_0);
+		Race_trichord_blobs_lit = 0;
+		return;
+	}
+
+	lit = f2i(fixmul(Race_trichord_charge, i2f(RACE_TRICHORD_BLOBS)));
+	if (lit > RACE_TRICHORD_BLOBS)
+		lit = RACE_TRICHORD_BLOBS;
+
+	if (lit > Race_trichord_blobs_lit)
+	{
+		// Rising pitch per blob: unison, maj2, maj3, p4, p5, octave
+		static const fix blob_speed[RACE_TRICHORD_BLOBS] = {
+			F1_0, F1_0*9/8, F1_0*5/4, F1_0*4/3, F1_0*3/2, F1_0*2
+		};
+		int idx = lit - 1;
+		if (idx < 0) idx = 0;
+		if (idx >= RACE_TRICHORD_BLOBS) idx = RACE_TRICHORD_BLOBS - 1;
+		digi_play_sample_pitched(118, F1_0, blob_speed[idx]);
+	}
+
+	Race_trichord_blobs_lit = lit;
+}
+
+fix race_trichord_strength(void)
+{
+	return Race_trichord_strength;
+}
+
+fix race_trichord_charge(void)
+{
+	if (GameTime64 < Race_trichord_boost_until)
+	{
+		// Bar counts down during the burst so it's visually distinct from charging.
+		fix64 rem = Race_trichord_boost_until - GameTime64;
+		if (rem >= (fix64)RACE_TRICHORD_BOOST_TIME)
+			return F1_0;
+		return fixdiv((fix)rem, RACE_TRICHORD_BOOST_TIME);
+	}
+	return Race_trichord_charge;
+}
+
+fix race_trichord_charge_scale(void)
+{
+	return race_trichord_scale_from_boost(Race_trichord_boost_until);
+}
+
 fix race_get_fov_bonus(void)
 {
+	fix bonus;
+
 	// Render_zoom is 0x9000 by default and 0x11000 at the "wide" end of the
 	// FOV slider, so 0x2000 is a noticeable but not disorienting widening.
-	return fixmul(race_boost_strength(), 0x2000);
+	bonus = fixmul(race_boost_strength(), 0x2000);
+
+	// Getting pulled narrows it instead -- the same shape as the widening,
+	// just the other way, so the screen closing in reads as a squeeze rather
+	// than a snap, and opens back up the moment the beam lets go.
+	bonus -= fixmul(race_tractor_strength(), 0x1800);
+
+	// A sustained trichord widens it; the active boost holds it fully wide
+	// and adds a second kick that counts down with the bar.
+	{
+		fix tf = Race_trichord_strength;
+		if (GameTime64 < Race_trichord_boost_until && tf < F1_0)
+			tf = F1_0;
+		bonus += fixmul(tf, RACE_TRICHORD_FOV);
+		if (GameTime64 < Race_trichord_boost_until)
+			bonus += fixmul(race_trichord_charge(), RACE_TRICHORD_FOV);
+	}
+
+	return bonus;
 }
 
 //	-------------------------------------------------------------------------
@@ -1205,6 +1865,681 @@ int race_get_map_outline(const race_map_line **lines)
 }
 
 //	-------------------------------------------------------------------------
+//	Classes and the pre-race lobby
+//	-------------------------------------------------------------------------
+
+// Every race opens with the ships held on the grid while each player picks a
+// class and readies up; the start countdown does not begin until everyone is
+// in (or the lobby's hard cap runs out, so one AFK player cannot hold a whole
+// lobby hostage). This is the same shape as Survival's shop suspend in D1:
+// input is diverted whole while it is up, readiness is broadcast, and every
+// machine reaches the same "everyone is in" answer off the same synced state.
+//
+// A class is picked once, at the line, and lasts the race. Their numbers are
+// applied in three places outside this file: thrust and afterburner drain in
+// read_flying_controls() (controls.c), and damage in apply_damage_to_player()
+// (collide.c), which runs on the machine taking the hit -- so the shooter's
+// class has to be known there too, which is why classes are synced rather
+// than kept local.
+static const race_class_info Race_class_table[RACE_NUM_CLASSES] = {
+	{
+		// The tank. Slow enough to feel heavy, but nowhere near slow enough
+		// to be unwinnable -- speed is the currency in a race, and the old
+		// -25% could not be bought back with any amount of armour.
+		.name = "HEAVY HITTER",
+		.weapon = "FUSION CANNON",
+		.perks = "+75% SHIELDS   -8% SPEED",
+		.primary = FUSION_INDEX,
+		.powerup = POW_FUSION_WEAPON,
+		.secondary = {{ -1 }, { -1 }},
+		.shield_pct = 175,
+		.speed = F1_0 - (F1_0*8)/100,
+		.damage_taken = F1_0,
+		.damage_dealt = F1_0,
+		.afterburner_drain = F1_0,
+		.box_item_time = F1_0,
+		.boost_time = F1_0,
+		.boost_power = F1_0,
+	},
+	{
+		// Genuinely glass now: the quickest ship and the hardest hitter, on
+		// three quarters of a shield bar and taking a quarter more from
+		// everything that lands.
+		.name = "GLASS CANNON",
+		.weapon = "VULCAN CANNON",
+		.perks = "+15% DMG DEALT   +8% SPEED   -40% SHIELDS",
+		.primary = VULCAN_INDEX,
+		.powerup = POW_VULCAN_WEAPON,
+		.secondary = {{ -1 }, { -1 }},
+		.shield_pct = 60,
+		.speed = F1_0 + (F1_0*8)/100,
+		.damage_taken = F1_0,
+		.damage_dealt = F1_0 + (F1_0*15)/100,
+		.afterburner_drain = F1_0,
+		.box_item_time = F1_0,
+		.boost_time = F1_0,
+		.boost_power = F1_0,
+	},
+	{
+		// The all-rounder: stock numbers everywhere, and the only class whose
+		// edge is in the throttle rather than the guns.
+		.name = "HYBRID PYRO",
+		.weapon = "QUAD LASERS LVL 4",
+		.perks = "+25% AFTERBURNER   +10% BOOST PADS",
+		.primary = LASER_INDEX,
+		.powerup = POW_QUAD_FIRE,
+		.secondary = {{ -1 }, { -1 }},
+		.speed = F1_0,
+		.damage_taken = F1_0,
+		.damage_dealt = F1_0,
+		// Drain scales by the reciprocal of the bonus, so a tank that empties
+		// 20% slower lasts 25% longer.
+		.afterburner_drain = (F1_0*4)/5,
+		.box_item_time = F1_0,
+		.boost_time = F1_0 + F1_0/10,
+		.boost_power = F1_0,
+	},
+	{
+		// Mines are the point, so they are the icon, and the caps are low: a
+		// Trapper who could bank ten of them would be laying a minefield
+		// rather than picking their corner.
+		.name = "TRAPPER",
+		.weapon = "PLASMA CANNON + MINES",
+		.perks = "MINES RESTOCK   -15% DMG DEALT   -5% SPEED",
+		.primary = PLASMA_INDEX,
+		.powerup = POW_PROXIMITY_WEAPON,
+		.secondary = {
+			{ PROXIMITY_INDEX,  RACE_TRAPPER_PROX_CAP,  RACE_TRAPPER_PROX_TIME },
+			{ SMART_MINE_INDEX, RACE_TRAPPER_SMART_CAP, RACE_TRAPPER_SMART_TIME },
+		},
+		.speed = F1_0 - F1_0/20,
+		.damage_taken = F1_0,
+		.damage_dealt = F1_0 - (F1_0*15)/100,
+		.afterburner_drain = F1_0,
+		.box_item_time = F1_0,
+		.boost_time = F1_0,
+		.boost_power = F1_0,
+	},
+	{
+		// Pays for the best box economy in the field with a thinner hull.
+		// Used to also carry a speed penalty on top of that, which stacked
+		// two costs against a payoff that is RNG rather than pace -- a race
+		// is a straight line to the finish, and being both fragile and slow
+		// while you wait for the dice to pay off never felt worth it. The
+		// hull cost alone is the class now; the throttle is stock.
+		.name = "SCAVENGER",
+		.weapon = "SPREADFIRE CANNON",
+		.perks = "2 ITEMS/BOX   +50% LOOT   -15% SHIELDS",
+		.primary = SPREADFIRE_INDEX,
+		.powerup = POW_SPREADFIRE_WEAPON,
+		.secondary = {{ -1 }, { -1 }},
+		.shield_pct = 85,
+		.speed = F1_0,
+		.damage_taken = F1_0,
+		.damage_dealt = F1_0,
+		.afterburner_drain = F1_0,
+		.box_extra_rolls = 1,
+		.box_item_time = F1_0 + F1_0/2,
+		.boost_time = F1_0,
+		.boost_power = F1_0,
+	},
+	{
+		// The route specialist: pads are scenery to everyone else and the
+		// whole build to this one. Used to dock both speed AND turn to pay
+		// for that, which on a track with only a couple of pads left it
+		// strictly worse than the stock ship for the whole rest of the lap --
+		// there was no track on which the trade could win. The penalty is
+		// halved to fix that. First pass at the payoff (doubled duration plus
+		// a power bonus on top) overcorrected into the opposite problem --
+		// unbeatable on anything with a real pad chain -- so it's down to
+		// just a longer hold, no added push.
+		.name = "CHARGING BULL",
+		.weapon = "HELIX CANNON",
+		.perks = "+60% BOOST PADS   -5% SPEED   -8% TURN",
+		.primary = HELIX_INDEX,
+		.powerup = POW_HELIX_WEAPON,
+		.secondary = {{ -1 }, { -1 }},
+		.speed = F1_0 - (F1_0*5)/100,
+		.turn = F1_0 - (F1_0*8)/100,
+		.damage_taken = F1_0,
+		.damage_dealt = F1_0,
+		.afterburner_drain = F1_0,
+		.box_item_time = F1_0,
+		.boost_time = F1_0 + (F1_0*6)/10,
+		.boost_power = F1_0,
+	},
+	{
+		// The phoenix shell bounces, so this one does not need a clean line
+		// to hurt somebody -- it shoots corners. Built to live where that
+		// pays: the quickest thing on the track through the tight stuff. The
+		// shield cost used to run deeper than any other class's, which meant
+		// one bad hit -- a wall, a bot, a stray shot -- cost this class a
+		// respawn that the speed and turn on offer couldn't buy back. Eased
+		// off to line up with what Glass Cannon and Scavenger pay for a
+		// similar edge.
+		.name = "FIREBIRD",
+		.weapon = "PHOENIX CANNON",
+		.perks = "+15% TURN   +5% SPEED   -20% SHIELDS",
+		.primary = PHOENIX_INDEX,
+		.powerup = POW_PHOENIX_WEAPON,
+		.secondary = {{ -1 }, { -1 }},
+		.shield_pct = 80,
+		.speed = F1_0 + (F1_0*5)/100,
+		.turn = F1_0 + (F1_0*15)/100,
+		.damage_taken = F1_0,
+		.damage_dealt = F1_0,
+		.afterburner_drain = F1_0,
+		.box_item_time = F1_0,
+		.boost_time = F1_0,
+		.boost_power = F1_0,
+	},
+};
+
+static sbyte Race_class[MAX_PLAYERS];		// class per player, RACE_CLASS_NONE until they pick
+// When the local player's kit secondary tops itself up next. Armed by
+// race_grant_class_loadout(), so it restarts with every spawn.
+static fix64 Race_secondary_refill_at[RACE_MAX_KIT_SECONDARIES];
+static ubyte Race_ready[MAX_PLAYERS];		// who has locked in
+static int Race_lobby_open = 0;
+static int Race_lobby_cursor = 0;			// class the local player is looking at
+static fix64 Race_lobby_deadline = 0;		// hard cap on the whole lobby
+// The lobby ignores the keyboard for a moment after it opens. The keypress
+// that started the race -- ENTER on the menu, or on a briefing screen -- is
+// often still being repeated when the level finishes loading, and it would
+// otherwise lock the player into the class the cursor happened to start on
+// before the panel had even been drawn once.
+#define RACE_LOBBY_INPUT_GRACE  (F1_0*3/4)
+static fix64 Race_lobby_input_at = 0;
+static fix64 Race_lobby_next_resend = 0;	// our own ready is re-broadcast until the race starts
+
+const race_class_info *race_get_class_info(int cls)
+{
+	if (cls < 0 || cls >= RACE_NUM_CLASSES)
+		return NULL;
+
+	return &Race_class_table[cls];
+}
+
+void race_set_player_class(int pnum, int cls)
+{
+	if (pnum < 0 || pnum >= MAX_PLAYERS || cls < 0 || cls >= RACE_NUM_CLASSES)
+		return;
+
+	Race_class[pnum] = (sbyte)cls;
+	race_grant_class_loadout(pnum);
+}
+
+int race_get_class(int pnum)
+{
+	if (pnum < 0 || pnum >= MAX_PLAYERS)
+		return RACE_CLASS_NONE;
+
+	return Race_class[pnum];
+}
+
+// The local player's own numbers, for the physics and damage call sites. A
+// player who somehow has no class (joined mid-race, packet lost) races on the
+// stock numbers rather than being penalised for it.
+static const race_class_info *race_my_class(void)
+{
+	if (!(Game_mode & GM_RACE))
+		return NULL;
+
+	return race_get_class_info(Race_class[Player_num]);
+}
+
+fix race_class_speed_scale(void)
+{
+	const race_class_info *ci = race_my_class();
+
+	return ci ? ci->speed : F1_0;
+}
+
+fix race_class_turn_scale(void)
+{
+	const race_class_info *ci = race_my_class();
+
+	// 0 in the table means "leave it alone", so a class only has to name this
+	// if it actually trades handling for something.
+	return (ci && ci->turn) ? ci->turn : F1_0;
+}
+
+fix race_class_afterburner_drain_scale(void)
+{
+	const race_class_info *ci = race_my_class();
+
+	return ci ? ci->afterburner_drain : F1_0;
+}
+
+fix race_scale_damage_for(int pnum, const object *killer, fix damage)
+{
+	const race_class_info *mine = race_get_class_info(race_get_class(pnum));
+
+	if (!(Game_mode & GM_RACE))
+		return damage;
+
+	// The shooter's half. This runs on the machine being hit, which knows
+	// every player's class because they are synced -- a Glass Cannon hits 5%
+	// harder no matter whose screen the hit lands on.
+	if (killer && killer->type == OBJ_PLAYER)
+	{
+		const race_class_info *theirs = race_get_class_info(race_get_class(killer->id));
+
+		if (theirs)
+			damage = fixmul(damage, theirs->damage_dealt);
+	}
+
+	// And the target's half, which covers every source: weapons, blast doors,
+	// lava, flying into a wall.
+	if (mine)
+		damage = fixmul(damage, mine->damage_taken);
+
+	return damage;
+}
+
+fix race_scale_damage(const object *killer, fix damage)
+{
+	return race_scale_damage_for(Player_num, killer, damage);
+}
+
+// The class weapon. Handed out fresh on every spawn (see the call in
+// init_player_stats_new_ship(), right after race_strip_loadout()), so dying
+// costs a racer their box loot but never the kit their class is built around.
+void race_grant_class_loadout(int pnum)
+{
+	const race_class_info *ci;
+	player *p;
+	int i;
+
+	if (!(Game_mode & GM_RACE) || pnum < 0 || pnum >= MAX_PLAYERS)
+		return;
+
+	ci = race_get_class_info(Race_class[pnum]);
+
+	if (!ci)
+		return;
+
+	// From empty, always. Whatever else put a gun in the rack -- a netgame
+	// spawn-weapon toggle that ran before GM_RACE was set, a stock loadout
+	// from before the class was picked -- a racer carries their class kit and
+	// nothing else.
+	race_strip_loadout(pnum);
+
+	p = &Players[pnum];
+	p->primary_weapon_flags |= HAS_FLAG(ci->primary);
+	p->flags |= ci->player_flags;
+
+	// Every racer flies with a burner, full off the line. A race is about
+	// speed, and the one thing a racing game must not do is hand half the grid
+	// a way to go faster and not the rest -- so the kits trade on how long it
+	// lasts (afterburner_drain), not on whether you have one at all.
+	p->flags |= PLAYER_FLAGS_AFTERBURNER;
+	p->afterburner_charge = F1_0;
+
+	for (i = 0; i < RACE_MAX_KIT_SECONDARIES; i++)
+	{
+		const race_kit_secondary *ks = &ci->secondary[i];
+		int start;
+
+		if (ks->index < 0)
+			continue;
+
+		start = ks->cap / 2;					// half a load off the line
+		p->secondary_weapon_flags |= HAS_FLAG(ks->index);
+
+		if (p->secondary_ammo[ks->index] < start)
+			p->secondary_ammo[ks->index] = start;
+
+		if (pnum == Player_num)
+		{
+			Race_secondary_refill_at[i] = GameTime64 + ks->refill;
+			Race_expire_sec[ks->index] = 0;		// the kit has no fuse
+		}
+	}
+
+	// Defined in gameseq.c, where the level-start loadout is set.
+	extern fix StartingShields;
+
+	// A class can come to the line with a different shield bar. Scaled off
+	// StartingShields rather than set to an absolute, so a host who has tuned
+	// that still gets what they asked for; and set rather than added, so a
+	// respawn is the same deal as the start.
+	// A bot's shields live in its player slot the same way, and race_bot_place()
+	// hands it StartingShields before calling this -- so the class bar has to
+	// be applied for the field too, or every CPU racer laps on stock shields
+	// no matter what kit it is in.
+	if (ci->shield_pct > 0 && (pnum == Player_num || race_player_is_bot(pnum)))
+		p->shields = (fix)((fix64)StartingShields * ci->shield_pct / 100);
+
+	switch (ci->primary)
+	{
+		case LASER_INDEX:
+			p->laser_level = MAX_LASER_LEVEL;		// level 4
+			p->flags |= PLAYER_FLAGS_QUAD_LASERS;
+			break;
+		case VULCAN_INDEX:
+			p->primary_ammo[VULCAN_INDEX] = Primary_ammo_max[VULCAN_INDEX];
+			break;
+		default:
+			break;
+	}
+
+	if (pnum == Player_num)
+	{
+		p->primary_weapon = ci->primary;
+		// The class weapon has no fuse -- only box loot expires.
+		Race_expire_pri[ci->primary] = 0;
+	}
+}
+
+// True if `index` is the local player's class weapon, which box loot must
+// never expire out from under them (a Glass Cannon who rolls a Vulcan out of
+// a box keeps their Vulcan when the box copy runs out).
+int race_is_class_weapon(int wclass, int index)
+{
+	const race_class_info *ci = race_my_class();
+
+	if (!ci)
+		return 0;
+
+	if (wclass == CLASS_PRIMARY)
+		return index == ci->primary;
+
+	{
+		int i;
+
+		for (i = 0; i < RACE_MAX_KIT_SECONDARIES; i++)
+			if (ci->secondary[i].index >= 0 && index == ci->secondary[i].index)
+				return 1;
+	}
+
+	return 0;
+}
+
+// The Trapper's mine trickle. Local player only: everyone else's ammo is
+// their own machine's business, and nothing else needs to agree on it.
+static void race_class_frame(void)
+{
+	const race_class_info *ci = race_my_class();
+	player *p = &Players[Player_num];
+	int i;
+
+	if (!ci || is_observer())
+		return;
+
+	for (i = 0; i < RACE_MAX_KIT_SECONDARIES; i++)
+	{
+		const race_kit_secondary *ks = &ci->secondary[i];
+		int cap;
+
+		if (ks->index < 0 || !ks->refill)
+			continue;
+
+		cap = min(ks->cap, (int)Secondary_ammo_max[ks->index]);
+
+		if (p->secondary_ammo[ks->index] >= cap)
+		{
+			// Full: hold the clock an interval out, so spending one is
+			// followed by a whole wait rather than an instant refund of the
+			// time spent sitting at the cap.
+			Race_secondary_refill_at[i] = GameTime64 + ks->refill;
+			continue;
+		}
+
+		// A deadline further out than one interval means the clock was reset
+		// under us (a new level); re-arm rather than stall until GameTime64
+		// catches up again.
+		if (Race_secondary_refill_at[i] > GameTime64 + ks->refill)
+			Race_secondary_refill_at[i] = GameTime64 + ks->refill;
+
+		if (GameTime64 < Race_secondary_refill_at[i])
+			continue;
+
+		p->secondary_weapon_flags |= HAS_FLAG(ks->index);
+		p->secondary_ammo[ks->index]++;
+		Race_secondary_refill_at[i] = GameTime64 + ks->refill;
+
+		digi_play_sample(SOUND_GOOD_SELECTION_SECONDARY, F1_0/2);
+	}
+}
+
+static void race_send_ready(int pnum)
+{
+	if (!race_is_multi())
+		return;
+
+	multibuf[0] = MULTI_RACE_READY;
+	multibuf[1] = (ubyte)pnum;
+	multibuf[2] = (ubyte)Race_class[pnum];
+	multi_send_data(multibuf, 3, 2);
+}
+
+void multi_do_race_ready(const ubyte *buf)
+{
+	int pnum = buf[1];
+	int cls = (sbyte)buf[2];
+
+	if (!(Game_mode & GM_RACE) || pnum < 0 || pnum >= MAX_PLAYERS)
+		return;
+
+	if (cls >= 0 && cls < RACE_NUM_CLASSES)
+		Race_class[pnum] = (sbyte)cls;
+
+	Race_ready[pnum] = 1;
+}
+
+// Who the lobby is waiting on: everyone still connected, observers aside --
+// they are watching the race, not in it.
+static int race_lobby_counts(int *ready_out, int *total_out)
+{
+	int i, ready = 0, total = 0;
+
+	if (!race_is_multi())
+	{
+		if (ready_out)
+			*ready_out = Race_ready[Player_num] ? 1 : 0;
+		if (total_out)
+			*total_out = 1;
+
+		return 1;
+	}
+
+	for (i = 0; i < N_players; i++)
+	{
+		if (Players[i].connected == CONNECT_DISCONNECTED)
+			continue;
+#ifdef NETWORK
+		if (Netgame.host_is_obs && i == 0)
+			continue;
+#endif
+		total++;
+
+		if (Race_ready[i])
+			ready++;
+	}
+
+	if (ready_out)
+		*ready_out = ready;
+	if (total_out)
+		*total_out = total;
+
+	return total;
+}
+
+int race_lobby_ready_counts(int *ready_out, int *total_out)
+{
+	return race_lobby_counts(ready_out, total_out);
+}
+
+int race_player_is_ready(int pnum)
+{
+	if (pnum < 0 || pnum >= MAX_PLAYERS)
+		return 0;
+
+	return Race_ready[pnum];
+}
+
+int race_lobby_is_open(void)
+{
+	return (Game_mode & GM_RACE) && Race_lobby_open;
+}
+
+// The lobby owns the keyboard and the stick whole while it is up, the way
+// chat entry and Survival's shop do -- see the ReadControls() gate.
+int race_lobby_blocks_input(void)
+{
+	return race_lobby_is_open() && !is_observer();
+}
+
+int race_lobby_cursor_class(void)
+{
+	return Race_lobby_cursor;
+}
+
+fix64 race_lobby_time_left(void)
+{
+	fix64 left;
+
+	if (!Race_lobby_open)
+		return 0;
+
+	left = Race_lobby_deadline - GameTime64;
+
+	return left > 0 ? left : 0;
+}
+
+// Locks the local player in on `cls`: kits them out and tells everyone else,
+// which is the only thing the rest of the lobby is waiting on.
+static void race_lobby_lock_in(int cls)
+{
+	if (cls < 0 || cls >= RACE_NUM_CLASSES)
+		cls = 0;
+
+	Race_lobby_cursor = cls;
+	Race_class[Player_num] = (sbyte)cls;
+	Race_ready[Player_num] = 1;
+
+	race_grant_class_loadout(Player_num);
+	race_send_ready(Player_num);
+
+	HUD_init_message(HM_DEFAULT, "LOCKED IN: %s", Race_class_table[cls].name);
+}
+
+int race_lobby_handle_key(int key)
+{
+	// Only the keys the panel actually owns are claimed. Everything else --
+	// the menu on ESC, chat, a screenshot -- still works while the grid
+	// fills up; flight and firing are held by their own gates, not by
+	// swallowing the keyboard whole.
+	if (!race_lobby_blocks_input() || Race_ready[Player_num])
+		return 0;
+
+	if (GameTime64 < Race_lobby_input_at)
+		return 0;
+
+	// KEY_1..KEY_5 are consecutive, so the number row maps straight onto the
+	// class list however long that grows.
+	if (key >= KEY_1 && key < KEY_1 + RACE_NUM_CLASSES)
+	{
+		Race_lobby_cursor = key - KEY_1;
+		return 1;
+	}
+
+	switch (key)
+	{
+		case KEY_UP:
+		case KEY_PAD8:
+		case KEY_LEFT:
+			Race_lobby_cursor = (Race_lobby_cursor + RACE_NUM_CLASSES - 1) % RACE_NUM_CLASSES;
+			break;
+
+		case KEY_DOWN:
+		case KEY_PAD2:
+		case KEY_RIGHT:
+			Race_lobby_cursor = (Race_lobby_cursor + 1) % RACE_NUM_CLASSES;
+			break;
+
+		case KEY_ENTER:
+		case KEY_PADENTER:
+		case KEY_SPACEBAR:
+			race_lobby_lock_in(Race_lobby_cursor);
+			break;
+
+		default:
+			return 0;
+	}
+
+	return 1;
+}
+
+// Closes the lobby and rolls straight into the start countdown. Anyone who
+// never locked in is dropped onto the class they were looking at, so a race
+// always starts with everybody kitted.
+static void race_lobby_close(void)
+{
+	if (!Race_lobby_open)
+		return;
+
+	if (!Race_ready[Player_num] && !is_observer())
+		race_lobby_lock_in(Race_lobby_cursor);
+
+	Race_lobby_open = 0;
+
+	Race_countdown_timer = i2f(RACE_COUNTDOWN_SECONDS);
+	Race_counting_down = 1;
+	Race_go_announced = 0;
+	Race_countdown_voice = -1;
+}
+
+// Runs on every machine off state everybody has (the ready flags), so the
+// clients reach the same answer the host does; the host's periodic state
+// broadcast is what settles any disagreement about the exact moment.
+static void race_lobby_frame(void)
+{
+	int ready = 0, total = 0;
+
+	if (!Race_lobby_open)
+		return;
+
+	race_lobby_counts(&ready, &total);
+
+	// Keep telling the others we are in until the race actually starts: the
+	// ready packet is the one piece of lobby state nobody else can derive,
+	// and a lobby that lost it would sit there forever.
+	if (Race_ready[Player_num] && race_is_multi() && GameTime64 >= Race_lobby_next_resend)
+	{
+		race_send_ready(Player_num);
+		Race_lobby_next_resend = GameTime64 + F1_0;
+	}
+
+	// Clients wait to be told (see multi_do_race_state) so that everyone
+	// starts the countdown on the same frame as the host.
+	if (race_is_multi() && !multi_i_am_master())
+	{
+		// ...but not forever. If the host never releases the grid -- it
+		// dropped, or every state packet since has been lost -- come out on
+		// our own a little past the cap rather than sitting in the panel for
+		// the rest of the session.
+		if (GameTime64 >= Race_lobby_deadline + RACE_LOBBY_HOST_GRACE)
+			race_lobby_close();
+
+		return;
+	}
+
+	// An empty roster means there is nobody to wait on -- an all-observer
+	// game -- but only once we are out of the way ourselves: a roster that
+	// simply hasn't filled in yet must not release the grid before the
+	// player at the keyboard has even picked.
+	{
+		int nobody_to_wait_for = (total <= 0) && (Race_ready[Player_num] || is_observer());
+
+		if ((total > 0 && ready >= total) || nobody_to_wait_for ||
+			GameTime64 >= Race_lobby_deadline)
+			race_lobby_close();
+	}
+}
+
+//	-------------------------------------------------------------------------
 //	Level setup and per-frame update
 //	-------------------------------------------------------------------------
 
@@ -1284,6 +2619,19 @@ static void race_init_checkpoints(void)
 		Race_cp_center[Race_num_checkpoints].z = (fix)(sz / n);
 		Race_num_checkpoints++;
 	}
+}
+
+int race_checkpoint_segment(int cp)
+{
+	if (cp < 0 || cp >= Race_num_checkpoints || cp >= RACE_MAX_CHECKPOINTS)
+		return -1;
+
+	return Race_cp_segnum[cp];
+}
+
+int race_checkpoint_count(void)
+{
+	return Race_num_checkpoints;
 }
 
 int race_checkpoint_of_segment(int segnum)
@@ -1381,6 +2729,9 @@ void race_init_level(void)
 	race_init_checkpoints();
 	race_pick_finish();
 
+	if ((Game_mode & GM_MULTI) && Netgame.LapsToWin > 0)
+		Race_laps_to_win = Netgame.LapsToWin;
+
 	for (i = 0; i < MAX_PLAYERS; i++)
 	{
 		Race_player[i].checkpoints_hit = 0;
@@ -1396,6 +2747,9 @@ void race_init_level(void)
 	Race_cp_mask = 0;
 	Race_incomplete_next_warn = 0;
 	Race_respawn_segnum = -1;
+	Race_emp_started = Race_emp_until = 0;
+	Race_tractor_started = Race_tractor_until = 0;
+	Race_tractor_by = -1;
 
 	Race_next_place = 1;
 	Race_banner_until = 0;
@@ -1403,6 +2757,7 @@ void race_init_level(void)
 	Race_boost_started = 0;
 	Race_last_boost_seg = -1;
 	Race_last_seg_checked = -1;
+	Race_finish_grace_until = 0;
 	Race_next_state_send = 0;	// GameTime64 restarts each level; don't stall the broadcast
 	Race_start_time = 0;
 	Race_lap_start = 0;
@@ -1410,30 +2765,109 @@ void race_init_level(void)
 	Race_best_lap = 0;
 	Race_num_splits = 0;
 	Race_summary_pending = 0;
+	Race_trichord_strength = 0;
+	Race_trichord_charge = 0;
+	Race_trichord_boost_until = 0;
+	Race_trichord_blobs_lit = 0;
 
-	// The countdown runs on every race level, including ones with no
-	// checkpoints placed -- it is the start of the race, not a property of
-	// the track layout.
-	Race_countdown_timer = i2f(RACE_COUNTDOWN_SECONDS);
-	Race_counting_down = 1;
+	// The grid picks classes first; the countdown starts when the lobby
+	// closes (race_lobby_close()). It runs on every race level, including
+	// ones with no checkpoints placed -- it is the start of the race, not a
+	// property of the track layout.
+	Race_countdown_timer = 0;
+	Race_counting_down = 0;
 	Race_go_announced = 0;
+	Race_countdown_voice = -1;
+
+	for (i = 0; i < MAX_PLAYERS; i++)
+	{
+		Race_class[i] = RACE_CLASS_NONE;
+		Race_ready[i] = 0;
+	}
+
+	// Everyone comes to the line empty-handed: the class picked in the lobby
+	// is the entire loadout, and this runs after whatever the level start
+	// handed out.
+	for (i = 0; i < MAX_PLAYERS; i++)
+		race_strip_loadout(i);
+
+	memset(Race_secondary_refill_at, 0, sizeof(Race_secondary_refill_at));
+
+	Race_lobby_open = 1;
+	Race_lobby_deadline = GameTime64 + RACE_LOBBY_TIMEOUT;
+	Race_lobby_input_at = GameTime64 + RACE_LOBBY_INPUT_GRACE;
+	Race_lobby_next_resend = 0;
 
 	race_init_boxes();
 	race_init_labels();
 	race_init_items();
 	race_init_map();
 	race_build_map_outline();
+	race_bots_init();
+}
+
+// The static/interference cue for a live EMP: SOUND_BRIEFING_PRINTING
+// looped for as long as race_emp_strength() is nonzero, started the instant
+// it goes off and cut the instant it clears. Edge-triggered off strength
+// crossing zero rather than restarted every frame, so a nine-second EMP
+// doesn't retrigger its own loop every tick while it's running. Purely
+// local -- race_emp_strength() only reads nonzero for the player it
+// actually landed on, so nobody else hears somebody else's jam.
+static void race_update_emp_sound(void)
+{
+	static int playing = 0;
+	int active = race_emp_strength() > 0;
+
+	if (active && !playing)
+		digi_play_sample_looping(SOUND_BRIEFING_PRINTING, F1_0, -1, -1);
+	else if (!active && playing)
+		digi_stop_looping_sound();
+
+	playing = active;
 }
 
 void race_frame(void)
 {
+	race_update_emp_sound();
+
+	if (Race_lobby_open)
+	{
+		race_lobby_frame();
+
+		// Boxes and boost pads stay frozen behind the panel: nobody can move
+		// or shoot yet, and a box respawn timer running down here would just
+		// be time off the first lap.
+		return;
+	}
+
+	race_class_frame();
+
 	if (Race_counting_down)
 	{
+		int secs;
+
 		Race_countdown_timer -= FrameTime;
 		if (Race_countdown_timer <= 0)
 		{
 			Race_countdown_timer = 0;
 			Race_counting_down = 0;
+		}
+
+		// The start light is the reactor countdown's own voice, counting the
+		// grid down the same way it counts a mine out: SOUND_COUNTDOWN_0_SECS
+		// is the base of a run of clips, one per second (cntrlcen.c uses the
+		// same trick). Driven off the displayed second rather than off the
+		// timer, so the voice can never disagree with the number on screen --
+		// including on a client, whose clock is set by the host's state
+		// packet rather than ticked locally.
+		secs = race_countdown_seconds_left();
+
+		if (secs != Race_countdown_voice)
+		{
+			Race_countdown_voice = secs;
+
+			if (secs > 0)
+				digi_play_sample(SOUND_COUNTDOWN_0_SECS + secs, F3_0);
 		}
 	}
 
@@ -1443,6 +2877,26 @@ void race_frame(void)
 		Race_start_time = GameTime64;
 		Race_lap_start = GameTime64;
 		HUD_init_message_literal(HM_MULTI, "GO!");
+
+		// ...and the zero of that same run is the green light.
+		digi_play_sample(SOUND_COUNTDOWN_0_SECS, F3_0);
+
+		// The grid comes off the line stacked nose to tail (see
+		// race_bot_place()'s comment on BOT_GRID_SPACING), so the first
+		// corner is the one moment of the race everyone is guaranteed to be
+		// touching. A few seconds where nobody can be wrecked, plus the same
+		// push a boost pad gives, means that scrum costs a place rather than
+		// a respawn.
+		if (!is_observer() && ConsoleObject)
+		{
+			Players[Player_num].flags |= PLAYER_FLAGS_INVULNERABLE;
+			Players[Player_num].invulnerable_time = GameTime64 - INVULNERABLE_TIME_MAX + RACE_START_INVULN_TIME;
+
+			Race_boost_started = GameTime64;
+			Race_boost_until = GameTime64 + RACE_START_BOOST_TIME;
+		}
+
+		race_bots_start_race();
 	}
 
 	if (!is_observer() && !Player_is_dead && ConsoleObject && ConsoleObject->segnum >= 0 &&
@@ -1462,6 +2916,7 @@ void race_frame(void)
 	// one -- no stray weapon pickups lying about.
 	race_harvest_level_weapons();
 	race_items_frame();
+	race_bots_frame();
 }
 
 void race_format_time(char *buf, int bufsz, fix64 t)
@@ -1548,6 +3003,9 @@ void race_show_summary(void)
 
 	in_summary = 1;
 
+	con_printf(CON_NORMAL, "RACE: showing summary (Game_wind=%p visible=%d)\n",
+			   (void *)Game_wind, Game_wind ? window_is_visible(Game_wind) : -1);
+
 	// Hide the game window for the duration: the standings run their own
 	// event loop, and leaving the game drawing underneath both fights over
 	// the screen mode and re-enters the frame we were called from.
@@ -1565,6 +3023,8 @@ void race_show_summary(void)
 		kmatrix_view(race_is_multi() && (Game_mode & GM_NETWORK));
 		set_screen_mode(SCREEN_GAME);
 	}
+
+	con_printf(CON_NORMAL, "RACE: summary screen closed\n");
 
 	in_summary = 0;
 }
@@ -1642,6 +3102,24 @@ static void race_announce_finish(int pnum)
 		HUD_init_message(HM_MULTI, "%s has finished the race!", Players[pnum].callsign);
 }
 
+void race_finish_player(int pnum)
+{
+	race_player_info *rp;
+
+	if (pnum < 0 || pnum >= MAX_PLAYERS)
+		return;
+
+	rp = &Race_player[pnum];
+
+	if (rp->finished)
+		return;
+
+	rp->finished = 1;
+	rp->finish_time = GameTime64;
+	race_assign_place(pnum);
+	race_announce_finish(pnum);
+}
+
 void multi_do_race_update(const ubyte *buf)
 {
 	ubyte pnum = buf[1];
@@ -1681,7 +3159,7 @@ void multi_do_race_update(const ubyte *buf)
 // during the countdown (so every ship gets GO at the same moment) and every
 // couple of seconds afterwards, which is what heals dropped MULTI_RACE_UPDATE
 // packets and brings late joiners up to date.
-#define RACE_STATE_LEN	(2 + 3*MAX_PLAYERS)
+#define RACE_STATE_LEN	(3 + 4*MAX_PLAYERS)
 
 static void race_send_state(void)
 {
@@ -1696,13 +3174,17 @@ static void race_send_state(void)
 
 	multibuf[0] = MULTI_RACE_STATE;
 	multibuf[1] = (ubyte)decis;
-	count = 2;
+	multibuf[2] = (ubyte)(Race_lobby_open ? 1 : 0);
+	count = 3;
 
 	for (i = 0; i < MAX_PLAYERS; i++)
 	{
 		multibuf[count++] = Race_player[i].checkpoints_hit;
 		multibuf[count++] = Race_player[i].laps_completed;
 		multibuf[count++] = Race_player[i].finish_place;
+		// Classes ride along so a late joiner, or anyone who lost a ready
+		// packet, still scores everybody's damage the same way.
+		multibuf[count++] = (ubyte)Race_class[i];
 	}
 
 	multi_send_data(multibuf, RACE_STATE_LEN, Race_counting_down ? 2 : 0);
@@ -1718,9 +3200,10 @@ void race_multi_frame(void)
 
 	race_send_state();
 
-	// Tight cadence while counting down (the countdown is only 3 seconds and
-	// every client needs to agree on when it ends), lazy afterwards.
-	Race_next_state_send = GameTime64 + (Race_counting_down ? F1_0/4 : F1_0*2);
+	// Tight cadence while the grid is still forming or counting down (the
+	// countdown is only 3 seconds, and the lobby's release is what every
+	// client is sitting there waiting for), lazy once the race is running.
+	Race_next_state_send = GameTime64 + ((Race_counting_down || Race_lobby_open) ? F1_0/4 : F1_0*2);
 }
 
 void multi_do_race_state(const ubyte *buf)
@@ -1732,6 +3215,12 @@ void multi_do_race_state(const ubyte *buf)
 		return;
 
 	host_countdown = i2f(buf[1]) / 10;
+
+	// The host owns the moment the grid is released, so that every ship gets
+	// GO on the same frame rather than each client deciding for itself that
+	// the last ready packet has landed.
+	if (!buf[2] && Race_lobby_open)
+		race_lobby_close();
 
 	if (host_countdown > 0)
 	{
@@ -1745,16 +3234,23 @@ void multi_do_race_state(const ubyte *buf)
 		Race_countdown_timer = 0;
 	}
 
-	count = 2;
+	count = 3;
 	for (i = 0; i < MAX_PLAYERS; i++)
 	{
 		race_player_info *rp = &Race_player[i];
 		race_player_info incoming = *rp;
 		ubyte place;
+		int cls;
 
 		incoming.checkpoints_hit = buf[count++];
 		incoming.laps_completed = buf[count++];
 		place = buf[count++];
+		cls = (sbyte)buf[count++];
+
+		// Our own class is ours to know: we locked it in and told everyone,
+		// and the host's snapshot may predate that.
+		if (i != Player_num && cls >= 0 && cls < RACE_NUM_CLASSES)
+			Race_class[i] = (sbyte)cls;
 
 		if (incoming.checkpoints_hit > Race_num_checkpoints)
 			continue;
@@ -1858,6 +3354,21 @@ void race_check_checkpoint(segment *segp)
 	// checkpoint we just took.
 	if (segnum == Race_last_seg_checked)
 		return;
+
+	// A wide finish line spans several segments (race.h), and at race speed
+	// phys_seglist can walk two of them in one frame. Without this, the
+	// second segment re-enters the finish branch a moment after the first
+	// one already completed the lap and zeroed the checkpoint mask for the
+	// next one -- so it reads that fresh, empty mask as every checkpoint on
+	// the *new* lap having been skipped, and reports them all "missed"
+	// immediately after a clean crossing. Checkpoints don't need the same
+	// guard: Race_cp_mask already makes a repeat hit on one a no-op.
+	if (race_segment_is_finish(segnum) && race_segment_is_finish(Race_last_seg_checked))
+	{
+		Race_last_seg_checked = segnum;
+		return;
+	}
+
 	Race_last_seg_checked = segnum;
 
 	seg2p = &Segment2s[segnum];
@@ -1883,6 +3394,18 @@ void race_check_checkpoint(segment *segp)
 		char split[16];
 		int owed = race_checkpoints_owed();
 
+		// A crossing just went through, and Race_cp_mask is reset the
+		// instant it does -- so a ship that lingers on the line (slowing to
+		// turn, wobbling at the wall, or just drifting back through the
+		// segment for a frame while peeling off onto the route) reads as a
+		// second, fresh crossing with none of the new lap's checkpoints hit
+		// yet, and gets told it skipped all of them. The dedup two lines up
+		// only catches this within a single frame's phys_seglist walk; a
+		// wobble spread over a couple of frames still slips through it,
+		// which is what this grace window is for.
+		if (GameTime64 < Race_finish_grace_until)
+			return;
+
 		// Driving off the grid crosses the line before a lap has been run, so
 		// that first crossing only starts the clock. Once the field is
 		// moving, the line closes a lap -- but only when every other
@@ -1893,6 +3416,7 @@ void race_check_checkpoint(segment *segp)
 			rp->has_checkpoint = 1;
 			Race_respawn_segnum = segnum;
 			Race_lap_start = GameTime64;
+			Race_finish_grace_until = GameTime64 + RACE_FINISH_GRACE_TIME;
 			return;
 		}
 
@@ -1919,6 +3443,7 @@ void race_check_checkpoint(segment *segp)
 		rp->laps_completed++;
 		rp->checkpoints_hit = 0;
 		Race_cp_mask = 0;
+		Race_finish_grace_until = GameTime64 + RACE_FINISH_GRACE_TIME;
 
 		race_format_time(split, sizeof(split), GameTime64 - Race_lap_start);
 		race_record_lap();
@@ -1931,6 +3456,7 @@ void race_check_checkpoint(segment *segp)
 			race_assign_place(Player_num);
 			race_show_banner("FINISH!", RACE_BANNER_FINISH);
 			Race_summary_pending = 1;
+			con_printf(CON_NORMAL, "RACE: local player finished, summary pending\n");
 		}
 		else
 		{
@@ -1999,6 +3525,50 @@ static int race_nearest_owed_checkpoint_seg(const vms_vector *from)
 	return best_seg;
 }
 
+// Every player slot sits on its own fixed point around a ring centred on
+// the respawn point, so two racers who both last touched the same
+// checkpoint don't land inside each other -- see race_get_respawn() and
+// race_bot_place(). Riding *orient's own rvec/uvec rather than a world axis
+// keeps the spread crosswise to the tube (the way BOT_LANE_SPACING already
+// keeps the starting grid crosswise) instead of along it, whichever way the
+// track happens to be facing here. Not a collision query against the
+// geometry or against who else is actually there -- just enough of a fixed
+// deal-out that two ships sharing a checkpoint stop being a coin flip on
+// whether they wreck each other on arrival. pnum 0 stays dead centre, since
+// there is nothing to spread a field of one away from.
+//
+// *segnum is trusted by the caller for an unchecked obj_relink() (see
+// gameseq.c), so the offset is only kept if find_point_seg() can confirm it
+// landed somewhere real -- a checkpoint too narrow for the full spread would
+// otherwise put a slot's position on one side of a wall and its segment on
+// the other. Falls back to the unmoved centre rather than risk that.
+#define RACE_RESPAWN_SPREAD i2f(7)
+
+void race_spread_respawn(vms_vector *pos, const vms_matrix *orient, int pnum, int *segnum)
+{
+	fix angle_16, s, c;
+	vms_vector spread;
+	int seg;
+
+	if (pnum <= 0 || pnum >= MAX_PLAYERS)
+		return;
+
+	angle_16 = (fix)(((long)pnum * 0x10000L) / MAX_PLAYERS) & 0xffff;
+	fix_fastsincos(angle_16, &s, &c);
+
+	spread = *pos;
+	vm_vec_scale_add2(&spread, &orient->rvec, fixmul(RACE_RESPAWN_SPREAD, c));
+	vm_vec_scale_add2(&spread, &orient->uvec, fixmul(RACE_RESPAWN_SPREAD, s));
+
+	seg = find_point_seg(&spread, *segnum);
+
+	if (seg < 0)
+		return;			// too tight a fit here -- stay put rather than end up outside the world
+
+	*pos = spread;
+	*segnum = seg;
+}
+
 int race_get_respawn(vms_vector *pos, vms_matrix *orient, int *segnum)
 {
 	race_player_info *rp = &Race_player[Player_num];
@@ -2015,22 +3585,38 @@ int race_get_respawn(vms_vector *pos, vms_matrix *orient, int *segnum)
 	*segnum = seg;
 	*orient = vmd_identity_matrix;
 
-	// Face the checkpoint they are heading for next, so a respawn doesn't
-	// dump them into the track pointing at a wall.
-	next_seg = race_nearest_owed_checkpoint_seg(&center);
-	if (!rp->finished && next_seg >= 0)
+	// Point them down the road. The lap route knows which way the track
+	// actually runs here, so ask it first: aiming at the next checkpoint is a
+	// straight line to a segment that may well be behind a wall, or reached by
+	// going the other way round, which is how a respawn ends up facing
+	// backwards on a track that doubles back on itself.
 	{
-		if (next_seg >= 0 && next_seg <= Highest_segment_index)
-		{
-			vms_vector next_center, fvec;
+		vms_vector fvec;
 
-			compute_segment_center(&next_center, &Segments[next_seg]);
-			vm_vec_sub(&fvec, &next_center, &center);
-			if (fvec.x || fvec.y || fvec.z)
-				vm_vector_2_matrix(orient, &fvec, NULL, NULL);
+		if (race_route_direction(&center, &fvec))
+		{
+			vm_vector_2_matrix(orient, &fvec, NULL, NULL);
+			race_spread_respawn(pos, orient, Player_num, segnum);
+			return 1;
 		}
 	}
 
+	// No route on this track: fall back to aiming at whatever checkpoint they
+	// still owe. Rough, but better than dropping them in facing a wall.
+	next_seg = race_nearest_owed_checkpoint_seg(&center);
+
+	if (!rp->finished && next_seg >= 0 && next_seg <= Highest_segment_index)
+	{
+		vms_vector next_center, fvec;
+
+		compute_segment_center(&next_center, &Segments[next_seg]);
+		vm_vec_sub(&fvec, &next_center, &center);
+
+		if (fvec.x || fvec.y || fvec.z)
+			vm_vector_2_matrix(orient, &fvec, NULL, NULL);
+	}
+
+	race_spread_respawn(pos, orient, Player_num, segnum);
 	return 1;
 }
 
@@ -2049,6 +3635,16 @@ static fix race_dist_to_owed(int pnum)
 	int objnum = Players[pnum].objnum;
 	int seg;
 	vms_vector center;
+	fix bot_dist;
+
+	// A bot keeps its own checkpoint set, so it can answer this exactly. For
+	// everyone else the outstanding set below is the local player's, which
+	// makes this an estimate -- fine, it is only a tiebreak between two
+	// racers on the same checkpoint count.
+	bot_dist = race_bot_dist_to_next(pnum);
+
+	if (bot_dist >= 0)
+		return bot_dist;
 
 	if (objnum < 0 || objnum > Highest_object_index)
 		return 0;
@@ -2068,7 +3664,8 @@ typedef struct race_rank_entry {
 	int		place;			// host-assigned finishing order; 0 if unknown
 	fix64	finish_time;
 	int		progress;		// laps*checkpoints + checkpoints_hit; higher = further along
-	fix		dist_to_next;	// tiebreak for players between the same two checkpoints
+	int		route;			// how far round the lap route; higher = further along, -1 = unknown
+	fix		dist_to_next;	// last-resort tiebreak, when there is no route to read
 } race_rank_entry;
 
 static int race_rank_cmp(const void *a, const void *b)
@@ -2094,6 +3691,16 @@ static int race_rank_cmp(const void *a, const void *b)
 	if (ra->progress != rb->progress)
 		return rb->progress - ra->progress;
 
+	// Same checkpoint count, so split them on where they actually are round
+	// the lap. Checkpoints are a set and can be taken in any order, which
+	// means two racers on the same count can be most of a lap apart -- and
+	// "whose next checkpoint is nearer" then reads them in whatever order
+	// their outstanding sets happen to fall, which is the wobble in the
+	// standings. The route index is one ordered walk of the track, so it
+	// answers the question properly whenever there is a route to read.
+	if (ra->route >= 0 && rb->route >= 0 && ra->route != rb->route)
+		return rb->route - ra->route;
+
 	if (ra->dist_to_next != rb->dist_to_next)
 		return (ra->dist_to_next < rb->dist_to_next) ? -1 : 1;
 
@@ -2117,6 +3724,7 @@ int race_get_positions(int *sorted)
 		entries[i].place = rp->finish_place;
 		entries[i].finish_time = rp->finish_time;
 		entries[i].progress = race_progress_of(rp);
+		entries[i].route = rp->finished ? -1 : race_route_progress(i);
 		entries[i].dist_to_next = rp->finished ? 0 : race_dist_to_owed(i);
 	}
 
@@ -2139,6 +3747,267 @@ int race_get_rank(int pnum)
 			return i + 1;
 
 	return 0;
+}
+
+//	-------------------------------------------------------------------------
+//	Earthshaker targeting
+//	-------------------------------------------------------------------------
+
+// A shaker is the heaviest thing in the loot table and it is weighted at the
+// back of the field, so in a race it is the catch-up weapon. Homing on the
+// nearest ship made it a weapon against whoever happened to be alongside --
+// usually another back-marker. Here it always flies at whoever is leading.
+//
+// If the leader is the one who fired it, it takes the next player down the
+// order instead: a missile that turned round on its own launcher would just
+// be a way to lose the race.
+int race_homing_target(const object *tracker)
+{
+	// One shaker bursts into a cloud of blobs and every one of them asks this
+	// question on every frame, so the standings are worked out once a frame
+	// and shared -- ranking walks every player's outstanding checkpoints.
+	static fix64 ranked_at = 0;
+	static int sorted[MAX_PLAYERS];
+	static int ranked_n = 0;
+	int n, i, parent = -1;
+
+	if (!(Game_mode & GM_RACE) || !tracker || tracker->type != OBJ_WEAPON)
+		return -1;
+
+	// The missile itself and the mega blobs it bursts into, so the whole
+	// spread converges on the leader rather than scattering to the nearest.
+	if (tracker->id != EARTHSHAKER_ID && tracker->id != EARTHSHAKER_MEGA_ID)
+		return -1;
+
+	if (tracker->ctype.laser_info.parent_type == OBJ_PLAYER)
+		parent = tracker->ctype.laser_info.parent_num;
+
+	// Whoever fired it is out of the running whatever the standings say, and
+	// so is anything else the engine considers related to it (create_smart_
+	// children hands the burst the missile's own parent, but a chain that has
+	// been through a recycled object slot can still come back wrong). A
+	// missile that turns round on its own launcher is not a catch-up weapon,
+	// it is a way to lose the race.
+	if (parent >= 0 && parent <= Highest_object_index &&
+		Objects[parent].signature != tracker->ctype.laser_info.parent_signature)
+		parent = -1;
+
+	if (!ranked_at || ranked_at != GameTime64)
+	{
+		ranked_n = race_get_positions(sorted);
+		ranked_at = GameTime64;
+	}
+
+	n = ranked_n;
+
+	for (i = 0; i < n; i++)
+	{
+		int pnum = sorted[i];
+		int objnum;
+
+		if (pnum < 0 || pnum >= MAX_PLAYERS)
+			continue;
+
+		if ((Game_mode & GM_MULTI) && Players[pnum].connected != CONNECT_PLAYING)
+			continue;
+
+		objnum = Players[pnum].objnum;
+
+		if (objnum < 0 || objnum > Highest_object_index)
+			continue;
+		if (objnum == parent)
+			continue;			// the leader fired it; take the next one down
+		if (laser_are_related(tracker - Objects, objnum))
+			continue;			// ...and never anything else it came out of
+		if (Objects[objnum].type != OBJ_PLAYER)
+			continue;
+		if (Objects[objnum].flags & OF_SHOULD_BE_DEAD)
+			continue;
+		if (object_is_observer(&Objects[objnum]))
+			continue;
+
+		return objnum;
+	}
+
+	return -1;
+}
+
+// -------------------------------------------------------------------------
+// Earthshaker corridor steering
+// -------------------------------------------------------------------------
+//
+// race_homing_target() above picks *who* to aim at; this decides *where in
+// space* to point the missile so it actually gets there. Steering straight
+// at the leader's position made a shaker that turned a corner just fly into
+// the wall at the corner -- and detonate on whoever else was standing near
+// it, not on the leader it was chasing. Routed through the same BFS
+// segment-graph pathfinder the racebots steer their own laps with
+// (aipath.c's create_path_points -- see racebot.c's race_route_path() for
+// the pattern this follows).
+//
+// Unlike racebot.c, which builds each leg's path once at level load and
+// keeps it for the whole race, a shaker's path has to be built live: the
+// leader it's chasing keeps moving, and there's no way to know in advance
+// which segment a missile will be fired from. create_path_points does an
+// O(segment count) BFS over a several-thousand-segment level and stack-
+// allocates megabyte-scale visited/queue arrays to do it, so it is not
+// something to call every frame for every blob in an earthshaker burst --
+// it's cached per missile here and only rebuilt when it goes stale.
+#define RACE_SHAKER_PATH_SLOTS   16
+#define RACE_SHAKER_PATH_REFRESH (F1_0 * 2)   // how long a cached path is trusted
+#define RACE_SHAKER_ARRIVE_DIST  (F1_0 * 20)  // close enough to a waypoint to advance past it
+
+// create_path_points() can return max_depth + 1 points (the segment at the
+// depth cap plus the start segment) -- a buffer sized exactly
+// MAX_SEGMENTS_PER_PATH is one short. Learned the hard way: sized exactly
+// to MAX_SEGMENTS_PER_PATH with safety_flag set (see race_shaker_aim_point())
+// wrote past the end of this array and corrupted the stack.
+#define RACE_SHAKER_PATH_CAPACITY (MAX_SEGMENTS_PER_PATH + 1)
+
+typedef struct {
+	int         signature;      // 0 == slot free
+	fix64       computed_at;
+	short       target_seg;
+	short       n;
+	short       idx;
+	point_seg   pts[RACE_SHAKER_PATH_CAPACITY];
+} race_shaker_path;
+
+static race_shaker_path Race_shaker_paths[RACE_SHAKER_PATH_SLOTS];
+
+// The slot for missile `signature` -- its own if it already has one, an
+// empty one, or (the burst is bigger than RACE_SHAKER_PATH_SLOTS) whichever
+// slot was computed longest ago. Never fails: worst case a fast-moving
+// burst thrashes slots and some blobs re-path more often than
+// RACE_SHAKER_PATH_REFRESH would otherwise call for.
+static race_shaker_path *race_shaker_path_slot(int signature)
+{
+	int i, oldest = 0;
+	fix64 oldest_time = Race_shaker_paths[0].computed_at;
+
+	for (i = 0; i < RACE_SHAKER_PATH_SLOTS; i++)
+	{
+		if (Race_shaker_paths[i].signature == signature || !Race_shaker_paths[i].signature)
+			return &Race_shaker_paths[i];
+
+		if (Race_shaker_paths[i].computed_at < oldest_time)
+		{
+			oldest_time = Race_shaker_paths[i].computed_at;
+			oldest = i;
+		}
+	}
+
+	return &Race_shaker_paths[oldest];
+}
+
+// Fills *aim with the next waypoint the cached (or freshly built) path says
+// to steer at, advancing past any waypoint already reached. Returns 0 and
+// leaves *aim alone when no path exists -- an unreachable target, or the
+// pathfinder came back empty -- so the caller can fall back to aiming
+// straight at the target, same as before this existed.
+static int race_shaker_aim_point(object *tracker, int target_objnum, vms_vector *aim)
+{
+	race_shaker_path *p;
+	object *target = &Objects[target_objnum];
+	point_seg local_pts[RACE_SHAKER_PATH_CAPACITY];
+	short n;
+
+	if (tracker->segnum < 0 || target->segnum < 0)
+		return 0;
+
+	p = race_shaker_path_slot(tracker->signature);
+
+	// Rebuild when this slot belongs to a different missile (evicted or
+	// never claimed), the cached path has gone stale, or the leader has
+	// moved into a different segment than the path was built for -- a path
+	// to where they used to be just walks the missile into the wall they
+	// turned behind.
+	if (p->signature != tracker->signature ||
+		!p->computed_at || GameTime64 - p->computed_at > RACE_SHAKER_PATH_REFRESH ||
+		p->target_seg != target->segnum)
+	{
+		// safety_flag off: it tells create_path_points() to splice extra
+		// midpoints in after the fact (insert_center_points()), and that
+		// function's own overflow guard only checks room in the engine's
+		// shared Point_segs pool -- not a caller-supplied buffer like this
+		// one, which is what let it write past the end of a fixed-size
+		// array here. Not needed anyway: that's for a robot physically
+		// steering along the path, not for picking a waypoint to aim a
+		// missile at.
+		if (create_path_points(tracker, tracker->segnum, target->segnum,
+								local_pts, &n, MAX_SEGMENTS_PER_PATH, 0, 0, -1) == -1 ||
+			n < 1)
+		{
+			p->signature = 0;		// give the slot back; nothing to cache
+			return 0;
+		}
+
+		// Belt and suspenders against the buffer this actually filled: even
+		// with safety_flag off, don't trust n past what local_pts can hold.
+		if (n > RACE_SHAKER_PATH_CAPACITY)
+			n = RACE_SHAKER_PATH_CAPACITY;
+
+		p->signature = tracker->signature;
+		p->computed_at = GameTime64;
+		p->target_seg = target->segnum;
+		p->n = n;
+		p->idx = 0;
+		memcpy(p->pts, local_pts, n * sizeof(point_seg));
+	}
+
+	while (p->idx < p->n - 1 &&
+		   vm_vec_dist_quick(&tracker->pos, &p->pts[p->idx].point) < RACE_SHAKER_ARRIVE_DIST)
+		p->idx++;
+
+	*aim = p->pts[p->idx].point;
+	return 1;
+}
+
+void race_homing_aim_point(object *tracker, int target_objnum, vms_vector *aim)
+{
+	*aim = Objects[target_objnum].pos;
+
+	if (target_objnum < 0 || target_objnum > Highest_object_index)
+		return;
+
+	race_shaker_aim_point(tracker, target_objnum, aim);
+}
+
+// How fast a weapon is allowed to fly. Stock everywhere except a homing
+// missile in a race: a homer's whole job is to run down a ship that is already
+// flat out, and at stock speed it spends most of its short life trailing the
+// racer it was fired at and expiring behind them. The one weapon class that
+// exists to catch somebody gets the speed to actually do it.
+//
+// Applied at the call sites in laser.c rather than by editing Weapon_info,
+// which is shared game data and would leak the change into every other mode.
+fix race_weapon_speed(int weapon_id)
+{
+	fix speed;
+
+	if (weapon_id < 0 || weapon_id >= MAX_WEAPON_TYPES)
+		return 0;
+
+	speed = Weapon_info[weapon_id].speed[Difficulty_level];
+
+	if (!(Game_mode & GM_RACE))
+		return speed;
+
+	// The shaker is included even though the HAM never marked it as a homer,
+	// because race mode flies it as one -- see race_force_homing().
+	if (!Weapon_info[weapon_id].homing_flag && weapon_id != EARTHSHAKER_ID)
+		return speed;
+
+	return fixmul(speed, RACE_HOMING_SPEED);
+}
+
+// The HAM does not mark the shaker itself as a homer -- only the blobs it
+// bursts into -- so in race mode the missile is flown by the homing code
+// anyway. Everywhere else it flies exactly as it always has.
+int race_force_homing(const object *obj)
+{
+	return (Game_mode & GM_RACE) && obj && obj->type == OBJ_WEAPON &&
+		obj->id == EARTHSHAKER_ID;
 }
 
 int race_get_banner(char *buf, int bufsz, int *style)
