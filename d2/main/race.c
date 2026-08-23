@@ -426,19 +426,26 @@ static void race_add_item(int wclass, int index, int weight_front, int weight_ba
 	Race_num_items++;
 }
 
+// How many racers are actually on the grid: the bot field's size outside a
+// netgame (a bot field is a field -- the rubber band and the shaker's "is
+// anyone ahead" both care about the grid, not about whether this happens to
+// be a netgame), otherwise the connected player count minus an observing
+// host. Shared by race_catchup_factor_for() and race_has_someone_ahead(),
+// which both used to compute this the same way independently.
+static int race_field_size(void)
+{
+	if (!(Game_mode & GM_MULTI))
+		return race_bot_field_size();
+
+	return N_players - (Netgame.host_is_obs ? 1 : 0);
+}
+
 // Where the local player is in the field, as 0 (leading) to F1_0 (last).
 // Everything that rubber-bands reads this. A one-player race is always 0:
 // there is nobody to catch.
 static fix race_catchup_factor_for(int pnum)
 {
-	int rank, field;
-
-	// A bot field is a field: the rubber band is the whole point of racing
-	// one, so it reads the grid size rather than whether this is a netgame.
-	if (!(Game_mode & GM_MULTI))
-		field = race_bot_field_size();
-	else
-		field = N_players - (Netgame.host_is_obs ? 1 : 0);
+	int rank, field = race_field_size();
 
 	if (field < 2)
 		return 0;
@@ -499,19 +506,10 @@ int race_powerup_allowed(int powerup_id)
 // at nobody at all, so it simply is not offered to them.
 static int race_has_someone_ahead(int pnum)
 {
-	int field, rank;
-
-	if (!(Game_mode & GM_MULTI))
-		field = race_bot_field_size();
-	else
-		field = N_players - (Netgame.host_is_obs ? 1 : 0);
-
-	if (field < 2)
+	if (race_field_size() < 2)
 		return 0;
 
-	rank = race_get_rank(pnum);
-
-	return rank > 1;
+	return race_get_rank(pnum) > 1;
 }
 
 static int race_item_allowed_for(const race_item *item, const race_class_info *ci, int pnum)
@@ -3135,7 +3133,10 @@ void multi_do_race_update(const ubyte *buf)
 	incoming.checkpoints_hit = buf[2];
 	incoming.laps_completed = buf[3];
 
-	if (incoming.checkpoints_hit > Race_num_checkpoints)
+	// See the identical guard in multi_do_race_state(): an out-of-range
+	// laps_completed off the wire otherwise reads as always-ahead progress.
+	if (incoming.checkpoints_hit > Race_num_checkpoints ||
+		incoming.laps_completed > Race_laps_to_win)
 		return;		// malformed / stale packet for this level
 
 	// Progress only ever moves forward, so a reordered or duplicated packet
@@ -3252,7 +3253,15 @@ void multi_do_race_state(const ubyte *buf)
 		if (i != Player_num && cls >= 0 && cls < RACE_NUM_CLASSES)
 			Race_class[i] = (sbyte)cls;
 
-		if (incoming.checkpoints_hit > Race_num_checkpoints)
+		// A snapshot with either field out of range can't be a real racer's
+		// progress -- checkpoints_hit is bounded by the track, and nobody
+		// can be more laps in than the race is long. Without this a bad or
+		// malicious sender (an untrusted ubyte off the wire) sets
+		// laps_completed to whatever it wants and race_progress_of() below
+		// takes it as always ahead, corrupting this racer's standing (and
+		// HUD lap count) for every other client for the rest of the race.
+		if (incoming.checkpoints_hit > Race_num_checkpoints ||
+			incoming.laps_completed > Race_laps_to_win)
 			continue;
 
 		// Never rewind: our own progress (and anything we already heard

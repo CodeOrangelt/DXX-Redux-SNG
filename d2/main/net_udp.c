@@ -4050,7 +4050,12 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		Netgame.StaticHelix = data[len]; len++;
 		Netgame.StaticPhoenix = data[len]; len++;
 		Netgame.StaticOmega = data[len]; len++;
-		Netgame.LapsToWin = data[len];							len++;
+		// Clamped to the range the laps slider can actually produce
+		// (net_udp_more_game_options(): 1-10, 0 meaning "use the default"):
+		// this is an unauthenticated UDP reply, and an out-of-range value
+		// otherwise reaches the options menu's slider with an out-of-range
+		// initial `value`.
+		Netgame.LapsToWin = min(data[len], 10);					len++;
 		Netgame.team_color[0] = data[len];						len++;
 		Netgame.team_color[1] = data[len];						len++;
 
