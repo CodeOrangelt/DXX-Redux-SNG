@@ -7756,7 +7756,7 @@ void net_udp_process_mdata (ubyte *data, int data_len, struct _sockaddr sender_a
 	// Add needack packet and check for possible redundancy
 	if (needack)
 	{
-		if (!net_udp_noloss_validate_mdata(GET_INTEL_SHORT(&data[6]), pnum, sender_addr))
+		if (!net_udp_noloss_validate_mdata(GET_INTEL_INT(&data[6]), pnum, sender_addr))
 			return;
 	}
 
@@ -7781,7 +7781,7 @@ void net_udp_process_mdata (ubyte *data, int data_len, struct _sockaddr sender_a
 
 			if (needack && N_players > 2)
 			{
-				net_udp_noloss_add_queue_pkt(GET_INTEL_SHORT(&data[6]), timer_query(), data+dataoffset, data_len-dataoffset, pnum, pack);
+				net_udp_noloss_add_queue_pkt(GET_INTEL_INT(&data[6]), timer_query(), data+dataoffset, data_len-dataoffset, pnum, pack);
 			}
 		}
 	}
