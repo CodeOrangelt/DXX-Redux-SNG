@@ -56,6 +56,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #endif
 #include "args.h"
 #include "race.h"
+#include "survival.h"
 
 #define INITIAL_LOCAL_LIGHT (F1_0/4)    // local light value in segment of occurence (of light emission)
 
@@ -637,6 +638,7 @@ void do_render_object(int objnum, int window_num)
 	#ifdef EDITOR
 	int save_3d_outline=0;
 	#endif
+	int survival_outline = 0, save_survival_outline = 0, save_survival_outline_color = -1;
 	object *obj = &Objects[objnum];
 	int count = 0;
 	int n;
@@ -694,6 +696,20 @@ void do_render_object(int objnum, int window_num)
 	}
 	#endif
 
+	// Survival's elite robots wear a 3D outline colored by kind (survival_robot_elite_color()).
+	// Set around render_object() only, and restored immediately after, so it cannot leak onto the
+	// attached explosion objects rendered below it or onto whatever the caller draws next.
+	{
+		int elite_kind = survival_robot_is_elite(objnum);
+		if (elite_kind) {
+			survival_outline = 1;
+			save_survival_outline_color = g3d_interp_outline_color;
+			save_survival_outline = g3d_interp_outline;
+			g3d_interp_outline = 1;
+			g3d_interp_outline_color = survival_robot_elite_color(elite_kind);
+		}
+	}
+
 	#ifdef EDITOR
 	if (_search_mode)
 		render_object_search(obj);
@@ -701,6 +717,11 @@ void do_render_object(int objnum, int window_num)
 	#endif
 		//NOTE LINK TO ABOVE
 		render_object(obj);
+
+	if (survival_outline) {
+		g3d_interp_outline = save_survival_outline;
+		g3d_interp_outline_color = save_survival_outline_color;
+	}
 
 	for (n=obj->attached_obj;n!=-1;n=Objects[n].ctype.expl_info.next_attach) {
 

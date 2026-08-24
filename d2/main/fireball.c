@@ -57,6 +57,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "gameseg.h"
 #include "automap.h"
 #include "byteswap.h"
+#include "survival.h"
 
 #define EXPLOSION_SCALE (F1_0*5/2)		//explosion is the obj size times this 
 
@@ -1357,9 +1358,13 @@ void do_explosion_sequence(object *obj)
 
 		vclip_num = get_explosion_vclip(del_obj,1);
 
-		if (del_obj->type == OBJ_ROBOT && Robot_info[del_obj->id].badass)
-			expl_obj = object_create_badass_explosion( del_obj, del_obj->segnum, spawn_pos, fixmul(del_obj->size, EXPLOSION_SCALE), vclip_num, F1_0*Robot_info[del_obj->id].badass, i2f(4)*Robot_info[del_obj->id].badass, i2f(35)*Robot_info[del_obj->id].badass, -1 );
-		else
+		if (del_obj->type == OBJ_ROBOT && Robot_info[del_obj->id].badass) {
+			fix kamikaze_scale = survival_kamikaze_badass_scale(del_obj->id);
+			expl_obj = object_create_badass_explosion( del_obj, del_obj->segnum, spawn_pos, fixmul(del_obj->size, EXPLOSION_SCALE), vclip_num,
+				fixmul(F1_0*Robot_info[del_obj->id].badass, kamikaze_scale),
+				fixmul(i2f(4)*Robot_info[del_obj->id].badass, kamikaze_scale),
+				fixmul(i2f(35)*Robot_info[del_obj->id].badass, kamikaze_scale), -1 );
+		} else
 			expl_obj = object_create_explosion( del_obj->segnum, spawn_pos, fixmul(del_obj->size, EXPLOSION_SCALE), vclip_num );
 
 		if ((del_obj->contains_count > 0) && !(Game_mode & GM_MULTI)) { // Multiplayer handled outside of this code!!

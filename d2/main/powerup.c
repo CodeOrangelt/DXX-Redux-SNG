@@ -42,6 +42,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "laser.h"
 #include "scores.h"
 #include "multi.h"
+#include "survival.h"
 #include "lighting.h"
 #include "controls.h"
 #include "kconfig.h"
@@ -295,6 +296,13 @@ int do_powerup(object *obj)
 	switch (obj->id) {
 		case POW_EXTRA_LIFE:
 			Players[Player_num].lives++;
+#ifdef NETWORK
+			// Survival drops these as rare robot loot and gives them a
+			// meaning multiplayer otherwise doesn't have: one banked
+			// self-revive, spent automatically on the next death instead of
+			// going down for the wave. No-op in every other mode.
+			survival_add_extra_life();
+#endif
 			powerup_basic(15, 15, 15, 0, "%s", TXT_EXTRA_LIFE);
 			used=1;
 			break;

@@ -44,6 +44,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "multi.h"
 #include "endlevel.h"
 #include "race.h"
+#include "survival.h"
 #include "cntrlcen.h"
 #include "powerup.h"
 #include "laser.h"
@@ -589,6 +590,20 @@ void game_draw_hud_stuff()
 
 	if (Newdemo_state == ND_STATE_PLAYBACK)
 		Game_mode = GM_NORMAL | (Game_mode & GM_OBSERVER);
+
+	// Survival - HP bar under any currently-alive boss robot.
+	show_survival_boss_bars();
+
+	// Survival - shield-count readout under each elite robot's model.
+	survival_draw_elite_labels();
+
+	// Survival - floating "+points" over each kill, and the arrow that
+	// points at the nearest robot. Same post-3D pass as the boss bars,
+	// since both project world positions into screen space.
+	survival_draw_kill_feedback();
+
+	// Survival - the periodic shop panel and its countdown.
+	survival_shop_draw();
 
 	if ( Player_is_dead )
 		player_dead_message();

@@ -7312,7 +7312,7 @@ void net_udp_noloss_obs_add_queue_pkt(uint32_t pkt_num, fix64 time, ubyte *data,
 int net_udp_noloss_validate_mdata(uint32_t pkt_num, ubyte sender_pnum, struct _sockaddr sender_addr)
 {
 	ubyte buf[7];
-	int i = 0, len = 0;
+	int i = 0, len = 0; 
 
 	// Check if this comes from a valid IP
 	/*
