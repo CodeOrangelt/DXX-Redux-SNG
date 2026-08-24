@@ -577,9 +577,8 @@ static const int Survival_weapon_types[] = {
 	POW_PROXIMITY_WEAPON,
 	POW_SMARTBOMB_WEAPON,
 	POW_MEGA_WEAPON,
-	// Situational
-	POW_CLOAK,
-	POW_INVULNERABILITY,
+	// Situational (POW_CLOAK, POW_INVULNERABILITY) deliberately not here --
+	// see SURVIVAL_SITUATIONAL_DROP_PERMILLE, survival.h.
 };
 #define SURVIVAL_NUM_WEAPON_TYPES (sizeof(Survival_weapon_types) / sizeof(Survival_weapon_types[0]))
 
@@ -1523,12 +1522,13 @@ static void survival_drop_one(object *del_obj, int powerup_id)
 }
 
 // Robot death drops, called from multi_drop_robot_powerups() in place of the
-// stock contains_prob path. Three *independent* rolls, deliberately: a weapon
-// roll, a sustain (shield/energy/ammo) roll, and a rare extra-life roll. They
-// don't share a budget, so a robot can drop any combination or nothing, and a
-// run of weapon drops never means you go without shields.
+// stock contains_prob path. Four *independent* rolls, deliberately: a weapon
+// roll, a sustain (shield/energy/ammo) roll, a rare situational (cloak/invuln)
+// roll, and a rare extra-life roll. They don't share a budget, so a robot can
+// drop any combination or nothing, and a run of weapon drops never means you
+// go without shields.
 //
-// All three are rolled up front, before anything is dropped, and that ordering
+// All four are rolled up front, before anything is dropped, and that ordering
 // is load-bearing: dropping a powerup calls d_srand(1245L) (the engine's
 // fixed seed that keeps egg drops identical on every machine) and then burns
 // a known number of d_rand() calls inside drop_powerup(). Any roll made after
@@ -1537,14 +1537,15 @@ static void survival_drop_one(object *del_obj, int powerup_id)
 // supply drop effectively unconditional rather than the intended percentage.
 void survival_robot_drops(object *del_obj)
 {
-	int drop_weapon, drop_supply, drop_extra_life;
-	int weapon_id = -1, supply_id = -1;
+	int drop_weapon, drop_supply, drop_situational, drop_extra_life;
+	int weapon_id = -1, supply_id = -1, situational_id = -1;
 
 	if (Netgame.gamemode != NETGAME_SURVIVAL)
 		return;
 
 	drop_weapon = ((d_rand() * 100) >> 15) < SURVIVAL_WEAPON_DROP_PCT;
 	drop_supply = ((d_rand() * 100) >> 15) < SURVIVAL_SUPPLY_DROP_PCT;
+	drop_situational = ((d_rand() * 1000) >> 15) < SURVIVAL_SITUATIONAL_DROP_PERMILLE;
 	drop_extra_life = ((d_rand() * 1000) >> 15) < SURVIVAL_EXTRA_LIFE_DROP_PERMILLE;
 
 	// A boss is the reward wave: killing one always pays out a life, on top
@@ -1557,12 +1558,17 @@ void survival_robot_drops(object *del_obj)
 		weapon_id = survival_random_weapon_type();
 	if (drop_supply)
 		supply_id = survival_random_ammo_type();
+	if (drop_situational)
+		situational_id = (d_rand() & 1) ? POW_CLOAK : POW_INVULNERABILITY;
 
 	if (drop_weapon)
 		survival_drop_one(del_obj, weapon_id);
 
 	if (drop_supply)
 		survival_drop_one(del_obj, supply_id);
+
+	if (drop_situational)
+		survival_drop_one(del_obj, situational_id);
 
 	// By far the rarest: a free revive. It survives the engine's usual
 	// "extra lives are meaningless in multiplayer, turn them into
