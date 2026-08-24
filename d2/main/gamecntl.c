@@ -80,6 +80,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #include "multi.h"
 #include "race.h"
+#include "survival.h"
 #include "cntrlcen.h"
 #include "fuelcen.h"
 #include "pcx.h"
@@ -2037,6 +2038,17 @@ int ReadControls(d_event *event)
 		// the whole keyboard.
 		if (race_lobby_handle_key(key))
 			return 1;
+
+		if ( (Game_mode & GM_MULTI) && survival_shop_blocks_input() )
+		{
+			// Menu takes priority: every key is swallowed here regardless of
+			// what survival_shop_handle_key() actually does with it (it may
+			// have nothing left to do once the local player's readied up --
+			// see its comment), same as multi_message_input_sub() above
+			// unconditionally owning the keyboard while chat is open.
+			survival_shop_handle_key(key);
+			return 1;
+		}
 #endif
 
 #ifndef RELEASE
@@ -2091,6 +2103,13 @@ int ReadControls(d_event *event)
 	// The class picker takes priority over that spawn-preview override too:
 	// nothing on the grid flies, turns or fires until the lobby closes.
 	if (race_lobby_blocks_input())
+		should_read_controls = 0;
+
+	// Survival's shop takes priority over the SPAWN_STYLE_PREVIEW override
+	// above too: browsing (or waiting on teammates in) the shop should never
+	// let thrust, turning, firing, or weapon-select leak through just
+	// because a death-preview respawn happened to also be in flight.
+	if ((Game_mode & GM_MULTI) && survival_shop_blocks_input())
 		should_read_controls = 0;
 	#endif
 

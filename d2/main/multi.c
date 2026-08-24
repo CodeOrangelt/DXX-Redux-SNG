@@ -31,6 +31,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "laser.h"
 #include "fuelcen.h"
 #include "race.h"
+#include "survival.h"
 #include "scores.h"
 #include "gauges.h"
 #include "collide.h"
@@ -1639,6 +1640,9 @@ void multi_do_frame(void)
 
 	if (Game_mode & GM_RACE)
 		race_multi_frame();	// host's authoritative race state broadcast (self-rate-limited)
+
+	// Survival Mode handling - spawns robot waves and ammo drops (spawner only)
+	survival_do_frame();
 
 	multi_send_message(); // Send any waiting messages
 
@@ -4618,6 +4622,13 @@ void multi_prep_level(void)
 	if (Game_mode & GM_RACE)
 		race_init_level();
 
+	// Survival: the mine starts stripped of every author-placed powerup and robot -- wave spawns
+	// are the only source of either, and that includes the level's own scripted end-of-level boss,
+	// which is otherwise still sitting wherever the mission placed it. Must happen before the object
+	// checksum below, and before anyone can reach or pick anything up.
+	survival_strip_level_powerups();
+	survival_strip_level_robots();
+
 	multi_consistency_error(1);
 
 	for (i=0;i<MAX_PLAYERS;i++)
@@ -7302,6 +7313,16 @@ multi_process_data(const ubyte *buf, int len)
 			if (!Endlevel_sequence) multi_do_race_ready(buf); break;
 		case MULTI_RACE_POWER:
 			if (!Endlevel_sequence) multi_do_race_power(buf); break;
+		case MULTI_SURVIVAL_WAVE_STATE:
+			if (!Endlevel_sequence) multi_do_survival_wave_state(buf); break;
+		case MULTI_SURVIVAL_SPAWN_ROBOT:
+			if (!Endlevel_sequence) multi_do_survival_spawn_robot(buf); break;
+		case MULTI_SURVIVAL_ELIMINATED:
+			if (!Endlevel_sequence) multi_do_survival_eliminated(buf); break;
+		case MULTI_SURVIVAL_SHIELDS:
+			if (!Endlevel_sequence) multi_do_survival_shields(buf); break;
+		case MULTI_SURVIVAL_SHOP_READY:
+			if (!Endlevel_sequence) multi_do_survival_shop_ready(buf); break;
 		case MULTI_ORB_BONUS:
 			if (!Endlevel_sequence) multi_do_orb_bonus(buf); break;
 		case MULTI_GOT_FLAG:

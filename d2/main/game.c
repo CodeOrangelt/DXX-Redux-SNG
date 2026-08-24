@@ -78,6 +78,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #include "multi.h"
 #include "race.h"
+#include "survival.h"
 #include "cntrlcen.h"
 #include "pcx.h"
 #include "state.h"
@@ -771,12 +772,26 @@ int allowed_to_fire_laser(void)
 		return 0;
 	}
 
+	if (survival_is_eliminated(Player_num)) {
+		return 0;
+	}
+
 #ifdef NETWORK
 	// The class picker takes priority: a fire button already held when the
 	// race loaded must not keep firing every frame just because nothing is
 	// re-reading Controls.* behind the panel (see the should_read_controls
 	// gate in ReadControls()).
 	if (race_lobby_blocks_input()) {
+		Global_laser_firing_count = 0;
+		Global_missile_firing_count = 0;
+		return 0;
+	}
+
+	// Menu takes priority: don't let a fire button that was already held
+	// down when the shop opened keep firing every frame just because
+	// nothing's re-reading Controls.fire_primary_state while it's up (see
+	// the should_read_controls gate in gamecntl.c's ReadControls()).
+	if ((Game_mode & GM_MULTI) && survival_shop_blocks_input()) {
 		Global_laser_firing_count = 0;
 		Global_missile_firing_count = 0;
 		return 0;
@@ -799,6 +814,10 @@ int allowed_to_fire_flare(void)
 		return 0;
 	}
 
+	if (survival_is_eliminated(Player_num)) {
+		return 0;
+	}
+
 	if (Players[Player_num].energy >= Weapon_info[FLARE_ID].energy_usage)
 		Next_flare_fire_time = GameTime64 + F1_0/4;
 	else
@@ -814,6 +833,10 @@ int allowed_to_fire_missile(void)
 		return 0;
 
 	if (is_observer()) {
+		return 0;
+	}
+
+	if (survival_is_eliminated(Player_num)) {
 		return 0;
 	}
 

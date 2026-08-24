@@ -51,6 +51,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #ifdef NETWORK
 #include "multi.h"
 #endif
+#include "survival.h"
 #include "gameseq.h"
 #include "key.h"
 #include "powerup.h"
@@ -518,6 +519,21 @@ int player_is_visible_from_object(object *objp, vms_vector *pos, fix field_of_vi
 			return 1;
 		}
 	} else {
+#ifdef NETWORK
+		// Survival: the horde never loses track of you through geometry, so
+		// a blocked line of sight still reports 1 ("visible, but the robot
+		// isn't lined up on you") rather than 0 ("can't see you"). Every
+		// behaviour gated on `if (player_visibility)` -- pursuit, pathing,
+		// turning to face you -- therefore keeps running through walls,
+		// which is the point of the mode.
+		//
+		// What it deliberately never reports through an obstruction is 2.
+		// That is the value ai_do_actual_firing_stuff() requires before it
+		// will create a laser, so robots can no longer shoot you through
+		// closed doors and walls; they have to come and find you first.
+		if ((Game_mode & GM_MULTI) && Netgame.gamemode == NETGAME_SURVIVAL)
+			return 1;
+#endif
 		return 0;
 	}
 }
@@ -734,15 +750,29 @@ void set_next_fire_time(object *objp, ai_local *ailp, robot_info *robptr, int gu
 // -- 			ailp->next_fire2 = robptr->firing_wait2[Difficulty_level];
 // -- 	}
 
-	if (((gun_num != 0) || (robptr->weapon_type2 == -1)) && (ailp->rapidfire_count < robptr->rapidfire_count[Difficulty_level])) {
-		ailp->next_fire = min(F1_0/8, robptr->firing_wait[Difficulty_level]/2);
-	} else {
-		if ((robptr->weapon_type2 == -1) || (gun_num != 0)) {
-			ailp->next_fire = robptr->firing_wait[Difficulty_level];
-			if (ailp->rapidfire_count >= robptr->rapidfire_count[Difficulty_level])
-				ailp->rapidfire_count = 0;
-		} else
-			ailp->next_fire2 = robptr->firing_wait2[Difficulty_level];
+	{
+		// Which timer this call is setting -- gun 0 (or any single-weapon robot) uses next_fire,
+		// a dual-weapon robot's secondary gun uses next_fire2. Computed once and reused below,
+		// including for the Survival boss-rate scale, rather than re-deriving it three times.
+		int primary_gun = (gun_num != 0) || (robptr->weapon_type2 == -1);
+
+		if (primary_gun && (ailp->rapidfire_count < robptr->rapidfire_count[Difficulty_level])) {
+			ailp->next_fire = min(F1_0/8, robptr->firing_wait[Difficulty_level]/2);
+		} else {
+			if (primary_gun) {
+				ailp->next_fire = robptr->firing_wait[Difficulty_level];
+				if (ailp->rapidfire_count >= robptr->rapidfire_count[Difficulty_level])
+					ailp->rapidfire_count = 0;
+			} else
+				ailp->next_fire2 = robptr->firing_wait2[Difficulty_level];
+		}
+
+		// Survival: tracked boss robots reload faster (survival.c/ai.c). Applied to whichever fire
+		// timer this call just set.
+		if (primary_gun)
+			ailp->next_fire = fixmul(ailp->next_fire, survival_boss_fire_rate_scale(objp - Objects));
+		else
+			ailp->next_fire2 = fixmul(ailp->next_fire2, survival_boss_fire_rate_scale(objp - Objects));
 	}
 }
 

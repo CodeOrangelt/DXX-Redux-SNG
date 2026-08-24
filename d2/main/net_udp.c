@@ -39,6 +39,7 @@
 #include "game.h"
 #include "multi.h"
 #include "race.h"
+#include "survival.h"
 #include "endlevel.h"
 #include "palette.h"
 #include "cntrlcen.h"
@@ -5212,7 +5213,7 @@ int net_udp_more_options_handler( newmenu *menu, d_event *event, void *userdata 
 typedef struct param_opt
 {
 	int start_game, load_preset, save_preset, name, level, mode, mode_end, moreopts;
-	int closed, refuse, maxnet, maxobs, obsdelay, obsmin, anarchy, team_anarchy, robot_anarchy, coop, capture, hoard, team_hoard, bounty, race;
+	int closed, refuse, maxnet, maxobs, obsdelay, obsmin, anarchy, team_anarchy, robot_anarchy, coop, capture, hoard, team_hoard, bounty, race, survival;
 } param_opt;
 
 int net_udp_start_game(void);
@@ -5340,6 +5341,8 @@ int net_udp_game_param_handler( newmenu *menu, d_event *event, param_opt *opt )
 					Netgame.gamemode = NETGAME_BOUNTY;
 				else if( menus[opt->race].value )
 					Netgame.gamemode = NETGAME_RACE;
+				else if( menus[opt->survival].value )
+					Netgame.gamemode = NETGAME_SURVIVAL;
 				else Int3(); // Invalid mode -- see Rob
 			}
 
@@ -5670,7 +5673,9 @@ int net_udp_setup_game()
 		
 		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Bounty"; m[optnum].value = ( Netgame.gamemode & NETGAME_BOUNTY ); m[optnum].group = 0; opt.bounty=optnum; optnum++;
 
-		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Race"; m[optnum].value = ( Netgame.gamemode == NETGAME_RACE ); m[optnum].group = 0; opt.mode_end=opt.race=optnum; optnum++;
+		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Race"; m[optnum].value = ( Netgame.gamemode == NETGAME_RACE ); m[optnum].group = 0; opt.race=optnum; optnum++;
+
+		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Survival"; m[optnum].value = ( Netgame.gamemode == NETGAME_SURVIVAL ); m[optnum].group = 0; opt.mode_end=opt.survival=optnum; optnum++;
 
 		m[optnum].type = NM_TYPE_TEXT; m[optnum].text = ""; optnum++;
 
@@ -5774,6 +5779,13 @@ net_udp_set_game_mode(int gamemode, ubyte join_as_obs)
 		Game_mode = GM_NETWORK | GM_BOUNTY;
 	else if( gamemode == NETGAME_RACE )
 		Game_mode = GM_NETWORK | GM_RACE;
+	else if( gamemode == NETGAME_SURVIVAL )
+	{
+		// Everyone is on one side against the robot waves -- same
+		// single-team/no-friendly-fire semantics as Coop.
+		Game_mode = GM_NETWORK | GM_MULTI_COOP | GM_MULTI_ROBOTS;
+		survival_start();
+	}
 	else if ( gamemode == NETGAME_TEAM_ANARCHY )
 	{
 		Game_mode = GM_NETWORK | GM_TEAM;

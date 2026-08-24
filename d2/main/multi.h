@@ -152,6 +152,11 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_RACE_BOX             , 3)  \
 	VALUE(MULTI_RACE_READY           , 3)  \
 	VALUE(MULTI_RACE_POWER           , 3)  \
+	VALUE(MULTI_SURVIVAL_WAVE_STATE  , 5)   \
+	VALUE(MULTI_SURVIVAL_SPAWN_ROBOT , 24)  \
+	VALUE(MULTI_SURVIVAL_ELIMINATED  , 2)   \
+	VALUE(MULTI_SURVIVAL_SHIELDS     , 10)  \
+	VALUE(MULTI_SURVIVAL_SHOP_READY  , 2)   \
 	AFTER
 for_each_multiplayer_command(enum {, define_multiplayer_command, });
 
@@ -168,6 +173,7 @@ for_each_multiplayer_command(enum {, define_multiplayer_command, });
 #define NETGAME_TEAM_HOARD      6
 #define NETGAME_BOUNTY		7
 #define NETGAME_RACE		8
+#define NETGAME_SURVIVAL	9
 
 #define CTF_VARIANT_VANILLA    0   // D2's native flag-object CTF
 #define CTF_VARIANT_SNG        1   // D1 SNG-style CTF: key powerups double as flags, scored at your fuelcen

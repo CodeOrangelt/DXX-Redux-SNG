@@ -61,6 +61,7 @@ add_executable (d2x-redux
     slew.c
     songs.c
     state.c
+    survival.c
     switch.c
     terrain.c
     texmerge.c

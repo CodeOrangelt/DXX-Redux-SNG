@@ -60,6 +60,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #ifdef NETWORK
 #include "multi.h"
 #include "race.h"
+#include "survival.h"
 #include "racebot.h"
 #endif
 #include "cntrlcen.h"
@@ -99,11 +100,20 @@ int check_collision_delayfunc_exec()
 
 //	-------------------------------------------------------------------------------------------------------------
 //	The only reason this routine is called (as of 10/12/94) is so Brain guys can open doors.
+//
+//	This -- not the flare trick companion/thief use in do_ai_frame() (ai.c) -- is the actual mechanism that
+//	opens a plain closed auto-door: it fires on body contact, gated to specific robot types. A regular robot's
+//	own weapon fire hitting a wall does reach check_trigger() (collide_weapon_and_wall() below), but that
+//	function only acts for objnum == the player or a companion robot (switch.c), so it is a no-op for anything
+//	else's flare regardless of this gate. survival_horde_hunts() added below is what actually lets an ordinary
+//	Survival robot open a plain unlocked door it walks into -- every Survival spawn is forced onto AIB_NORMAL
+//	(survival_spawn_one_robot(), survival.c), so without this term none of them ever qualified here at all,
+//	and the flow field (ai.c) could walk one right up to a door it then had no way to open.
 void collide_robot_and_wall( object * robot, fix hitspeed, short hitseg, short hitwall, vms_vector * hitpt)
 {
 	ai_local		*ailp = &Ai_local_info[robot-Objects];
 
-	if ((robot->id == ROBOT_BRAIN) || (robot->ctype.ai_info.behavior == AIB_RUN_FROM) || (Robot_info[robot->id].companion == 1) || (robot->ctype.ai_info.behavior == AIB_SNIPE)) {
+	if ((robot->id == ROBOT_BRAIN) || (robot->ctype.ai_info.behavior == AIB_RUN_FROM) || (Robot_info[robot->id].companion == 1) || (robot->ctype.ai_info.behavior == AIB_SNIPE) || survival_horde_hunts()) {
 		int	wall_num = Segments[hitseg].sides[hitwall].wall_num;
 		if (wall_num != -1) {
 			if ((Walls[wall_num].type == WALL_DOOR) && (Walls[wall_num].keys == KEY_NONE) && (Walls[wall_num].state == WALL_DOOR_CLOSED) && !(Walls[wall_num].flags & WALL_DOOR_LOCKED)) {
@@ -184,8 +194,10 @@ void apply_force_damage(object *obj,fix force,object *other_obj)
 					result = apply_damage_to_robot(obj,damage/2, other_obj-Objects);
 			}
 
-			if (result && (other_obj->ctype.laser_info.parent_signature == ConsoleObject->signature))
+			if (result && (other_obj->ctype.laser_info.parent_signature == ConsoleObject->signature)) {
 				add_points_to_score(Robot_info[obj->id].score_value);
+				survival_note_robot_kill(obj, Robot_info[obj->id].score_value);
+			}
 			break;
 
 		case OBJ_PLAYER:
@@ -982,8 +994,10 @@ void collide_robot_and_player( object * robot, object * playerobj, vms_vector *c
 			return;
 		if (Robot_info[robot->id].kamikaze) {
 			apply_damage_to_robot(robot, robot->shields+1, playerobj-Objects);
-			if (playerobj == ConsoleObject)
+			if (playerobj == ConsoleObject) {
 				add_points_to_score(Robot_info[robot->id].score_value);
+				survival_note_robot_kill(robot, Robot_info[robot->id].score_value);
+			}
 		}
 
 		if (Robot_info[robot->id].thief) {
@@ -1687,6 +1701,7 @@ void collide_robot_and_weapon( object * robot, object * weapon, vms_vector *coll
 				bump_two_objects(robot, weapon, 0);		//only bump if not dead. no damage from bump
 			else if (weapon->ctype.laser_info.parent_signature == ConsoleObject->signature) {
 				add_points_to_score(Robot_info[robot->id].score_value);
+				survival_note_robot_kill(robot, Robot_info[robot->id].score_value);
 				detect_escort_goal_accomplished(robot-Objects);
 			}
 		}
@@ -2258,6 +2273,9 @@ void apply_damage_to_player(object *playerobj, object *killer, fix damage, ubyte
 		// funnels through.
 		damage = race_scale_damage(killer, damage);
 
+		// Survival shop: a purchased armor tier scales down incoming damage.
+		damage = fixmul(damage, survival_damage_multiplier());
+
 		Players[Player_num].shields -= damage;
 		PALETTE_FLASH_ADD(f2i(damage)*4,-f2i(damage/2),-f2i(damage/2));	//flash red
 
@@ -2612,6 +2630,14 @@ void collide_player_and_powerup( object * playerobj, object * powerup, vms_vecto
 #endif
 
 		powerup_used = do_powerup(powerup);
+
+#ifdef NETWORK
+		// Survival: nothing left to give (ammo/shields full, primary already owned, cloak/invuln
+		// already active, laser already maxed) converts to scrap points instead of sitting
+		// uncollectible on the floor. No-op outside Survival.
+		if (!powerup_used)
+			powerup_used = survival_convert_wasted_pickup(powerup);
+#endif
 
 		if (powerup_used)	{
 			powerup->flags |= OF_SHOULD_BE_DEAD;
