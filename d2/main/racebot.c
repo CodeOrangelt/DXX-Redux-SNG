@@ -390,6 +390,39 @@ static int race_route_nearest(const vms_vector *pos)
 	return best;
 }
 
+// Same as race_route_nearest(), but tries to land on `segnum` first. Plain
+// nearest-by-distance can lock onto a point that is spatially close but on a
+// different, parallel stretch of the route (two corridors that pass near each
+// other, or a track that loops back close to itself) -- which silently hands
+// back a route sample going the opposite way to the one actually at `pos`.
+// Falls back to race_route_nearest() when nothing on `segnum` is on the route.
+static int race_route_nearest_in_segment(const vms_vector *pos, int segnum)
+{
+	int i, best = -1;
+	fix best_dist = 0;
+
+	if (segnum < 0)
+		return race_route_nearest(pos);
+
+	for (i = 0; i < Bot_route_len; i++)
+	{
+		fix d;
+
+		if (Bot_route[i].segnum != segnum)
+			continue;
+
+		d = vm_vec_dist_quick(pos, &Bot_route[i].point);
+
+		if (best < 0 || d < best_dist)
+		{
+			best_dist = d;
+			best = i;
+		}
+	}
+
+	return (best >= 0) ? best : race_route_nearest(pos);
+}
+
 // Walks back along the route from `from` until it has covered `distance` in
 // world units, and returns where it got to.
 static int race_route_back(int from, fix distance)
@@ -436,8 +469,12 @@ static int race_route_forward(int from, fix distance)
 }
 
 // The direction the track runs where `pos` is, taken off the lap route.
-// Returns 0 and leaves *dir alone when there is no route to read.
-int race_route_direction(const vms_vector *pos, vms_vector *dir)
+// `segnum` (or -1 if unknown) biases the route sample toward the segment
+// `pos` is actually in, so a point near two close-but-different stretches of
+// track doesn't get matched to the wrong one -- see
+// race_route_nearest_in_segment(). Returns 0 and leaves *dir alone when there
+// is no route to read.
+int race_route_direction(const vms_vector *pos, int segnum, vms_vector *dir)
 {
 	int idx;
 	vms_vector d;
@@ -445,7 +482,7 @@ int race_route_direction(const vms_vector *pos, vms_vector *dir)
 	if (Bot_route_len < 2 || !pos || !dir)
 		return 0;
 
-	idx = race_route_nearest(pos);
+	idx = race_route_nearest_in_segment(pos, segnum);
 
 	vm_vec_sub(&d, &Bot_route[(idx + 1) % Bot_route_len].point, &Bot_route[idx].point);
 
@@ -472,7 +509,7 @@ static void race_route_orient(void)
 	if (Bot_route_len < 2 || NumNetPlayerPositions < 1)
 		return;
 
-	idx = race_route_nearest(&Player_init[0].pos);
+	idx = race_route_nearest_in_segment(&Player_init[0].pos, Player_init[0].segnum);
 
 	vm_vec_sub(&dir, &Bot_route[(idx + 1) % Bot_route_len].point, &Bot_route[idx].point);
 
@@ -651,10 +688,14 @@ static object *race_bot_spawn_object(race_bot *b)
 	return &Objects[objnum];
 }
 
-// Puts a bot on the route at point `idx`, pointed the way the track goes.
-// Used for the starting grid and to put a wreck back on the track, which is
-// the same deal a human gets rather than a trip back to the line.
-static void race_bot_place(race_bot *b, int idx)
+// Puts a bot on the route at point `idx`. On the starting grid it is pointed
+// the way its own editor-placed start marker faces (Player_init[b->pnum],
+// already carrying the level's authored orientation -- see
+// race_bots_claim_slots(), which even synthesises extra slots by copying it),
+// same as the human gets. Off the grid -- a wreck coming back to the track --
+// there is no authored marker for wherever the route happens to be, so it is
+// pointed the way the track runs there instead.
+static void race_bot_place(race_bot *b, int idx, int use_start_orient)
 {
 	object *obj = race_bot_spawn_object(b);
 	vms_vector fvec;
@@ -684,12 +725,19 @@ static void race_bot_place(race_bot *b, int idx)
 	else
 		obj->pos = Bot_route[idx].point;
 
-	vm_vec_sub(&fvec, &Bot_route[(idx + 1) % Bot_route_len].point, &Bot_route[idx].point);
-
-	if (vm_vec_mag_quick(&fvec) > F1_0/16)
+	if (use_start_orient && b->pnum >= 0 && b->pnum < MAX_PLAYERS)
 	{
-		vm_vec_normalize_quick(&fvec);
-		vm_vector_2_matrix(&obj->orient, &fvec, NULL, NULL);
+		obj->orient = Player_init[b->pnum].orient;
+	}
+	else
+	{
+		vm_vec_sub(&fvec, &Bot_route[(idx + 1) % Bot_route_len].point, &Bot_route[idx].point);
+
+		if (vm_vec_mag_quick(&fvec) > F1_0/16)
+		{
+			vm_vec_normalize_quick(&fvec);
+			vm_vector_2_matrix(&obj->orient, &fvec, NULL, NULL);
+		}
 	}
 
 	// A nudge onto this bot's own line, so two ships on the same stretch of
@@ -770,10 +818,10 @@ static void race_bot_respawn(race_bot *b)
 		vms_vector center;
 
 		compute_segment_center(&center, &Segments[b->respawn_seg]);
-		idx = race_route_nearest(&center);
+		idx = race_route_nearest_in_segment(&center, b->respawn_seg);
 	}
 
-	race_bot_place(b, idx);
+	race_bot_place(b, idx, 0);
 }
 
 void race_bots_claim_slots(void)
@@ -966,7 +1014,7 @@ void race_bots_init(void)
 		// three Trappers and no afterburner anywhere.
 		race_set_player_class(i, (class_seed + slot) % RACE_NUM_CLASSES);
 
-		race_bot_place(b, race_route_back(base, BOT_GRID_SPACING * slot));
+		race_bot_place(b, race_route_back(base, BOT_GRID_SPACING * slot), 1);
 	}
 }
 

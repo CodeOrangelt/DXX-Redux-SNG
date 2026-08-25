@@ -108,10 +108,13 @@ int race_route_progress(int pnum);
 void race_bots_take_power(int power, int roller);
 
 // The direction the track runs at `pos`, taken off the lap route -- which is
-// the one thing in a race that knows which way round the track goes. Returns 0
-// and leaves *dir alone when there is no route. Used to point a respawning
-// racer down the road rather than at whatever happens to be in front of them.
-int race_route_direction(const vms_vector *pos, vms_vector *dir);
+// the one thing in a race that knows which way round the track goes. `segnum`
+// (or -1 if unknown) biases the route sample onto the segment `pos` is
+// actually in, so a point near two close-but-different stretches of track
+// doesn't get matched to the wrong one. Returns 0 and leaves *dir alone when
+// there is no route. Used to point a respawning racer down the road rather
+// than at whatever happens to be in front of them.
+int race_route_direction(const vms_vector *pos, int segnum, vms_vector *dir);
 
 // How many racers are on the grid, human and bot. 1 when there is no field,
 // which is what turns the catch-up rubber band off.
