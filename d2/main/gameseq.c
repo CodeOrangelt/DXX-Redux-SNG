@@ -109,6 +109,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "segment.h"
 #include "gameseg.h"
 #include "multibot.h"
+#include "race_energy_icon.h"
 
 
 void StartNewLevelSecret(int level_num, int page_in_textures);
@@ -993,6 +994,12 @@ void LoadLevel(int level_num,int page_in_textures)
 	songs_play_level_song( Current_level_num, 0 );
 
 	gr_palette_load(gr_palette);		//actually load the palette
+
+	// Runs after this level's own bitmap/texture data (PIG + POG replacements,
+	// robot HXMs) has fully loaded above, so nothing later in level load can
+	// undo it -- and on every level, not just the first, since a multi-level
+	// race reaches this same point again on each level transition.
+	race_sync_energy_icon();
 
 //	WIN(HideCursorW());
 }

@@ -53,6 +53,8 @@ add_executable (d2x-redux
     polyobj.c
     powerup.c
     race.c
+    race_energy_icon.c
+    race_energy_icon_data.c
     racebot.c
     render.c
     robot.c
