@@ -190,77 +190,6 @@ void multi_do_race_box(const ubyte *buf);
 
 #define vm_angvec_zero(v) (v)->p=(v)->b=(v)->h=0
 
-// Convert keycodes to ASCII for immediate text entry in EVENT_KEY_COMMAND handlers.
-static int multi_keycode_to_ascii(int key)
-{
-	int base_key = key & 0xFF;
-
-	if (base_key == KEY_1) return '1';
-	if (base_key == KEY_2) return '2';
-	if (base_key == KEY_3) return '3';
-	if (base_key == KEY_4) return '4';
-	if (base_key == KEY_5) return '5';
-	if (base_key == KEY_6) return '6';
-	if (base_key == KEY_7) return '7';
-	if (base_key == KEY_8) return '8';
-	if (base_key == KEY_9) return '9';
-	if (base_key == KEY_0) return '0';
-
-	if (base_key == KEY_A) return 'a';
-	if (base_key == KEY_B) return 'b';
-	if (base_key == KEY_C) return 'c';
-	if (base_key == KEY_D) return 'd';
-	if (base_key == KEY_E) return 'e';
-	if (base_key == KEY_F) return 'f';
-	if (base_key == KEY_G) return 'g';
-	if (base_key == KEY_H) return 'h';
-	if (base_key == KEY_I) return 'i';
-	if (base_key == KEY_J) return 'j';
-	if (base_key == KEY_K) return 'k';
-	if (base_key == KEY_L) return 'l';
-	if (base_key == KEY_M) return 'm';
-	if (base_key == KEY_N) return 'n';
-	if (base_key == KEY_O) return 'o';
-	if (base_key == KEY_P) return 'p';
-	if (base_key == KEY_Q) return 'q';
-	if (base_key == KEY_R) return 'r';
-	if (base_key == KEY_S) return 's';
-	if (base_key == KEY_T) return 't';
-	if (base_key == KEY_U) return 'u';
-	if (base_key == KEY_V) return 'v';
-	if (base_key == KEY_W) return 'w';
-	if (base_key == KEY_X) return 'x';
-	if (base_key == KEY_Y) return 'y';
-	if (base_key == KEY_Z) return 'z';
-
-	if (base_key == KEY_SPACEBAR) return ' ';
-	if (base_key == KEY_MINUS) return '-';
-	if (base_key == KEY_EQUAL) return '=';
-	if (base_key == KEY_LBRACKET) return '[';
-	if (base_key == KEY_RBRACKET) return ']';
-	if (base_key == KEY_SLASH) return '\\';
-	if (base_key == KEY_DIVIDE) return '/';
-	if (base_key == KEY_COMMA) return ',';
-	if (base_key == KEY_PERIOD) return '.';
-	if (base_key == KEY_SEMICOL) return ';';
-	if (base_key == KEY_RAPOSTRO) return '\'';
-	if (base_key == KEY_LAPOSTRO) return '`';
-
-	if (base_key == KEY_PAD0) return '0';
-	if (base_key == KEY_PAD1) return '1';
-	if (base_key == KEY_PAD2) return '2';
-	if (base_key == KEY_PAD3) return '3';
-	if (base_key == KEY_PAD4) return '4';
-	if (base_key == KEY_PAD5) return '5';
-	if (base_key == KEY_PAD6) return '6';
-	if (base_key == KEY_PAD7) return '7';
-	if (base_key == KEY_PAD8) return '8';
-	if (base_key == KEY_PAD9) return '9';
-	if (base_key == KEY_PADPERIOD) return '.';
-
-	return 255;
-}
-
 void drop_player_eggs(object *player); // from collide.c
 void drop_player_eggs_remote(object *playerobj, ubyte remote); // from collide.c
 
@@ -2280,7 +2209,7 @@ int multi_message_input_sub(int key)
 			return 1;
 		default:
 		{
-			int ascii = multi_keycode_to_ascii(key);
+			int ascii = key_ascii();
 			if ( ascii < 255 )     {
 				if (multi_message_index < MAX_MESSAGE_LEN-2 )   {
 					Network_message[multi_message_index++] = ascii;
