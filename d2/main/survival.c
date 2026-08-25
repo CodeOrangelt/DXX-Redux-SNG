@@ -75,6 +75,7 @@
 #include "morph.h"
 #include "gameseg.h"
 #include "ai.h"
+#include "laser.h"    // FLASH_ID, CONCUSSION_ID -- survival_robot_weapon_type()
 #include "polyobj.h"
 #include "vclip.h"
 #include "timer.h"
@@ -137,7 +138,8 @@ static void survival_shop_set_mouse_released(int released);
 #define SURVIVAL_DIFFICULTY_ROBOTS_PER_LEVEL     1   // extra base/cap robots per wave, per level
 #define SURVIVAL_DIFFICULTY_POOL_PER_LEVEL       1   // extra candidate-pool width steps, per level (see
                                                        // SURVIVAL_POOL_REFERENCE_SIZE for what a "step" is)
-#define SURVIVAL_DIFFICULTY_SHIELD_PCT_PER_LEVEL 5   // extra flat shield %, per level
+#define SURVIVAL_DIFFICULTY_SHIELD_PCT_PER_LEVEL 4   // extra flat shield %, per level (was 5 -- trimmed
+                                                       // slightly, see SURVIVAL_ROBOT_SPEED_SCALE below)
 
 // D1's original tuning grew the boss-wave-worthy candidate pool by 1 type every 2 waves against a
 // ~30-type roster, so the whole set opened up by roughly wave 56. Applied unchanged to D2's ~85-type
@@ -168,8 +170,10 @@ static void survival_shop_set_mouse_released(int released);
 // Speed cap for hunting robots, as a fraction of the robot type's Insane-difficulty max_speed (see
 // survival_limit_robot_speeds()). This was 3/5 back when the design was "robots amble, players do
 // the seeking" -- that premise is gone now that the horde actually hunts you down, and at 3/5 they
-// simply took too long to arrive. F1_0 leaves them at the fastest the stock tables ever run a robot.
-#define SURVIVAL_ROBOT_SPEED_SCALE    (F1_0)
+// simply took too long to arrive. F1_0 (the fastest the stock tables ever run a robot) closed that
+// gap but then ran a hair too hot the other way; 9/10 backs off just enough to feel less frantic
+// without bringing back the "too slow to arrive" problem F1_0 was fixing.
+#define SURVIVAL_ROBOT_SPEED_SCALE    (F1_0 * 9 / 10)
 
 // Same idea, for Survival's tracked boss robots specifically: buffing shields alone (see
 // SURVIVAL_BOSS_SHIELD_MULT) made a boss take longer to kill, but a slow, stationary-feeling fight
@@ -1601,6 +1605,27 @@ int survival_random_weapon_type(void)
 static int survival_random_super_weapon_type(void)
 {
 	return Survival_super_weapon_types[(d_rand() * SURVIVAL_NUM_SUPER_WEAPON_TYPES) >> 15];
+}
+
+// Flash missiles blind whoever they hit -- fine in a normal match where it's
+// one attacker among many threats, but Survival throws waves of robots at a
+// player who can't back off from the mine to recover, and a HAM robot type
+// that happens to carry FLASH_ID as its stock weapon (there's at least one
+// small, common type that does) turns "wave 1" into "can't see the fight for
+// most of it." Rather than pull that robot type out of the pool entirely --
+// it's otherwise unremarkable and losing it would just narrow the roster --
+// every shot it would have fired as a flash missile fires as a concussion
+// missile instead, in Survival only. Robot_info itself is left untouched
+// (it's shared, unscoped global data loaded once from the HAM) so this only
+// ever swaps the id at the moment a shot is actually created, which is also
+// why every robot-fire call site needs to route its weapon_type through
+// here rather than reading robptr->weapon_type/weapon_type2 directly.
+int survival_robot_weapon_type(int weapon_type)
+{
+	if (weapon_type == FLASH_ID && (Game_mode & GM_MULTI) && Netgame.gamemode == NETGAME_SURVIVAL)
+		return CONCUSSION_ID;
+
+	return weapon_type;
 }
 
 // Wipes every powerup the level author placed. Survival is meant to start
