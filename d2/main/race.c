@@ -3624,7 +3624,7 @@ int race_get_respawn(vms_vector *pos, vms_matrix *orient, int *segnum)
 	{
 		vms_vector fvec;
 
-		if (race_route_direction(&center, &fvec))
+		if (race_route_direction(&center, seg, &fvec))
 		{
 			vm_vector_2_matrix(orient, &fvec, NULL, NULL);
 			race_spread_respawn(pos, orient, Player_num, segnum);
