@@ -57,6 +57,15 @@ int survival_random_ammo_type(void);
 // EARTHSHAKER_DROP_PERMILLE above.
 int survival_random_weapon_type(void);
 
+// Rewrites a robot's about-to-fire weapon id for Survival's own balance
+// rules -- currently just FLASH_ID -> CONCUSSION_ID, since a HAM robot type
+// that fires flash missiles blinds a player who has nowhere to retreat to in
+// this mode. A no-op (returns weapon_type unchanged) outside Survival, and
+// for any weapon_type other than FLASH_ID. Every site that fires a robot's
+// weapon_type/weapon_type2 should route it through this rather than reading
+// Robot_info directly, since Robot_info itself is left unmodified.
+int survival_robot_weapon_type(int weapon_type);
+
 // Rolls every drop table for a just-killed robot and creates/syncs whatever
 // comes up. Called from multi_drop_robot_powerups() (multibot.c) in place of
 // the stock contains_prob path. No-op outside Survival mode.

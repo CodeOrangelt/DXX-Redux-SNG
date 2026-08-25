@@ -1043,6 +1043,7 @@ player_led: ;
 	if (robptr->weapon_type2 != -1)
 		if (gun_num == 0)
 			weapon_type = robptr->weapon_type2;
+	weapon_type = survival_robot_weapon_type(weapon_type);
 
 	Laser_create_new_easy( &fire_vec, fire_point, obj-Objects, weapon_type, 1);
 
