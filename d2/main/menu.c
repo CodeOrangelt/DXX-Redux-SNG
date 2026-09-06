@@ -2222,7 +2222,7 @@ struct misc_menu_data {
 
 void do_misc_menu()
 {
-	newmenu_item m[45];
+	newmenu_item m[47];
 	int i = 0;
 	struct misc_menu_data misc_menu_data;
 
@@ -2343,6 +2343,8 @@ void do_misc_menu()
 
 		ADD_CHECK(41, "Race: floating track labels", PlayerCfg.RaceTrackLabels);
 		ADD_CHECK(42, "Race: minimap", PlayerCfg.RaceMinimap);
+		ADD_CHECK(45, "Race: speed-linked FOV", PlayerCfg.RaceSpeedFOV);
+		ADD_CHECK(46, "Race: speedometer", PlayerCfg.RaceSpeedometer);
 
 		m[43].type = NM_TYPE_TEXT;
 		m[43].text = "";
@@ -2391,6 +2393,8 @@ void do_misc_menu()
 		PlayerCfg.RaceTrackLabels = m[41].value;
 		PlayerCfg.RaceMinimap = m[42].value;
 		PlayerCfg.DisableIdleDemo = m[44].value;
+		PlayerCfg.RaceSpeedFOV = m[45].value;
+		PlayerCfg.RaceSpeedometer = m[46].value;
 
 	} while( i>-1 );
 

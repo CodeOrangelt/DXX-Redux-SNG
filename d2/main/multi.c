@@ -2939,8 +2939,24 @@ void multi_disconnect_player(int pnum)
 
 	if (pnum == multi_who_is_master()) // Host has left - Quit game!
 	{
-		if (Network_status==NETSTAT_PLAYING)
-			multi_leave_game();
+		// multi_disconnect_player() runs from deep inside the packet-dispatch
+		// stack (net_udp's receive loop -> multi_process_data() ->
+		// multi_do_quit()) whenever this fires for anyone but the local
+		// player -- which, since this branch only trips when the departing
+		// player *is* the host, is every machine except the host's own. This
+		// used to call multi_leave_game() right here, which sends this
+		// machine's own quit/position/explode packets and then tears the
+		// socket down via net_udp_leave_game() -- including a reentrant
+		// net_udp_do_frame(1,1) that pumps the very packet queue this call is
+		// already partway through processing. That reentrant pump plus the
+		// socket closing out from under the outer dispatch frame is what
+		// crashed every non-host client the instant the host quit.
+		//
+		// multi_quit_game is exactly the flag multi_do_frame() (multi.c, the
+		// per-frame tick, well outside any packet-dispatch stack) already
+		// polls to close the game window safely on the next frame -- so
+		// setting it below is enough; nothing here needs to touch the
+		// network itself.
 		if (Game_wind)
 			window_set_visible(Game_wind, 0);
 		nm_messagebox(NULL, 1, TXT_OK, "Host left the game!");

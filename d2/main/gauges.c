@@ -1178,46 +1178,38 @@ static void race_timer_line(int right, int y, const char *label, const char *val
 	race_string(right - colw - FSPACX(3) - label_w, y, label, color);
 }
 
-// Mario-Kart-style clock: running total, current lap, best lap so far, then
-// every completed lap underneath. Returns the y just past the last row.
+// One clock in the corner: the running race total while it's still going,
+// frozen at the finish time once it's over. THIS LAP, BEST LAP and every
+// completed split used to stack up underneath this too, but four-to-six
+// timers competing for the same corner is clutter a HUD glanced at mid-race
+// doesn't need -- best lap and the full set of splits are local-only numbers
+// anyway (every other machine only ever hears totals), so they've moved to
+// the results screen where there's room and reason to read them
+// (kmatrix_redraw_race(), kmatrix.c). Returns the y just past this row.
 static int race_draw_timer(int right, int y)
 {
-	char label[16];
 	char time[16];
-	const fix64 *splits;
-	fix64 best;
-	int n = race_get_splits(&splits, &best);
-	int i;
-	// A little leading: at the sizes the cockpit modes scale this block down
-	// to, rows at exactly LINE_SPACING run into each other.
-	int line = LINE_SPACING + FSPACY(1);
 
 	race_format_time(time, sizeof(time), race_get_total_time());
-	race_timer_line(right, y, "TOTAL", time, BM_XRGB(28, 28, 31));
-	y += line;
+	race_timer_line(right, y, "TIME", time, BM_XRGB(28, 28, 31));
+	y += LINE_SPACING + FSPACY(1);
 
-	if (!Race_player[Player_num].finished)
+	// Percent of cruise speed -- a plain number reads as clearly as it needs
+	// to without disturbing the view the way the FOV effect can, so it has
+	// its own toggle (PlayerCfg.RaceSpeedometer) independent of
+	// PlayerCfg.RaceSpeedFOV.
+	if (PlayerCfg.RaceSpeedometer)
 	{
-		race_format_time(time, sizeof(time), race_get_lap_time());
-		race_timer_line(right, y, "THIS LAP", time, BM_XRGB(6, 31, 6));
-		y += line;
-	}
+		char pct[16];
+		int color = BM_XRGB(20, 20, 24);
 
-	if (best)
-	{
-		race_format_time(time, sizeof(time), best);
-		race_timer_line(right, y, "BEST LAP", time, BM_XRGB(31, 24, 4));
-		y += line;
-	}
+		snprintf(pct, sizeof(pct), "%d%%", race_get_speed_percent());
 
-	// Completed laps, oldest first, with the best one picked out.
-	for (i = 0; i < n; i++)
-	{
-		race_format_time(time, sizeof(time), splits[i]);
-		snprintf(label, sizeof(label), "LAP %d", i + 1);
-		race_timer_line(right, y, label, time,
-						(splits[i] == best) ? BM_XRGB(31, 24, 4) : BM_XRGB(18, 18, 20));
-		y += line;
+		if (race_get_speed_percent() > 100)
+			color = BM_XRGB(6, 28, 31);
+
+		race_timer_line(right, y, "SPD", pct, color);
+		y += LINE_SPACING + FSPACY(1);
 	}
 
 	return y;
@@ -1743,6 +1735,8 @@ static void race_draw_lobby(void)
 	int locked = race_player_is_ready(Player_num);
 	int ready = 0, total = 0, secs;
 	int panel_w, panel_h, x, y, inner_x, inner_right, row_y, row_h, row_gap, i;
+	race_hud_box box;
+	int box_w;
 
 	gr_set_curfont(GAME_FONT);
 
@@ -1751,9 +1745,17 @@ static void race_draw_lobby(void)
 	row_h = LINE_SPACING*2 + FSPACY(14);
 	row_gap = FSPACY(7);
 
+	// Centre and clamp against the same box the rest of the race HUD lays out
+	// in -- box.left/right already carve out the full cockpit's side casing,
+	// which GWIDTH does not. Centering on GWIDTH instead let the panel drift
+	// into the cockpit art (and off past it, text and all) on wide/cockpit
+	// combinations where the casing eats a lot of the canvas.
+	race_hud_get_box(&box);
+	box_w = box.right - box.left;
+
 	panel_w = FSPACX(360);
-	if (panel_w > GWIDTH - FSPACX(20))
-		panel_w = GWIDTH - FSPACX(20);
+	if (panel_w > box_w - FSPACX(20))
+		panel_w = box_w - FSPACX(20);
 
 	panel_h = race_lobby_panel_h(row_h, row_gap);
 
@@ -1761,11 +1763,7 @@ static void race_draw_lobby(void)
 	// gets longer -- if the panel no longer fits, the rows give up their
 	// padding first rather than the frame hanging off the bottom.
 	{
-		race_hud_box box;
-		int avail;
-
-		race_hud_get_box(&box);
-		avail = box.bottom - box.top;
+		int avail = box.bottom - box.top;
 
 		if (panel_h > avail)
 		{
@@ -1781,7 +1779,7 @@ static void race_draw_lobby(void)
 		}
 	}
 
-	x = (GWIDTH - panel_w)/2;
+	x = box.left + (box_w - panel_w)/2;
 	y = race_panel_y(panel_h);
 
 	nm_draw_background(x, y, x + panel_w, y + panel_h);
@@ -1840,10 +1838,9 @@ static void race_draw_lobby(void)
 // than chase that down inside piggy's bitmap cache.)
 //
 // Fills left to right as race_trichord_charge() builds from holding a
-// genuine diagonal (see RACE_TRICHORD_CHARGE_* in race.h -- this is the
-// charge meter, not the instant race_trichord_strength() the FOV widening
-// rides, so the readout tracks exactly what race_trichord_charge_scale() is
-// paying out). Nothing draws at zero charge, and once it is full the fill
+// genuine diagonal (see RACE_TRICHORD_CHARGE_* in race.h), so the readout
+// tracks exactly what race_trichord_charge_scale() is paying out. Nothing
+// draws at zero charge, and once it is full the fill
 // pulses in brightness instead of sitting flat, so a fully charged, held
 // diagonal reads as an event rather than a bar that happened to fill.
 static void race_draw_trichord(const race_hud_box *box)

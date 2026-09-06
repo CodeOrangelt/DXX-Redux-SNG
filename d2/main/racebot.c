@@ -370,7 +370,6 @@ static int race_route_add_leg(int from_seg, int to_seg)
 	return to_seg;
 }
 
-// Where on the route a world point sits.
 static int race_route_nearest(const vms_vector *pos)
 {
 	int i, best = 0;
@@ -472,8 +471,9 @@ static int race_route_forward(int from, fix distance)
 // `segnum` (or -1 if unknown) biases the route sample toward the segment
 // `pos` is actually in, so a point near two close-but-different stretches of
 // track doesn't get matched to the wrong one -- see
-// race_route_nearest_in_segment(). Returns 0 and leaves *dir alone when there
-// is no route to read.
+// race_route_nearest_in_segment(). Checkpoint respawns always know segnum --
+// see race_get_respawn(). Returns 0 and leaves *dir alone when there is no
+// route to read.
 int race_route_direction(const vms_vector *pos, int segnum, vms_vector *dir)
 {
 	int idx;
@@ -509,6 +509,13 @@ static void race_route_orient(void)
 	if (Bot_route_len < 2 || NumNetPlayerPositions < 1)
 		return;
 
+	// Segnum-pinned, not pure-euclidean: this decides which way the *whole*
+	// route runs (everything below reverses the entire array on a mismatch),
+	// so picking the wrong pass here on a track that crosses over near the
+	// grid doesn't just misjudge one lookup, it flips the whole lap backwards
+	// -- every checkpoint respawn for the rest of the race inherits it. See
+	// race_route_nearest_in_segment()'s comment for why euclidean-nearest
+	// breaks on a crossover in the first place.
 	idx = race_route_nearest_in_segment(&Player_init[0].pos, Player_init[0].segnum);
 
 	vm_vec_sub(&dir, &Bot_route[(idx + 1) % Bot_route_len].point, &Bot_route[idx].point);

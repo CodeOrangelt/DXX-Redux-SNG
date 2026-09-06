@@ -174,6 +174,8 @@ int new_player_config()
 	PlayerCfg.NoChatSound = 0;
 	PlayerCfg.RaceTrackLabels = 1;
 	PlayerCfg.RaceMinimap = 1;
+	PlayerCfg.RaceSpeedFOV = 1;
+	PlayerCfg.RaceSpeedometer = 1;
 	PlayerCfg.ClassicAutoselectWeapon = 0;
 
 	// Default taunt macros
@@ -451,6 +453,10 @@ int read_player_d2x(char *filename)
 					PlayerCfg.RaceTrackLabels = atoi(line);
 				if(!strcmp(word,"RACEMINIMAP"))
 					PlayerCfg.RaceMinimap = atoi(line);
+				if(!strcmp(word,"RACESPEEDFOV"))
+					PlayerCfg.RaceSpeedFOV = atoi(line);
+				if(!strcmp(word,"RACESPEEDOMETER"))
+					PlayerCfg.RaceSpeedometer = atoi(line);
 
 				// Observer settings - migrate from old version
 				// If migrating from an older version, set all observer modes to the same value
@@ -724,6 +730,8 @@ int write_player_d2x(char *filename)
 		PHYSFSX_printf(fout,"classicautoselectweapon=%i\n",PlayerCfg.ClassicAutoselectWeapon);
 		PHYSFSX_printf(fout,"racetracklabels=%i\n",PlayerCfg.RaceTrackLabels);
 		PHYSFSX_printf(fout,"raceminimap=%i\n",PlayerCfg.RaceMinimap);
+		PHYSFSX_printf(fout,"racespeedfov=%i\n",PlayerCfg.RaceSpeedFOV);
+		PHYSFSX_printf(fout,"racespeedometer=%i\n",PlayerCfg.RaceSpeedometer);
 		PHYSFSX_printf(fout,"[end]\n");
 		PHYSFSX_printf(fout, "[observer]\n");
 		PHYSFSX_printf(fout, "obssharesettings=%i\n", PlayerCfg.ObsShareSettings);
