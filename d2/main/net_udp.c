@@ -1662,6 +1662,35 @@ int net_udp_game_connect(direct_join *dj)
 	}
 	
 #ifdef USE_TRACKER
+	// A direct-IP join (manual_join_game_handler()) doesn't know this host's
+	// GameID up front the way picking it off the browsed list does, so it
+	// can't ask the tracker to broker anything until it learns one --
+	// net_udp_punch_client_frame() below is a silent no-op the whole time
+	// Punch_join_gameid is still 0. manual_join_game_handler() already fired
+	// off a tracker game-list request in parallel with the direct probe;
+	// once a response lands (via net_udp_listen() below, same as browsing),
+	// match it against the address we're trying to reach and adopt its
+	// GameID. Skipped once already resolved, and harmless to leave running
+	// if this connection came from the browse list instead, since
+	// Punch_join_gameid is already set there and this loop just won't find
+	// a still-unresolved target to fill in.
+	if (Punch_join_gameid == 0)
+	{
+		int i;
+		struct sockaddr_in *want = (struct sockaddr_in *)&dj->host_addr;
+
+		for (i = 0; i < num_active_udp_games; i++)
+		{
+			struct sockaddr_in *have = (struct sockaddr_in *)&Active_udp_games[i].game_addr;
+
+			if (Active_udp_games[i].GameID && have->sin_addr.s_addr == want->sin_addr.s_addr)
+			{
+				net_udp_punch_set_target(Active_udp_games[i].GameID);
+				break;
+			}
+		}
+	}
+
 	// Ask the tracker to broker a punch, and adopt the host's real public
 	// address the moment it tells us one. The advertised address from the
 	// game list is the host's *declared* port, reachable only if they
@@ -1787,7 +1816,24 @@ static int manual_join_game_handler(newmenu *menu, d_event *event, direct_join *
 				dj->last_time = 0;
 				
 				memcpy((struct _sockaddr *)&Netgame.players[0].protocol.udp.addr, (struct _sockaddr *)&dj->host_addr, sizeof(struct _sockaddr));
-				
+
+#ifdef USE_TRACKER
+				// Punch-through only ever engages once Punch_join_gameid is
+				// set (net_udp_punch_set_target()), and the only place that
+				// call was ever made was the game-list selection handler
+				// below -- typing a host's IP in directly here skipped it
+				// entirely, so a direct-IP join had no punch-through at all
+				// and would just sit out the full 20s timeout against any
+				// host who wasn't directly reachable (i.e. almost anyone
+				// joining over the internet), even though the identical host
+				// joins fine from the browsed list. Ask every configured
+				// tracker for its game list now, in parallel with the direct
+				// probe below; net_udp_game_connect() matches this address
+				// against the response the moment one comes back and adopts
+				// that GameID.
+				udp_tracker_reqgames();
+#endif
+
 				dj->connecting = 1;
 				items[6].text = connecting_txt;
 				return 1;

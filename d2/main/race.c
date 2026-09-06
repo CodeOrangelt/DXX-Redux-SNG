@@ -15,6 +15,9 @@
 #include "powerup.h"
 #include "fuelcen.h"
 #include "gameseg.h"
+#include "gameseq.h"
+#include "collide.h"
+#include "playsave.h"
 #include "multi.h"
 #include "hudmsg.h"
 #include "timer.h"
@@ -88,6 +91,7 @@ static fix64 Race_splits[RACE_MAX_SPLITS];
 static fix64 Race_best_lap = 0;
 static int Race_num_splits = 0;
 static int Race_summary_pending = 0;
+static int Race_over_triggered = 0;	// PlayerFinishedLevel() already called for this level
 
 // Which checkpoints the local player has crossed on the current lap. Order
 // doesn't matter -- the lap closes when the set is complete and they cross the
@@ -1119,7 +1123,12 @@ void race_box_roll(void)
 		const race_class_info *ci = race_my_class();
 
 		if (ci)
+		{
 			rolls += ci->box_extra_rolls;
+
+			if (ci->box_bonus_pct && (int)(d_rand() % 100) < ci->box_bonus_pct)
+				rolls++;
+		}
 	}
 
 	for (i = 0; i < rolls; i++)
@@ -1333,15 +1342,6 @@ void race_cancel_boost(void)
 	}
 }
 
-// Local player's trichord state, refreshed once a frame by
-// race_note_trichord() (controls.c). Eased rather than snapped straight to
-// the input: a real diagonal push clips in and out of the floor for a frame
-// at a time even when it's genuinely being held, and the charge meter below
-// stays exactly that responsive on purpose (it's what pays the speed bonus)
-// -- it's the FOV chasing every one of those blips that read as a flicker
-// instead of a held effect.
-static fix Race_trichord_strength = 0;
-
 // Charge bar fill (0..F1_0) -- resets to 0 when it fires a burst.
 static fix Race_trichord_charge = 0;
 
@@ -1414,25 +1414,47 @@ fix race_trichord_scale_from_boost(fix64 boost_until)
 	return F1_0;
 }
 
+// Shields/sec regenerated while an active trichord burst is running -- a
+// small trickle, not a heal. Reaper is the class that actually needs this
+// (it's the payback for race_omega_drain_shields()'s cost), but it isn't
+// gated to Reaper: trichording is already a skill mechanic open to everyone,
+// so anyone who can hold a perfect diagonal long enough to fire the burst
+// gets the same trickle back.
+#define RACE_TRICHORD_SHIELD_REGEN_RATE  i2f(3)
+
+// Local player only, run once a frame from race_frame(). Capped at the
+// class's own shield target (StartingShields scaled by shield_pct, same as
+// race_grant_class_loadout() sets on spawn) so this tops a class back up to
+// its own ceiling rather than past it.
+static void race_trichord_shield_regen_frame(void)
+{
+	const race_class_info *ci;
+	extern fix StartingShields;
+	fix cap;
+
+	if (is_observer() || Player_is_dead || !ConsoleObject)
+		return;
+
+	if (GameTime64 >= Race_trichord_boost_until)
+		return;
+
+	ci = race_my_class();
+	cap = (ci && ci->shield_pct > 0) ? (fix)((fix64)StartingShields * ci->shield_pct / 100) : StartingShields;
+
+	if (Players[Player_num].shields >= cap)
+		return;
+
+	Players[Player_num].shields += fixmul(FrameTime, RACE_TRICHORD_SHIELD_REGEN_RATE);
+	if (Players[Player_num].shields > cap)
+		Players[Player_num].shields = cap;
+
+	ConsoleObject->shields = Players[Player_num].shields;	// mirror, same convention apply_damage_to_player() uses
+}
+
 void race_note_trichord(fix ratio)
 {
-	fix target = race_trichord_target(ratio);
-	fix step = fixmul(FrameTime, RACE_TRICHORD_FOV_EASE);
 	fix64 old_boost = Race_trichord_boost_until;
 	int lit;
-
-	if (target > Race_trichord_strength)
-	{
-		Race_trichord_strength += step;
-		if (Race_trichord_strength > target)
-			Race_trichord_strength = target;
-	}
-	else if (target < Race_trichord_strength)
-	{
-		Race_trichord_strength -= step;
-		if (Race_trichord_strength < target)
-			Race_trichord_strength = target;
-	}
 
 	Race_trichord_charge = race_trichord_advance_charge(Race_trichord_charge, ratio, &Race_trichord_boost_until);
 
@@ -1462,11 +1484,6 @@ void race_note_trichord(fix ratio)
 	Race_trichord_blobs_lit = lit;
 }
 
-fix race_trichord_strength(void)
-{
-	return Race_trichord_strength;
-}
-
 fix race_trichord_charge(void)
 {
 	if (GameTime64 < Race_trichord_boost_until)
@@ -1485,31 +1502,109 @@ fix race_trichord_charge_scale(void)
 	return race_trichord_scale_from_boost(Race_trichord_boost_until);
 }
 
-fix race_get_fov_bonus(void)
+// -------------------------------------------------------------------------
+// Speed-linked FOV
+// -------------------------------------------------------------------------
+//
+// Used to be a pile of separate, hand-triggered kicks -- a flat step for a
+// boost pad, a separate ramp for a sustained trichord, a second kick on top
+// of that when the trichord burst actually fired, a flat pull the other way
+// from the tractor beam. Every one of those had its own onset/decay shape,
+// and they didn't agree with each other, so stacking two of them (a boost
+// pad mid-trichord, say) snapped the FOV around rather than reading as "I am
+// now going faster."
+//
+// This replaces all of it with one continuous read of how fast the ship is
+// actually moving, on the theory that the FOV should mean exactly one thing
+// -- your current speed -- and every source of speed (afterburner, a boost
+// pad, a trichord burst, a class's own thrust multiplier) already funnels
+// into that number for free, because it's real velocity, not a flag this
+// code has to know to check. The tractor beam's slow-down (race_power_
+// speed_scale(), controls.c) falls out the same way: it cuts real thrust, so
+// real speed drops, so the FOV narrows on its own -- no separate term needed.
+//
+// The eased fraction is also what feeds the speedometer (race_get_speed_
+// percent(), for the HUD) and is skipped entirely, cheaply, when the player
+// has the effect turned off (PlayerCfg.RaceSpeedFOV).
+#define RACE_SPEED_FOV_EASE      (F1_0*3/2)	// full swings/sec the eased value chases at
+#define RACE_SPEED_FOV_MAX_OVER  (F1_0*3/2)	// caps out at 2.5x cruise speed
+#define RACE_SPEED_FOV_PER_UNIT  0x3800		// zoom bonus per 1.0 fraction over cruise
+
+// Cached the first time it's asked for -- Player_ship doesn't change mid-race
+// -- rather than recomputed every frame. Terminal velocity under constant
+// thrust against this engine's per-frame multiplicative drag settles out
+// to roughly (thrust/mass)/drag; not an exact derivation of the physics
+// integrator's sub-stepping, but it only has to be a stable, sane "what does
+// this ship normally cruise at" reference for a visual effect, not a value
+// anything gameplay-critical reads.
+static fix race_speed_fov_reference(void)
 {
-	fix bonus;
+	static fix cached = 0;
 
-	// Render_zoom is 0x9000 by default and 0x11000 at the "wide" end of the
-	// FOV slider, so 0x2000 is a noticeable but not disorienting widening.
-	bonus = fixmul(race_boost_strength(), 0x2000);
+	if (!cached && Player_ship && Player_ship->mass && Player_ship->drag)
+		cached = fixdiv(Player_ship->max_thrust, fixmul(Player_ship->mass, Player_ship->drag));
 
-	// Getting pulled narrows it instead -- the same shape as the widening,
-	// just the other way, so the screen closing in reads as a squeeze rather
-	// than a snap, and opens back up the moment the beam lets go.
-	bonus -= fixmul(race_tractor_strength(), 0x1800);
+	return cached ? cached : F1_0;		// never divide by zero downstream
+}
 
-	// A sustained trichord widens it; the active boost holds it fully wide
-	// and adds a second kick that counts down with the bar.
+// Eased 0..~2.5 fraction of cruise speed the local player is currently
+// moving at. Advanced once a frame from race_frame(); race_get_fov_bonus()
+// and the speedometer both just read it.
+static fix Race_speed_fov_frac = F1_0;
+
+static void race_speed_fov_frame(void)
+{
+	fix target, step;
+
+	if (is_observer() || !ConsoleObject)
+		target = Race_speed_fov_frac;		// hold, rather than snap to 0 while spectating
+	else
 	{
-		fix tf = Race_trichord_strength;
-		if (GameTime64 < Race_trichord_boost_until && tf < F1_0)
-			tf = F1_0;
-		bonus += fixmul(tf, RACE_TRICHORD_FOV);
-		if (GameTime64 < Race_trichord_boost_until)
-			bonus += fixmul(race_trichord_charge(), RACE_TRICHORD_FOV);
+		fix speed = vm_vec_mag(&ConsoleObject->mtype.phys_info.velocity);
+		target = fixdiv(speed, race_speed_fov_reference());
 	}
 
-	return bonus;
+	step = fixmul(FrameTime, RACE_SPEED_FOV_EASE);
+
+	if (target > Race_speed_fov_frac)
+	{
+		Race_speed_fov_frac += step;
+		if (Race_speed_fov_frac > target)
+			Race_speed_fov_frac = target;
+	}
+	else if (target < Race_speed_fov_frac)
+	{
+		Race_speed_fov_frac -= step;
+		if (Race_speed_fov_frac < target)
+			Race_speed_fov_frac = target;
+	}
+}
+
+// Percent of cruise speed, for the HUD speedometer (PlayerCfg.RaceSpeedometer,
+// independent of the FOV effect's own toggle -- a numeric readout doesn't
+// disturb the view the way a moving FOV can, so there's no reason it should
+// share an on/off switch with something people turn off because it's visually
+// distracting).
+int race_get_speed_percent(void)
+{
+	return f2i(fixmul(Race_speed_fov_frac, i2f(100)));
+}
+
+fix race_get_fov_bonus(void)
+{
+	fix over;
+
+	if (!PlayerCfg.RaceSpeedFOV)
+		return 0;
+
+	over = Race_speed_fov_frac - F1_0;		// 0 at cruise; below cruise widens nothing
+
+	if (over <= 0)
+		return 0;
+	if (over > RACE_SPEED_FOV_MAX_OVER)
+		over = RACE_SPEED_FOV_MAX_OVER;
+
+	return fixmul(over, RACE_SPEED_FOV_PER_UNIT);
 }
 
 //	-------------------------------------------------------------------------
@@ -1891,19 +1986,27 @@ int race_get_map_outline(const race_map_line **lines)
 // (collide.c), which runs on the machine taking the hit -- so the shooter's
 // class has to be known there too, which is why classes are synced rather
 // than kept local.
+// Rebalance rule: no class touches Speed, up or down -- it's the one stat
+// that's unconditionally good every second of the race, so any class that
+// had it was just "the better one," not a trade. Every class below pairs
+// exactly one upside with an equal-or-costlier downside instead, sized big
+// enough to actually change how you have to play (a token 5-8% swing reads
+// as noise, not a decision), and several stack two linked costs so the
+// build is genuinely bad outside the one thing it's good at rather than
+// just "slightly worse."
 static const race_class_info Race_class_table[RACE_NUM_CLASSES] = {
 	{
-		// The tank. Slow enough to feel heavy, but nowhere near slow enough
-		// to be unwinnable -- speed is the currency in a race, and the old
-		// -25% could not be bought back with any amount of armour.
-		.name = "HEAVY HITTER",
+		// The brick. Shrugs off hits nobody else would survive; corners like
+		// it's dragging an anchor. A bad line costs this class real time
+		// every single lap, not just a bruise.
+		.name = "JUGGERNAUT",
 		.weapon = "FUSION CANNON",
-		.perks = "+75% SHIELDS   -8% SPEED",
+		.perks = "+50% SHIELDS   -35% TURN",
 		.primary = FUSION_INDEX,
 		.powerup = POW_FUSION_WEAPON,
 		.secondary = {{ -1 }, { -1 }},
-		.shield_pct = 175,
-		.speed = F1_0 - (F1_0*8)/100,
+		.shield_pct = 150,
+		.turn = F1_0 - (F1_0*35)/100,
 		.damage_taken = F1_0,
 		.damage_dealt = F1_0,
 		.afterburner_drain = F1_0,
@@ -1912,136 +2015,149 @@ static const race_class_info Race_class_table[RACE_NUM_CLASSES] = {
 		.boost_power = F1_0,
 	},
 	{
-		// Genuinely glass now: the quickest ship and the hardest hitter, on
-		// three quarters of a shield bar and taking a quarter more from
-		// everything that lands.
+		// True glass: hits harder than anything else in the field and dies
+		// to almost anything. One clean shot and this class is done.
 		.name = "GLASS CANNON",
 		.weapon = "VULCAN CANNON",
-		.perks = "+15% DMG DEALT   +8% SPEED   -40% SHIELDS",
+		.perks = "+40% DMG DEALT   -50% SHIELDS",
 		.primary = VULCAN_INDEX,
 		.powerup = POW_VULCAN_WEAPON,
 		.secondary = {{ -1 }, { -1 }},
-		.shield_pct = 60,
-		.speed = F1_0 + (F1_0*8)/100,
+		.shield_pct = 50,
 		.damage_taken = F1_0,
-		.damage_dealt = F1_0 + (F1_0*15)/100,
+		.damage_dealt = F1_0 + (F1_0*40)/100,
 		.afterburner_drain = F1_0,
 		.box_item_time = F1_0,
 		.boost_time = F1_0,
 		.boost_power = F1_0,
 	},
 	{
-		// The all-rounder: stock numbers everywhere, and the only class whose
-		// edge is in the throttle rather than the guns.
-		.name = "HYBRID PYRO",
+		// A straight-line escape artist: the burner lasts half again as
+		// long as anyone else's, so this class can run from a fight it
+		// can't afford -- and it can't afford almost any fight, since
+		// anything that lands hits noticeably harder than it would on
+		// someone else.
+		.name = "OVERCHARGED",
 		.weapon = "QUAD LASERS LVL 4",
-		.perks = "+25% AFTERBURNER   +10% BOOST PADS",
+		.perks = "+50% AFTERBURNER   +40% DMG TAKEN",
 		.primary = LASER_INDEX,
 		.powerup = POW_QUAD_FIRE,
 		.secondary = {{ -1 }, { -1 }},
-		.speed = F1_0,
-		.damage_taken = F1_0,
+		.damage_taken = F1_0 + (F1_0*40)/100,
 		.damage_dealt = F1_0,
-		// Drain scales by the reciprocal of the bonus, so a tank that empties
-		// 20% slower lasts 25% longer.
-		.afterburner_drain = (F1_0*4)/5,
+		// Drain scales by the reciprocal of the bonus: 2/3 drain lasts 1.5x
+		// (50% longer).
+		.afterburner_drain = (F1_0*2)/3,
 		.box_item_time = F1_0,
-		.boost_time = F1_0 + F1_0/10,
+		.boost_time = F1_0,
 		.boost_power = F1_0,
 	},
 	{
-		// Mines are the point, so they are the icon, and the caps are low: a
-		// Trapper who could bank ten of them would be laying a minefield
-		// rather than picking their corner.
+		// Mines are the build now, not a flavor add-on: they restock faster
+		// and bank deeper than before, and the gun is genuinely weak --
+		// pull the trigger on the plasma cannon only because the mines
+		// haven't caught up yet.
 		.name = "TRAPPER",
 		.weapon = "PLASMA CANNON + MINES",
-		.perks = "MINES RESTOCK   -15% DMG DEALT   -5% SPEED",
+		.perks = "FASTER MINES, HIGHER CAP   -35% DMG DEALT",
 		.primary = PLASMA_INDEX,
 		.powerup = POW_PROXIMITY_WEAPON,
 		.secondary = {
 			{ PROXIMITY_INDEX,  RACE_TRAPPER_PROX_CAP,  RACE_TRAPPER_PROX_TIME },
 			{ SMART_MINE_INDEX, RACE_TRAPPER_SMART_CAP, RACE_TRAPPER_SMART_TIME },
 		},
-		.speed = F1_0 - F1_0/20,
 		.damage_taken = F1_0,
-		.damage_dealt = F1_0 - (F1_0*15)/100,
+		.damage_dealt = F1_0 - (F1_0*35)/100,
 		.afterburner_drain = F1_0,
 		.box_item_time = F1_0,
 		.boost_time = F1_0,
 		.boost_power = F1_0,
 	},
 	{
-		// Pays for the best box economy in the field with a thinner hull.
-		// Used to also carry a speed penalty on top of that, which stacked
-		// two costs against a payoff that is RNG rather than pace -- a race
-		// is a straight line to the finish, and being both fragile and slow
-		// while you wait for the dice to pay off never felt worth it. The
-		// hull cost alone is the class now; the throttle is stock.
+		// The gambler: two guaranteed items a box and a real shot at a
+		// third, on a hull thin enough that the loot has to pay off --
+		// there is no surviving a straight fight on this class's own
+		// shields alone.
 		.name = "SCAVENGER",
 		.weapon = "SPREADFIRE CANNON",
-		.perks = "2 ITEMS/BOX   +50% LOOT   -15% SHIELDS",
+		.perks = "2-3 ITEMS/BOX (25%)   -40% SHIELDS",
 		.primary = SPREADFIRE_INDEX,
 		.powerup = POW_SPREADFIRE_WEAPON,
 		.secondary = {{ -1 }, { -1 }},
-		.shield_pct = 85,
-		.speed = F1_0,
+		.shield_pct = 60,
 		.damage_taken = F1_0,
 		.damage_dealt = F1_0,
 		.afterburner_drain = F1_0,
 		.box_extra_rolls = 1,
+		.box_bonus_pct = 25,
 		.box_item_time = F1_0 + F1_0/2,
 		.boost_time = F1_0,
 		.boost_power = F1_0,
 	},
 	{
-		// The route specialist: pads are scenery to everyone else and the
-		// whole build to this one. Used to dock both speed AND turn to pay
-		// for that, which on a track with only a couple of pads left it
-		// strictly worse than the stock ship for the whole rest of the lap --
-		// there was no track on which the trade could win. The penalty is
-		// halved to fix that. First pass at the payoff (doubled duration plus
-		// a power bonus on top) overcorrected into the opposite problem --
-		// unbeatable on anything with a real pad chain -- so it's down to
-		// just a longer hold, no added push.
+		// The pad specialist, pushed further both ways: a real pad chain
+		// launches this class clear of the field, but it corners worse
+		// than Juggernaut and burns its afterburner faster too, so there
+		// is no backup plan when the track's pads don't favor it.
 		.name = "CHARGING BULL",
 		.weapon = "HELIX CANNON",
-		.perks = "+60% BOOST PADS   -5% SPEED   -8% TURN",
+		.perks = "+75% BOOST PADS   -30% TURN   +20% AB DRAIN",
 		.primary = HELIX_INDEX,
 		.powerup = POW_HELIX_WEAPON,
 		.secondary = {{ -1 }, { -1 }},
-		.speed = F1_0 - (F1_0*5)/100,
-		.turn = F1_0 - (F1_0*8)/100,
+		.turn = F1_0 - (F1_0*30)/100,
 		.damage_taken = F1_0,
 		.damage_dealt = F1_0,
-		.afterburner_drain = F1_0,
+		.afterburner_drain = F1_0 + (F1_0*20)/100,
 		.box_item_time = F1_0,
-		.boost_time = F1_0 + (F1_0*6)/10,
-		.boost_power = F1_0,
+		.boost_time = F1_0,
+		.boost_power = F1_0 + (F1_0*75)/100,
 	},
 	{
-		// The phoenix shell bounces, so this one does not need a clean line
-		// to hurt somebody -- it shoots corners. Built to live where that
-		// pays: the quickest thing on the track through the tight stuff. The
-		// shield cost used to run deeper than any other class's, which meant
-		// one bad hit -- a wall, a bot, a stray shot -- cost this class a
-		// respawn that the speed and turn on offer couldn't buy back. Eased
-		// off to line up with what Glass Cannon and Scavenger pay for a
-		// similar edge.
+		// Best handling in the field, full stop -- and the most fragile
+		// airframe outside Glass Cannon, doubly so: every wall clip or
+		// stray shot costs both a bigger shield bite and more of what's
+		// left underneath it.
 		.name = "FIREBIRD",
 		.weapon = "PHOENIX CANNON",
-		.perks = "+15% TURN   +5% SPEED   -20% SHIELDS",
+		.perks = "+35% TURN   -40% SHIELDS   +20% DMG TAKEN",
 		.primary = PHOENIX_INDEX,
 		.powerup = POW_PHOENIX_WEAPON,
 		.secondary = {{ -1 }, { -1 }},
-		.shield_pct = 80,
-		.speed = F1_0 + (F1_0*5)/100,
-		.turn = F1_0 + (F1_0*15)/100,
+		.shield_pct = 60,
+		.turn = F1_0 + (F1_0*35)/100,
+		.damage_taken = F1_0 + (F1_0*20)/100,
+		.damage_dealt = F1_0,
+		.afterburner_drain = F1_0,
+		.box_item_time = F1_0,
+		.boost_time = F1_0,
+		.boost_power = F1_0,
+	},
+	{
+		// The Omega never runs dry for this class -- energy is irrelevant to
+		// it, see race_omega_is_blood_cannon() -- it just keeps firing by
+		// drawing straight from shields instead (race_omega_drain_shields(),
+		// called from laser.c's own energy-deduction sites). No floor: hold
+		// the trigger through a whole fight and it can kill you the same as
+		// getting shot, through the same apply_damage_to_player() path
+		// everything else dies to. race_trichord_shield_regen_frame() gives
+		// a slow trickle back on a perfect trichord, so a Reaper who can
+		// also fly clean earns back what the cannon cost -- everyone else,
+		// nothing to earn back yet.
+		.name = "REAPER",
+		.weapon = "OMEGA CANNON",
+		.perks = "UNLIMITED OMEGA -- COSTS SHIELDS   -30% SHIELDS",
+		.primary = OMEGA_INDEX,
+		.powerup = POW_OMEGA_WEAPON,
+		.secondary = {{ -1 }, { -1 }},
+		.shield_pct = 70,
 		.damage_taken = F1_0,
 		.damage_dealt = F1_0,
 		.afterburner_drain = F1_0,
 		.box_item_time = F1_0,
 		.boost_time = F1_0,
 		.boost_power = F1_0,
+		.omega_blood_cannon = 1,
 	},
 };
 
@@ -2102,7 +2218,12 @@ fix race_class_speed_scale(void)
 {
 	const race_class_info *ci = race_my_class();
 
-	return ci ? ci->speed : F1_0;
+	// 0 means "leave it alone", same convention as turn below -- no class in
+	// the table sets this any more (see the rebalance-rule comment above
+	// Race_class_table: speed is off the table entirely, every trade goes
+	// through some other stat), but this keeps a class that omits it, now or
+	// in the future, at stock speed instead of dead in the water.
+	return (ci && ci->speed) ? ci->speed : F1_0;
 }
 
 fix race_class_turn_scale(void)
@@ -2119,6 +2240,29 @@ fix race_class_afterburner_drain_scale(void)
 	const race_class_info *ci = race_my_class();
 
 	return ci ? ci->afterburner_drain : F1_0;
+}
+
+int race_omega_is_blood_cannon(void)
+{
+	const race_class_info *ci = race_my_class();
+
+	return ci && ci->omega_blood_cannon;
+}
+
+void race_omega_drain_shields(fix energy_cost)
+{
+	if (!race_omega_is_blood_cannon() || energy_cost <= 0 || !ConsoleObject)
+		return;
+
+	// Goes through the same pipeline any other hit does -- shield flash,
+	// shield_warning_damage()/reset_shield_warning_damage(), and death via
+	// OF_SHOULD_BE_DEAD once shields go negative -- so holding the trigger
+	// dry kills a Reaper exactly the way an enemy's weapon would, no special
+	// case needed anywhere else. Self as the killer: apply_damage_to_player()
+	// only touches Players[Player_num] regardless of what's passed, but it
+	// wants an object to blame, and this is honest about where the damage
+	// actually came from.
+	apply_damage_to_player(ConsoleObject, ConsoleObject, energy_cost, 0);
 }
 
 fix race_scale_damage_for(int pnum, const object *killer, fix damage)
@@ -2785,7 +2929,7 @@ void race_init_level(void)
 	Race_best_lap = 0;
 	Race_num_splits = 0;
 	Race_summary_pending = 0;
-	Race_trichord_strength = 0;
+	Race_over_triggered = 0;
 	Race_trichord_charge = 0;
 	Race_trichord_boost_until = 0;
 	Race_trichord_blobs_lit = 0;
@@ -2844,6 +2988,53 @@ static void race_update_emp_sound(void)
 		digi_stop_looping_sound();
 
 	playing = active;
+}
+
+// Once every racer still connected has crossed the line, kicks this machine
+// into the same "level finished" sequence a normal exit trigger runs --
+// PlayerFinishedLevel() -> multi_endlevel_score() -> multi_endlevel(), which
+// syncs every connected machine up and lands the whole netgame on the shared
+// end-of-level standings, same as coop and anarchy get when the level ends.
+//
+// Race never had an exit trigger of its own to do this: race_show_summary()
+// only ever put up a personal "you finished" popup, locally, on whichever
+// machine just crossed the line -- nothing ever told the game the *level*
+// was over, so nobody but that one player got kicked anywhere, and the rest
+// of the field just kept driving (or sat on the results popup) until the
+// host manually ended things some other way.
+//
+// Runs identically on every connected machine off the same networked
+// Race_player[].finished flags (race_send_update() broadcasts a finish the
+// moment it happens), so every machine reaches "everyone's done" at
+// essentially the same time and calls PlayerFinishedLevel() independently --
+// exactly the shape multi_endlevel()'s sync already expects, the same as
+// when every player reaches an exit trigger for themselves.
+static void race_check_race_over(void)
+{
+	int i, total = 0, finished = 0;
+
+	if (Race_over_triggered || !(Game_mode & GM_NETWORK))
+		return;
+
+	for (i = 0; i < N_players; i++)
+	{
+		if (Players[i].connected == CONNECT_DISCONNECTED)
+			continue;
+#ifdef NETWORK
+		if (Netgame.host_is_obs && i == 0)
+			continue;
+#endif
+		total++;
+
+		if (Race_player[i].finished)
+			finished++;
+	}
+
+	if (total < 1 || finished < total)
+		return;
+
+	Race_over_triggered = 1;
+	PlayerFinishedLevel(0);
 }
 
 void race_frame(void)
@@ -2937,6 +3128,9 @@ void race_frame(void)
 	race_harvest_level_weapons();
 	race_items_frame();
 	race_bots_frame();
+	race_trichord_shield_regen_frame();
+	race_speed_fov_frame();
+	race_check_race_over();
 }
 
 void race_format_time(char *buf, int bufsz, fix64 t)
@@ -3989,6 +4183,20 @@ static int race_shaker_aim_point(object *tracker, int target_objnum, vms_vector 
 	while (p->idx < p->n - 1 &&
 		   vm_vec_dist_quick(&tracker->pos, &p->pts[p->idx].point) < RACE_SHAKER_ARRIVE_DIST)
 		p->idx++;
+
+	// The last waypoint is the centre of the segment the target was in when
+	// this path was built (or last refreshed) -- a fixed point in space, not
+	// the target. Steering at it to the end left the missile parked on that
+	// spot once it arrived, since nothing after this ever aimed at the
+	// target's actual, still-moving position again. On the final leg, home
+	// on the target directly; the corridor has already done its job of
+	// getting the missile into the target's neighborhood without clipping a
+	// wall on the way.
+	if (p->idx >= p->n - 1)
+	{
+		*aim = target->pos;
+		return 1;
+	}
 
 	*aim = p->pts[p->idx].point;
 	return 1;

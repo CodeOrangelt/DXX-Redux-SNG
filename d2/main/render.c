@@ -1651,7 +1651,7 @@ void render_frame(fix eye_offset, int window_num)
 			fov_zoom = 0;
 		Render_zoom = 0x9000 + (fov_zoom * 0x800);
 
-		// Race mode boost pads widen the view while the boost is running.
+		// Race mode: FOV widens smoothly with the local player's actual speed.
 		if (Game_mode & GM_RACE)
 			Render_zoom += race_get_fov_bonus();
 	}

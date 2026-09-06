@@ -528,8 +528,16 @@ void do_omega_stuff(object *parent_objp, vms_vector *firing_pos, object *weapon_
 	fix fire_frame_overhead = 0;
 
 	if (pnum == Player_num) {
+		// Reaper never runs dry -- the charge/energy gate below is what stops
+		// everyone else, so this class just skips it and pays in shields
+		// instead (race_omega_drain_shields(), no floor: hold the trigger
+		// through a whole fight and it can kill you). Omega_charge still
+		// ticks normally underneath for the HUD meter; it just never gates
+		// anything for this class.
+		if (race_omega_is_blood_cannon())
+			race_omega_drain_shields(RACE_REAPER_OMEGA_SHIELD_COST);
 		//	If charge >= min, or (some charge and zero energy), allow to fire.
-		if (!((Omega_charge >= MIN_OMEGA_CHARGE) || (Omega_charge && !Players[pnum].energy))) {
+		else if (!((Omega_charge >= MIN_OMEGA_CHARGE) || (Omega_charge && !Players[pnum].energy))) {
 			obj_delete(weapon_objp-Objects);
 			return;
 		}

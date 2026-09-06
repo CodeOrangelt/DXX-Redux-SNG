@@ -2143,16 +2143,36 @@ void InitPlayerPosition(int random_flag)
 		vms_matrix race_orient;
 		int race_segnum;
 
-		if ((Game_mode & GM_RACE) && random_flag == 1 && !is_observer() &&
-			race_get_respawn(&race_pos, &race_orient, &race_segnum))
+		if ((Game_mode & GM_RACE) && random_flag == 1 && !is_observer())
 		{
-			ConsoleObject->pos = race_pos;
-			ConsoleObject->orient = race_orient;
-			Dead_player_camera = NULL;
-			obj_relink(ConsoleObject-Objects, race_segnum);
-			reset_player_object();
-			reset_cruise();
-			return;
+			if (race_get_respawn(&race_pos, &race_orient, &race_segnum))
+			{
+				ConsoleObject->pos = race_pos;
+				ConsoleObject->orient = race_orient;
+				Dead_player_camera = NULL;
+				obj_relink(ConsoleObject-Objects, race_segnum);
+				reset_player_object();
+				reset_cruise();
+				return;
+			}
+			else
+			{
+				// No checkpoint captured yet -- this is the starting grid.
+				// A track built for racing usually defines far fewer Player
+				// Start points than a deathmatch level, often clustered right
+				// on the starting line, so the generic nearest-spawn retry
+				// above regularly runs out of room and leaves two racers on
+				// the same slot. Spread this player around whichever slot it
+				// landed on, the same fixed-ring trick that already keeps
+				// checkpoint respawns from overlapping.
+				int spread_segnum = Player_init[NewPlayer].segnum;
+
+				race_spread_respawn(&ConsoleObject->pos, &ConsoleObject->orient, Player_num, &spread_segnum);
+				obj_relink(ConsoleObject-Objects, spread_segnum);
+				reset_player_object();
+				reset_cruise();
+				return;
+			}
 		}
 	}
 
