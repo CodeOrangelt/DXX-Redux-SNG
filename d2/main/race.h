@@ -168,7 +168,6 @@ extern int Race_finish_segnum;		// a segment of the start/finish line, -1 if the
 extern int Race_finish_marked;		// level marks its line with repair centers
 extern int Race_num_boxes;			// total mystery box spawn points on this level
 extern int Race_laps_to_win;
-extern int Race_powerup_chance;	// 0-100: odds a mystery box or bot draw yields anything at all (100 = always)
 extern int Race_allowed_items;		// bitmask of RACE_ITEM_* slots the loot table may offer (see below)
 
 // Mystery-box loot table slots, for the "allowed powerups" advanced race
@@ -184,6 +183,12 @@ extern int Race_allowed_items;		// bitmask of RACE_ITEM_* slots the loot table m
 #define RACE_ITEM_TRACTOR       6
 #define RACE_NUM_ITEM_SLOTS     7
 #define RACE_ALLOWED_ITEMS_ALL  ((1 << RACE_NUM_ITEM_SLOTS) - 1)
+
+// Per-slot draw-frequency scale, 0-100%, indexed by RACE_ITEM_*: 100 leaves
+// that item's designed front/back weight (race_init_items(), race.c) alone,
+// lower values make it rarer without touching the rubber-band shape, and 0
+// makes it undrawable the same as disabling it in Race_allowed_items.
+extern int Race_item_chance[RACE_NUM_ITEM_SLOTS];
 
 // Resets all players' race progress, (re)counts checkpoints for the level
 // that was just loaded, spawns the mystery boxes and starts the start-line
@@ -443,17 +448,37 @@ fix race_scale_damage_for(int pnum, const object *killer, fix damage);
 // whoever is running away with it, so it ignores the nearest ship and flies
 // at the leader instead -- and it flies at them whether or not the HAM gave
 // the missile a homing flag, which is what race_force_homing() is for.
-// race_homing_target() returns the objnum to fly at, or -1 to leave the
-// engine's own tracking alone.
+// The racer it picks is settled on the first call and kept for the missile's
+// whole life, so it commits to one ship rather than changing its mind every
+// time the standings shuffle.
+// race_homing_target() returns the objnum to fly at, or -1 for no target at
+// all -- which for a race shaker means fly straight on, never fall back to
+// the engine's nearest-ship tracking (see race_force_homing()'s use in
+// laser.c).
 int race_homing_target(const object *tracker);
 int race_force_homing(const object *obj);
 
 // Where to steer a race-mode shaker that has already picked target_objnum
-// (from race_homing_target() above) as its leader. Routes it through the
-// track's own segment graph instead of straight through whatever's between
-// here and there, falling back to the target's own position -- the old
-// straight-line behaviour -- if no path can be built. Always fills *aim.
+// (from race_homing_target() above) as its leader. Follows the lap route the
+// race is run on -- forwards only, never back down the course -- and switches
+// to the ship itself for the last stretch. Falls back to the target's own
+// position, the old straight-line behaviour, on a level with no route built.
+// Always fills *aim.
 void race_homing_aim_point(object *tracker, int target_objnum, vms_vector *aim);
+
+// Drops every shaker's target lock and route position. Call on level load:
+// object signatures restart per level, so state left behind by the last one
+// can otherwise be picked up by a new missile that reuses its signature.
+void race_shaker_reset(void);
+
+// The lap route, as the earthshaker steering reads it (racebot.c owns it).
+// Indices run the way the race is run and wrap at the line.
+int race_route_len(void);
+int race_route_index_near(const vms_vector *pos, int segnum);
+int race_route_index_advance(int from, const vms_vector *pos, int window);
+const vms_vector *race_route_position(int idx);
+int race_route_step(int from, int steps);
+int race_route_gap(int from, int to);
 
 // How much quicker a homing missile flies in a race than the HAM says. A homer
 // chasing a ship at racing speed needs to be able to catch it.
@@ -504,6 +529,11 @@ int race_lobby_handle_key(int key);
 int race_lobby_cursor_class(void);
 int race_lobby_ready_counts(int *ready, int *total);
 int race_player_is_ready(int pnum);
+
+// Locks `pnum` in on the class it already holds, for the bot field: nobody is
+// at a keyboard to pick one, and the lobby must not wait on a racer that can
+// never answer.
+void race_bot_lock_in(int pnum);
 fix64 race_lobby_time_left(void);
 
 // Applies a received MULTI_RACE_READY packet (a player locked in a class).

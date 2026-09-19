@@ -39,6 +39,7 @@
 #include "game.h"
 #include "multi.h"
 #include "race.h"
+#include "racebot.h"
 #include "survival.h"
 #include "endlevel.h"
 #include "palette.h"
@@ -244,7 +245,11 @@ struct connection_status connection_statuses[8];
 
 #define MAX_LOSS_BUFFER 128
 #define MAX_LOSS_COUNTED 100
-ubyte current_pdata = 0; 
+ubyte current_pdata = 0;
+// Position-packet sequence numbers for the slots the host sends on behalf of
+// (race bots). Receivers track packet loss per player, so each slot has to
+// count for itself or every bot would look like it was dropping packets.
+static ubyte bot_pdata_seq[MAX_PLAYERS]; 
 ubyte pdata_received[MAX_PLAYERS][MAX_LOSS_BUFFER];
 ubyte count_pdata_received[MAX_PLAYERS]; 
 ubyte last_pdata_received[MAX_PLAYERS];
@@ -2713,6 +2718,21 @@ void net_udp_welcome_player(UDP_sequence_packet *their)
 
 			Assert(N_players == Netgame.max_numplayers);
 
+			// A field topped up with bots is full of ships but not full of
+			// people. A human always outranks a bot for a place on the grid,
+			// so the one running last gives its slot up -- the field stays
+			// the size the host asked for, it just has one fewer computer in
+			// it. Dropped here rather than through net_udp_dump_player(),
+			// which matches slots by address: every bot address is zeroed,
+			// so dumping one that way would drop the whole bot field.
+			if (race_bots_enabled())
+			{
+				int give_up = race_bot_drop_one();
+
+				if (give_up > 0)
+					multi_disconnect_player(give_up);
+			}
+
 			for (i = 0; i < Netgame.numplayers; i++)
 				if (Netgame.players[i].connected)
 					activeplayers++;
@@ -3505,7 +3525,7 @@ void net_udp_send_endlevel_packet(void)
 		}
 
 		for (i = 1; i < MAX_PLAYERS; i++)
-			if (Players[i].connected != CONNECT_DISCONNECTED)
+			if (Players[i].connected != CONNECT_DISCONNECTED && !race_player_is_bot(i))
 				dxx_sendto (UDP_Socket[0], buf, len, 0, (struct sockaddr *)&Netgame.players[i].protocol.udp.addr, sizeof(struct _sockaddr));
 
 		forward_to_observers(buf, len, 1);
@@ -3810,8 +3830,12 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.StaticPhoenix; len++;
 		buf[len] = Netgame.StaticOmega; len++;
 		buf[len] = Netgame.LapsToWin;							len++;
-		buf[len] = Netgame.RacePowerupChance;					len++;
 		buf[len] = Netgame.RaceAllowedItems;					len++;
+		for (int rc_i = 0; rc_i < RACE_NUM_ITEM_SLOTS; rc_i++) {
+			buf[len] = Netgame.RaceItemChance[rc_i];				len++;
+		}
+		buf[len] = Netgame.RaceBotFill;							len++;
+		buf[len] = Netgame.RaceBotSlots;						len++;
 		buf[len] = Netgame.team_color[0];						len++;
 		buf[len] = Netgame.team_color[1];						len++;
 
@@ -4106,10 +4130,17 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		// initial `value`.
 		Netgame.LapsToWin = min(data[len], 10);					len++;
 		// Same reasoning as LapsToWin above: unauthenticated UDP input.
-		// Chance is a plain 0-100 percentage; the allowed-items mask only has
-		// RACE_NUM_ITEM_SLOTS real bits, so mask off anything above them.
-		Netgame.RacePowerupChance = min(data[len], 100);			len++;
+		// The allowed-items mask only has RACE_NUM_ITEM_SLOTS real bits, so
+		// mask off anything above them; each chance is a plain 0-100 percentage.
 		Netgame.RaceAllowedItems = data[len] & RACE_ALLOWED_ITEMS_ALL;	len++;
+		for (int rc_i = 0; rc_i < RACE_NUM_ITEM_SLOTS; rc_i++) {
+			Netgame.RaceItemChance[rc_i] = min(data[len], 100);	len++;
+		}
+		// Same reasoning as LapsToWin: unauthenticated UDP input, and this
+		// one sizes a loop that spawns ships.
+		Netgame.RaceBotFill = min(data[len], MAX_PLAYERS);		len++;
+		// Slot 0 is the host and is never a bot, whatever the packet says.
+		Netgame.RaceBotSlots = data[len] & ~1;					len++;
 		Netgame.team_color[0] = data[len];						len++;
 		Netgame.team_color[1] = data[len];						len++;
 
@@ -4647,8 +4678,6 @@ static int opt_spawn_no_invul, opt_spawn_short_invul, opt_spawn_long_invul, opt_
 static int opt_burner_spawn; 
 static int opt_allowprefcolor, opt_ow;
 static int opt_sngtoggles;
-static int opt_race_laps;
-static int opt_race_options;
 static int opt_spawnwithmenu;
 static int opt_staticpowerupsmenu;
 static int opt_low_vulcan;
@@ -4701,41 +4730,46 @@ static int net_udp_race_options_handler(newmenu *menu, d_event *event, void *use
 	int citem = newmenu_get_citem(menu);
 	userdata = userdata;
 
-	if (event->type == EVENT_NEWMENU_CHANGED && citem == 0)
-		sprintf(menus[0].text, "Powerup Chance: %d%%", menus[0].value * 5);
+	// Each item is a [checkbox, slider] pair -- the slider is always the odd
+	// index of the pair, and is the only one whose live text needs updating.
+	if (event->type == EVENT_NEWMENU_CHANGED && (citem & 1))
+		sprintf(menus[citem].text, "  Chance: %d%%", menus[citem].value * 5);
 
 	return 0;
 }
 
-// The advanced race options: how often a mystery box/bot draw yields
-// anything at all, and which items the loot table may offer. Shared by the
-// netgame host menu (writes Netgame.Race*) and the singleplayer race setup
-// menu (writes Race_powerup_chance/Race_allowed_items directly) -- callers
-// pass in the chance/mask to start from and get the edited values back.
-void net_udp_race_advanced_options(int *chance, int *allowed_items)
+// The advanced race options: which items the mystery-box loot table may
+// offer, and how often each one comes up relative to its designed rarity.
+// Shared by the netgame host menu (writes Netgame.RaceAllowedItems/
+// RaceItemChance) and the singleplayer race setup menu (writes
+// Race_allowed_items/Race_item_chance directly) -- callers pass in the
+// mask/chances to start from and get the edited values back.
+void net_udp_race_advanced_options(int *allowed_items, int item_chance[RACE_NUM_ITEM_SLOTS])
 {
-	newmenu_item m[1 + RACE_NUM_ITEM_SLOTS];
-	char chance_text[32];
+	newmenu_item m[2 * RACE_NUM_ITEM_SLOTS];
+	char chance_text[RACE_NUM_ITEM_SLOTS][32];
 	int opt = 0, i;
-
-	sprintf(chance_text, "Powerup Chance: %d%%", *chance);
-	m[opt].type = NM_TYPE_SLIDER; m[opt].text = chance_text; m[opt].value = *chance / 5;
-	m[opt].min_value = 0; m[opt].max_value = 20; opt++;
 
 	for (i = 0; i < RACE_NUM_ITEM_SLOTS; i++)
 	{
 		m[opt].type = NM_TYPE_CHECK; m[opt].text = Race_item_slot_text[i];
 		m[opt].value = (*allowed_items >> i) & 1;
 		opt++;
+
+		sprintf(chance_text[i], "  Chance: %d%%", item_chance[i]);
+		m[opt].type = NM_TYPE_SLIDER; m[opt].text = chance_text[i]; m[opt].value = item_chance[i] / 5;
+		m[opt].min_value = 0; m[opt].max_value = 20; opt++;
 	}
 
 	newmenu_do1( NULL, "Advanced Race Options", opt, m, net_udp_race_options_handler, NULL, 0 );
 
-	*chance = m[0].value * 5;
 	*allowed_items = 0;
 	for (i = 0; i < RACE_NUM_ITEM_SLOTS; i++)
-		if (m[1 + i].value)
+	{
+		if (m[2 * i].value)
 			*allowed_items |= (1 << i);
+		item_chance[i] = m[2 * i + 1].value * 5;
+	}
 }
 
 static int menu_spawn_with_weapons_handler( newmenu *menu, d_event *event, void *userdata )
@@ -4886,8 +4920,7 @@ void net_udp_more_game_options ()
 	char PlayText[80],KillText[80],srinvul[50],packstring[5];
 	char PrimDupText[80],SecDupText[80],SecCapText[80]; 
 	char HomingUpdateRateText[80];
-	char RaceLapsText[40];
-	
+
 #ifdef USE_TRACKER
 	newmenu_item m[58];
 #else
@@ -4976,13 +5009,6 @@ void net_udp_more_game_options ()
 
 	opt_respawnconcs = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Respawn Concussions"; m[opt].value = Netgame.RespawnConcs; opt++;	
-
-	opt_race_laps = opt;
-	snprintf(RaceLapsText, sizeof(RaceLapsText), "Race Laps: %d", Netgame.LapsToWin ? Netgame.LapsToWin : RACE_DEFAULT_LAPS);
-	m[opt].type = NM_TYPE_SLIDER; m[opt].text = RaceLapsText; m[opt].value = (Netgame.LapsToWin ? Netgame.LapsToWin : RACE_DEFAULT_LAPS) - 1; m[opt].min_value = 0; m[opt].max_value = 9; opt++;
-
-	opt_race_options = opt;
-	m[opt].type = NM_TYPE_MENU; m[opt].text = "Advanced Race Options..."; opt++;
 
 	opt_faircolors = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "All Players Blue"; m[opt].value = Netgame.FairColors; opt++;		
@@ -5096,16 +5122,6 @@ menu:
 		goto menu;
 	}
 
-	if (i==opt_race_options)
-	{
-		int chance = Netgame.RacePowerupChance;
-		int allowed_items = Netgame.RaceAllowedItems;
-		net_udp_race_advanced_options(&chance, &allowed_items);
-		Netgame.RacePowerupChance = chance;
-		Netgame.RaceAllowedItems = allowed_items;
-		goto menu;
-	}
-
 	Netgame.PacketsPerSec=atoi(packstring);
 	
 	if (Netgame.PacketsPerSec>30)
@@ -5145,7 +5161,6 @@ menu:
 
 	Netgame.RetroProtocol = m[opt_retroproto].value;
 	Netgame.RespawnConcs  = m[opt_respawnconcs].value;
-	Netgame.LapsToWin     = m[opt_race_laps].value + 1;
 	Netgame.AllowColoredLighting  = m[opt_allowcolor].value;
 	Netgame.FairColors  = m[opt_faircolors].value;
 	Netgame.BlackAndWhitePyros  = m[opt_blackwhite].value;
@@ -5223,10 +5238,6 @@ int net_udp_more_options_handler( newmenu *menu, d_event *event, void *userdata 
 			{
 				Netgame.HomingUpdateRate=menus[opt_homing_update_rate].value + 20;
 				sprintf( menus[opt_homing_update_rate].text, "Homing Update Rate: %d", Netgame.HomingUpdateRate);
-			} else if (citem == opt_race_laps)
-			{
-				Netgame.LapsToWin = menus[opt_race_laps].value + 1;
-				sprintf( menus[opt_race_laps].text, "Race Laps: %d", Netgame.LapsToWin);
 			} else if (citem == opt_spawn_no_invul) {
 				Netgame.SpawnStyle = SPAWN_STYLE_NO_INVUL;
 			} else if (citem == opt_spawn_short_invul) {
@@ -5260,7 +5271,26 @@ typedef struct param_opt
 {
 	int start_game, load_preset, save_preset, name, level, mode, mode_end, moreopts;
 	int closed, refuse, maxnet, maxobs, obsdelay, obsmin, anarchy, team_anarchy, robot_anarchy, coop, capture, hoard, team_hoard, bounty, race, survival;
+	int race_laps, race_options, race_bots;
 } param_opt;
+
+// "Race Bots: off" / "Race Bots: fill 8" -- the setting is the size of the
+// field the host tops up to, not a count of bots, so a race is the same size
+// whether two humans turn up or seven. Kept short: a slider's label shares
+// its row with the slider itself, and a longer one runs under it.
+static void race_bot_fill_text(char *buf, size_t bufsz, int fill)
+{
+	if (fill < 2)
+		snprintf(buf, bufsz, "Race Bots: off");
+	else
+		snprintf(buf, bufsz, "Race Bots: fill %d", fill);
+}
+
+// Reopen target for the netgame setup menu after it closes itself to rebuild
+// with a different item count (see the Race-mode item toggle below) -- set
+// by the handler right before it triggers the rebuild, consumed once by
+// net_udp_setup_game()'s loop.
+static int net_udp_setup_reopen_at = -1;
 
 int net_udp_start_game(void);
 
@@ -5354,7 +5384,13 @@ int net_udp_game_param_handler( newmenu *menu, d_event *event, param_opt *opt )
 				}
 			}
 
-			if ((citem >= opt->mode) && (citem <= opt->mode_end))
+			// The race settings sit inside this same index range (right
+			// after the Race radio) whenever they're visible, but they
+			// aren't mode radios themselves -- exclude them so moving one
+			// of their sliders doesn't re-run mode detection.
+			if ((citem >= opt->mode) && (citem <= opt->mode_end) &&
+				citem != opt->race_laps && citem != opt->race_options &&
+				citem != opt->race_bots)
 			{
 				if ( menus[opt->anarchy].value )
 					Netgame.gamemode = NETGAME_ANARCHY;
@@ -5390,6 +5426,35 @@ int net_udp_game_param_handler( newmenu *menu, d_event *event, param_opt *opt )
 				else if( menus[opt->survival].value )
 					Netgame.gamemode = NETGAME_SURVIVAL;
 				else Int3(); // Invalid mode -- see Rob
+
+				// Race Laps / Advanced Race Options only belong on this menu
+				// while Race is the selected mode -- if switching into or out
+				// of Race changes whether they should be visible, close and
+				// reopen the menu so net_udp_setup_game() can rebuild the
+				// item array with the right count (same trick load_preset
+				// uses to rebuild after loading a file).
+				if ((Netgame.gamemode == NETGAME_RACE) != (opt->race_laps != 0))
+				{
+					net_udp_setup_reopen_at = opt->race;
+					newmenu_set_rval(menu, GAME_PARAM_CHOICE_SHOW_AGAIN);
+					window_close(newmenu_get_window(menu));
+					return 0;
+				}
+			}
+
+			if (citem == opt->race_laps && opt->race_laps != 0)
+			{
+				Netgame.LapsToWin = menus[opt->race_laps].value + 1;
+				sprintf( menus[opt->race_laps].text, "Race Laps: %d", Netgame.LapsToWin);
+			}
+
+			if (citem == opt->race_bots && opt->race_bots != 0)
+			{
+				int fill = menus[opt->race_bots].value + 1;
+
+				// One racer is not a field: the bottom of the slider is off.
+				Netgame.RaceBotFill = (fill < 2) ? 0 : fill;
+				race_bot_fill_text(menus[opt->race_bots].text, 40, Netgame.RaceBotFill);
 			}
 
 			if (menus[opt->closed].value)
@@ -5416,6 +5481,20 @@ int net_udp_game_param_handler( newmenu *menu, d_event *event, param_opt *opt )
 					Game_mode=GM_MULTI_COOP;
 				net_udp_more_game_options();
 				Game_mode=0;
+				return 1;
+			}
+
+			if (citem==opt->race_options && opt->race_options != 0)
+			{
+				int allowed_items = Netgame.RaceAllowedItems;
+				int item_chance[RACE_NUM_ITEM_SLOTS];
+				int rc_i;
+				for (rc_i = 0; rc_i < RACE_NUM_ITEM_SLOTS; rc_i++)
+					item_chance[rc_i] = Netgame.RaceItemChance[rc_i];
+				net_udp_race_advanced_options(&allowed_items, item_chance);
+				Netgame.RaceAllowedItems = allowed_items;
+				for (rc_i = 0; rc_i < RACE_NUM_ITEM_SLOTS; rc_i++)
+					Netgame.RaceItemChance[rc_i] = item_chance[rc_i];
 				return 1;
 			}
 
@@ -5522,8 +5601,11 @@ void netgame_set_defaults()
 	Netgame.StaticPhoenix = 0;
 	Netgame.StaticOmega = 0;
 	Netgame.LapsToWin = RACE_DEFAULT_LAPS;
-	Netgame.RacePowerupChance = 100;
 	Netgame.RaceAllowedItems = RACE_ALLOWED_ITEMS_ALL;
+	for (int rc_i = 0; rc_i < RACE_NUM_ITEM_SLOTS; rc_i++)
+		Netgame.RaceItemChance[rc_i] = 100;
+	Netgame.RaceBotFill = 0;
+	Netgame.RaceBotSlots = 0;
 
 #ifdef USE_TRACKER
 	Netgame.Tracker = 1;
@@ -5634,12 +5716,14 @@ int net_udp_setup_game()
 	int i;
 	int optnum;
 	param_opt opt;
-	newmenu_item m[26];
+	newmenu_item m[36];
 	char slevel[5];
 	char level_text[32];
 	char srmaxnet[50];
 	char srmaxobs[50];
 	char srbdelay[50];
+	char sracelaps[40];
+	char sracebots[40];
 	int numplayers_limit;
 	int choice;
 
@@ -5721,6 +5805,24 @@ int net_udp_setup_game()
 
 		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Race"; m[optnum].value = ( Netgame.gamemode == NETGAME_RACE ); m[optnum].group = 0; opt.race=optnum; optnum++;
 
+		if (Netgame.gamemode == NETGAME_RACE)
+		{
+			opt.race_laps = optnum;
+			snprintf(sracelaps, sizeof(sracelaps), "Race Laps: %d", Netgame.LapsToWin ? Netgame.LapsToWin : RACE_DEFAULT_LAPS);
+			m[optnum].type = NM_TYPE_SLIDER; m[optnum].text = sracelaps; m[optnum].value = (Netgame.LapsToWin ? Netgame.LapsToWin : RACE_DEFAULT_LAPS) - 1; m[optnum].min_value = 0; m[optnum].max_value = 9; optnum++;
+
+			opt.race_bots = optnum;
+			race_bot_fill_text(sracebots, sizeof(sracebots), Netgame.RaceBotFill);
+			m[optnum].type = NM_TYPE_SLIDER; m[optnum].text = sracebots; m[optnum].value = Netgame.RaceBotFill ? Netgame.RaceBotFill - 1 : 0; m[optnum].min_value = 0; m[optnum].max_value = MAX_PLAYERS - 1; optnum++;
+
+			opt.race_options = optnum;
+			m[optnum].type = NM_TYPE_MENU; m[optnum].text = "Advanced Race Options..."; optnum++;
+		}
+		else
+		{
+			opt.race_laps = opt.race_options = opt.race_bots = 0; // NOTE: only meaningful when Netgame.gamemode == NETGAME_RACE
+		}
+
 		m[optnum].type = NM_TYPE_RADIO; m[optnum].text = "Survival"; m[optnum].value = ( Netgame.gamemode == NETGAME_SURVIVAL ); m[optnum].group = 0; opt.mode_end=opt.survival=optnum; optnum++;
 
 		m[optnum].type = NM_TYPE_TEXT; m[optnum].text = ""; optnum++;
@@ -5763,7 +5865,14 @@ int net_udp_setup_game()
 
 		if (choice != GAME_PARAM_CHOICE_SHOW_AGAIN)
 			break;
-		choice = opt.load_preset;
+
+		if (net_udp_setup_reopen_at >= 0)
+		{
+			choice = net_udp_setup_reopen_at;
+			net_udp_setup_reopen_at = -1;
+		}
+		else
+			choice = opt.load_preset;
 	}
 
 	if (choice < 0)
@@ -6784,6 +6893,13 @@ void net_udp_timeout_check(fix64 time)
 		// Check for player timeouts
 		for (i = 0; i < N_players; i++)
 		{
+			// A bot has no machine behind it to send anything, so the
+			// silence that times a real player out is all a bot will ever
+			// produce. The host drives them locally and clients are fed
+			// their positions by the host; neither may drop them.
+			if (race_player_is_bot(i))
+				continue;
+
 			if ((i != Player_num) && (Players[i].connected != CONNECT_DISCONNECTED))
 			{
 				if ((Netgame.players[i].LastPacketTime == 0) || (Netgame.players[i].LastPacketTime > time))
@@ -7230,6 +7346,16 @@ void net_udp_noloss_process_queue(fix64 time)
 		{
 			// If player is not playing anymore, we can remove him from list. Also remove *me* (even if that should have been done already). Also make sure Clients do not send to anyone else than Host
 			if ((Players[plc].connected != CONNECT_PLAYING || plc == Player_num) || (!multi_i_am_master() && plc > 0))
+				UDP_mdata_queue[queuec].player_ack[plc] = 1;
+
+			// A bot can never acknowledge anything -- there is no machine at
+			// its slot to send an ACK back. Counted as always acknowledged,
+			// or every guaranteed-delivery packet in the game would be
+			// retransmitted at it three times a second for the rest of the
+			// level, and the queue would eventually dump the slot by address
+			// -- which, all bot addresses being zero, would take every bot
+			// in the race down with it.
+			if (race_player_is_bot(plc))
 				UDP_mdata_queue[queuec].player_ack[plc] = 1;
 
 			if (!UDP_mdata_queue[queuec].player_ack[plc])
@@ -7727,30 +7853,45 @@ void forward_to_observers_nodelay(ubyte* data, int data_len, int needack) {
 	}
 }
 
-void net_udp_send_pdata()
+// Position data for one player slot. Normally that is this machine's own
+// player, but the host also sends on behalf of each race bot it is driving:
+// the packet already carries the player number it is speaking for, so a bot
+// reaches clients as an ordinary remote player and needs no new message type.
+static void net_udp_send_pdata_for(int pnum)
 {
-	if(is_observer()) { return; }
-
 	ubyte buf[UPID_PDATA_U_SIZE];
 	int len = 0, i = 0;
+	ubyte seq;
 
 	if (!(Game_mode&GM_NETWORK) || UDP_Socket[0] == -1)
 		return;
-	if (Players[Player_num].connected != CONNECT_PLAYING)
+	if (Players[pnum].connected != CONNECT_PLAYING)
 		return;
 
-	current_pdata = (current_pdata + 1) % MAX_LOSS_BUFFER; 
+	// Each slot carries its own sequence counter, since the receiver tracks
+	// packet loss per player and a shared counter would read as constant loss
+	// on every one of them.
+	if (pnum == Player_num)
+	{
+		current_pdata = (current_pdata + 1) % MAX_LOSS_BUFFER;
+		seq = current_pdata;
+	}
+	else
+	{
+		bot_pdata_seq[pnum] = (bot_pdata_seq[pnum] + 1) % MAX_LOSS_BUFFER;
+		seq = bot_pdata_seq[pnum];
+	}
 
 	memset(&buf, 0, sizeof(UDP_frame_info));
 	
 	buf[len] = UPID_PDATA;										len++;
 	PUT_INTEL_INT(buf + len, netgame_token);					len += 4; 
-	buf[len] = Player_num;										len++;
-	buf[len] = Players[Player_num].connected;							len++;
+	buf[len] = pnum;											len++;
+	buf[len] = Players[pnum].connected;							len++;
 
 	if(Netgame.RetroProtocol) 
 	{
-		object* player = Objects+Players[Player_num].objnum;
+		object* player = Objects+Players[pnum].objnum;
 
 		PUT_INTEL_INT(buf + len, player->orient.rvec.x); 	len += 4; 
 		PUT_INTEL_INT(buf + len, player->orient.rvec.y); 	len += 4; 
@@ -7770,13 +7911,13 @@ void net_udp_send_pdata()
 		PUT_INTEL_INT(buf+len, player->mtype.phys_info.rotvel.x);				len += 4;
 		PUT_INTEL_INT(buf+len, player->mtype.phys_info.rotvel.y);				len += 4;
 		PUT_INTEL_INT(buf+len, player->mtype.phys_info.rotvel.z);				len += 4; 		
-		buf[len] = current_pdata; len++;
+		buf[len] = seq; len++;
 
 	} else if (Netgame.ShortPackets)
 	{
 		shortpos spp;
 		memset(&spp, 0, sizeof(shortpos));
-		create_shortpos(&spp, Objects+Players[Player_num].objnum, 0);
+		create_shortpos(&spp, Objects+Players[pnum].objnum, 0);
 		memcpy(buf + len, &spp.bytemat, 9);							len += 9;
 		PUT_INTEL_SHORT(buf+len, spp.xo);							len += 2;
 		PUT_INTEL_SHORT(buf+len, spp.yo);							len += 2;
@@ -7791,7 +7932,7 @@ void net_udp_send_pdata()
 	{
 		quaternionpos qpp;
 		memset(&qpp, 0, sizeof(quaternionpos));
-		create_quaternionpos(&qpp, Objects+Players[Player_num].objnum, 0);
+		create_quaternionpos(&qpp, Objects+Players[pnum].objnum, 0);
 		PUT_INTEL_SHORT(buf+len, qpp.orient.w);							len += 2;
 		PUT_INTEL_SHORT(buf+len, qpp.orient.x);							len += 2;
 		PUT_INTEL_SHORT(buf+len, qpp.orient.y);							len += 2;
@@ -7805,7 +7946,7 @@ void net_udp_send_pdata()
 		PUT_INTEL_INT(buf+len, qpp.rotvel.x);							len += 4;
 		PUT_INTEL_INT(buf+len, qpp.rotvel.y);							len += 4;
 		PUT_INTEL_INT(buf+len, qpp.rotvel.z);							len += 4; // 44 + 3 = 47
-		buf[len] = current_pdata; len++;
+		buf[len] = seq; len++;
 	}
 
 	if(Netgame.RetroProtocol) {
@@ -7822,7 +7963,7 @@ void net_udp_send_pdata()
 		if (multi_i_am_master())
 		{
 			for (i = 1; i < MAX_PLAYERS; i++)
-				if (Players[i].connected != CONNECT_DISCONNECTED) {
+				if (Players[i].connected != CONNECT_DISCONNECTED && !race_player_is_bot(i)) {
 					dxx_sendto (UDP_Socket[0], buf, len, 0, (struct sockaddr *)&Netgame.players[i].protocol.udp.addr, sizeof(struct _sockaddr));
 				}
 		}
@@ -7831,6 +7972,23 @@ void net_udp_send_pdata()
 			dxx_sendto (UDP_Socket[0], buf, len, 0, (struct sockaddr *)&Netgame.players[0].protocol.udp.addr, sizeof(struct _sockaddr));
 		}
 	}
+}
+
+void net_udp_send_pdata()
+{
+	int i;
+
+	if(is_observer()) { return; }
+
+	net_udp_send_pdata_for(Player_num);
+
+	// The host is the only machine running the bot field, so it is also the
+	// only one that can tell anybody where the bots are. One position packet
+	// per bot per tick, on the same schedule as its own.
+	if (multi_i_am_master() && (Game_mode & GM_RACE))
+		for (i = 1; i < MAX_PLAYERS; i++)
+			if (race_player_is_bot(i))
+				net_udp_send_pdata_for(i);
 
 	if (Send_ship_status && GameTime64 >= Next_ship_status_time)
 	{
@@ -8489,6 +8647,13 @@ void net_udp_gns_route_found(int player_id, const void *addr, int addr_len)
 #endif /* USE_GNS */
 
 void net_udp_send_to_player(ubyte* data, int len, int to_player) {
+	// Nothing is listening at a bot's slot: the host simulates it and its
+	// address is a zeroed sockaddr. Without this every caller would push a
+	// packet per tick into that hole, and clients would try to hole-punch a
+	// route to a peer that does not exist.
+	if (race_player_is_bot(to_player))
+		return;
+
 	if(connection_statuses[to_player].type == CONNT_DIRECT) {
 		net_udp_send_to_player_direct(data, len, to_player); 
 	} else if (connection_statuses[to_player].type == CONNT_PROXY) {
@@ -8585,6 +8750,10 @@ void net_udp_p2p_ping_frame(fix64 time)
 	for(int i = 0; i < MAX_PLAYERS; i++) {
 		if(i == Player_num) continue;
 		if(! Players[i].connected) continue;
+		// Never hole-punch a bot. There is no machine to reach, so attempts
+		// would climb to the cap and then, where GNS is built in, sit there
+		// dialling an ICE route for a peer that does not exist.
+		if(race_player_is_bot(i)) continue;
 
 		if(is_observer() && !multi_i_am_master() && i > 0) { return; }
 
@@ -8651,6 +8820,9 @@ void net_udp_ping_frame(fix64 time)
 		{
 			if (Players[i].connected == CONNECT_DISCONNECTED)
 				continue;
+
+			if (race_player_is_bot(i))
+				continue;		// no peer to measure a round trip to
 			dxx_sendto (UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&Netgame.players[i].protocol.udp.addr, sizeof(struct _sockaddr));
 		}
 		PingTime = time;

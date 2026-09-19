@@ -22,6 +22,7 @@
 #include "physics.h"
 #include "fvi.h"
 #include "multi.h"
+#include "timer.h"
 #include "hudmsg.h"
 #include "digi.h"
 #include "sounds.h"
@@ -249,17 +250,37 @@ static point_seg Bot_route[BOT_ROUTE_MAX];
 static int Bot_route_len = 0;
 static int Bot_route_overflow = 0;
 
+// Whether this machine is the one driving the bots. In a netgame that is the
+// host and only the host: it simulates the field and broadcasts each bot's
+// position as ordinary player position data, exactly as if the bot were a
+// client sending its own. Clients never run a step of bot code -- they see
+// bots as remote players like any other.
 int race_bots_enabled(void)
 {
-	// Single player only. Nothing about a bot is networked -- no other
-	// machine would see them, and the host is not authoritative over them.
-	return (Game_mode & GM_RACE) && !(Game_mode & GM_MULTI) && Race_bot_count > 0;
+	if (!(Game_mode & GM_RACE))
+		return 0;
+
+	if (Game_mode & GM_MULTI)
+		return multi_i_am_master() && Netgame.RaceBotFill > 1;
+
+	return Race_bot_count > 0;
 }
 
+// True on every machine, not just the host's. A client has no Race_bot[]
+// state to read -- it is told which slots the host is driving through
+// Netgame.RaceBotSlots, which rides along in the game info packet. Without
+// that, clients would treat bots as unreachable peers and spend the race
+// pinging and hole-punching at slots that will never answer.
 int race_player_is_bot(int pnum)
 {
 	if (pnum <= 0 || pnum >= MAX_PLAYERS)
 		return 0;
+
+	// The GM_RACE test matters as much as the mask: a stale bit would make a
+	// real player invisible to this machine, since every send path skips a
+	// slot this call claims is a bot.
+	if (Game_mode & GM_MULTI)
+		return (Game_mode & GM_RACE) && ((Netgame.RaceBotSlots >> pnum) & 1) != 0;
 
 	return Race_bot[pnum].active;
 }
@@ -270,6 +291,66 @@ int race_object_is_bot(const object *obj)
 		return 0;
 
 	return race_player_is_bot(obj->id);
+}
+
+// Retires one bot so a joining human can have its place, and returns the slot
+// it gave up (-1 if there was no bot to drop). The one running last goes: it
+// has the least invested in the race, and taking the leader out mid-lap would
+// rewrite the standings everybody is watching.
+//
+// The slot is left claimed but no longer a bot -- the caller disconnects it,
+// which ghosts the ship and puts the slot in the pool the join code hands to
+// the new arrival.
+int race_bot_drop_one(void)
+{
+	int i, worst = -1, worst_rank = -1;
+
+	if (!(Game_mode & GM_MULTI))
+		return -1;
+
+	for (i = 1; i < MAX_PLAYERS; i++)
+	{
+		int rank;
+
+		if (!Race_bot[i].active)
+			continue;
+
+		rank = race_get_rank(i);
+
+		if (rank > worst_rank)
+		{
+			worst_rank = rank;
+			worst = i;
+		}
+	}
+
+	if (worst < 0)
+		return -1;
+
+	// Anything this bot left on the track goes with it. race_bots_clear_
+	// wrecks() only sweeps slots that are still active, so a wreck orphaned
+	// by clearing the slot is one nothing owns any more -- it would sit
+	// there for the rest of the race, which is the very thing that sweep
+	// exists to stop.
+	if (Race_bot[worst].wreck_objnum >= 0 &&
+		Race_bot[worst].wreck_objnum <= Highest_object_index)
+		obj_delete(Race_bot[worst].wreck_objnum);
+
+	memset(&Race_bot[worst], 0, sizeof(Race_bot[worst]));
+
+	// A zeroed slot is not an empty one: these four read as "none" at -1, and
+	// object/segment 0 is a real object and a real segment.
+	Race_bot[worst].wreck_objnum = -1;
+	Race_bot[worst].item_class = -1;
+	Race_bot[worst].item_index = -1;
+	Race_bot[worst].respawn_seg = -1;
+
+	Netgame.RaceBotSlots &= ~(1 << worst);
+
+	if (Race_bots_active > 0)
+		Race_bots_active--;
+
+	return worst;
 }
 
 int race_bot_field_size(void)
@@ -465,6 +546,98 @@ static int race_route_forward(int from, fix distance)
 	}
 
 	return idx;
+}
+
+// -------------------------------------------------------------------------
+// Route access for the earthshaker steering in race.c
+// -------------------------------------------------------------------------
+//
+// A race shaker flies the same racing line the bot field drives rather than
+// a pathfinder route of its own: the lap route is already an ordered, one-way
+// loop round the track, which is exactly what "follow the course and never
+// double back" wants. Bot_route is private to this file, so these are the
+// only windows onto it.
+
+int race_route_len(void)
+{
+	return Bot_route_len;
+}
+
+// Where `pos` sits on the lap, searching the whole route. `segnum` (or -1)
+// biases the match toward the segment the point is really in -- see
+// race_route_nearest_in_segment(). -1 when there is no route.
+int race_route_index_near(const vms_vector *pos, int segnum)
+{
+	if (Bot_route_len <= 0 || !pos)
+		return -1;
+
+	return race_route_nearest_in_segment(pos, segnum);
+}
+
+// The same question asked of a missile that already knows roughly where it
+// is: the nearest route point within `window` steps *ahead* of `from`. A
+// missile only ever travels the route one way, so re-finding it means looking
+// forward from where it was rather than rescanning a lap that can run to
+// thousands of points, once per blob per frame.
+int race_route_index_advance(int from, const vms_vector *pos, int window)
+{
+	int i, best = from;
+	fix best_dist;
+
+	if (Bot_route_len <= 0 || !pos || from < 0 || from >= Bot_route_len)
+		return -1;
+
+	best_dist = vm_vec_dist_quick(pos, &Bot_route[from].point);
+
+	for (i = 1; i <= window && i < Bot_route_len; i++)
+	{
+		int idx = (from + i) % Bot_route_len;
+		fix dist = vm_vec_dist_quick(pos, &Bot_route[idx].point);
+
+		if (dist < best_dist)
+		{
+			best_dist = dist;
+			best = idx;
+		}
+	}
+
+	return best;
+}
+
+const vms_vector *race_route_position(int idx)
+{
+	if (Bot_route_len <= 0 || idx < 0 || idx >= Bot_route_len)
+		return NULL;
+
+	return &Bot_route[idx].point;
+}
+
+// `steps` points further round the lap, wrapping. Forward only ever means
+// forward: the route is stored in the direction the race is run.
+int race_route_step(int from, int steps)
+{
+	if (Bot_route_len <= 0)
+		return -1;
+
+	return (int)(((unsigned)(from + steps)) % (unsigned)Bot_route_len);
+}
+
+// How many points forward it is from `from` round to `to`. Always measured
+// the way the race runs, so a target that is barely behind reads as most of
+// a lap ahead rather than as a reason to turn round.
+int race_route_gap(int from, int to)
+{
+	int gap;
+
+	if (Bot_route_len <= 0 || from < 0 || to < 0)
+		return -1;
+
+	gap = to - from;
+
+	if (gap < 0)
+		gap += Bot_route_len;
+
+	return gap;
 }
 
 // The direction the track runs where `pos` is, taken off the lap route.
@@ -833,20 +1006,45 @@ static void race_bot_respawn(race_bot *b)
 
 void race_bots_claim_slots(void)
 {
-	int i, want;
+	int i, want, first;
 
 	Race_bots_active = 0;
 	memset(Race_bot, 0, sizeof(Race_bot));
 
+	// Only the host owns this mask. A client reaches here after the sync
+	// packet has already told it which slots the host is driving, so a
+	// client clearing it would forget the whole bot field and go back to
+	// treating every bot as an unreachable peer.
+	if ((Game_mode & GM_MULTI) && multi_i_am_master())
+		Netgame.RaceBotSlots = 0;
+
 	if (!race_bots_enabled())
 		return;
 
-	want = Race_bot_count;
+	// In a netgame the setting is the size of the field to race, not a count
+	// of bots: the host tops up whatever humans have turned up. Two humans in
+	// a field of eight get six bots; eight humans get none.
+	if (Game_mode & GM_MULTI)
+	{
+		first = N_players;			// humans already hold 0..N_players-1
+		want = Netgame.RaceBotFill - 1;
+
+		if (Netgame.RaceBotFill > Netgame.max_numplayers)
+			want = Netgame.max_numplayers - 1;
+	}
+	else
+	{
+		first = 1;
+		want = Race_bot_count;
+	}
 
 	if (want > RACE_MAX_BOTS)
 		want = RACE_MAX_BOTS;
 	if (want > MAX_PLAYERS - 1)
 		want = MAX_PLAYERS - 1;
+
+	if (want < first)
+		return;			// the field is already full of humans
 
 	if (NumNetPlayerPositions < 1)
 		return;			// no start positions at all; nothing to build a grid from
@@ -868,7 +1066,7 @@ void race_bots_claim_slots(void)
 	if (want >= NumNetPlayerPositions)
 		NumNetPlayerPositions = want + 1;
 
-	for (i = 1; i <= want; i++)
+	for (i = first; i <= want; i++)
 	{
 		race_bot *b = &Race_bot[i];
 
@@ -888,13 +1086,38 @@ void race_bots_claim_slots(void)
 		Players[i].net_kills_total = 0;
 		Players[i].score = 0;
 
+		// What makes the slot a real, visible racer on the clients too. The
+		// host leaves protocol.udp.addr zeroed -- there is no machine behind
+		// a bot -- and every send path checks race_player_is_bot() rather
+		// than transmitting into that hole. net_udp_update_netgame() copies
+		// Players[].connected across on its own before each game info send.
+		if (Game_mode & GM_MULTI)
+		{
+			memcpy(Netgame.players[i].callsign, Players[i].callsign, CALLSIGN_LEN + 1);
+			Netgame.players[i].connected = CONNECT_PLAYING;
+			Netgame.players[i].rank = 0;
+			Netgame.players[i].color = i % MAX_PLAYERS;
+			Netgame.players[i].missilecolor = Netgame.players[i].color;
+			Netgame.players[i].LastPacketTime = timer_query();
+			Netgame.RaceBotSlots |= (1 << i);
+		}
+
 		Race_bots_active++;
 	}
 
 	// Every ranking, standings list and results screen counts racers by
 	// N_players, so this is the one line that makes the bots part of the race
-	// rather than scenery flying round the track.
-	N_players = 1 + Race_bots_active;
+	// rather than scenery flying round the track. In a netgame the bots sit
+	// above the humans instead of replacing them.
+	if (Game_mode & GM_MULTI)
+	{
+		if (Race_bots_active)
+			N_players = want + 1;
+
+		Netgame.numplayers = N_players;
+	}
+	else
+		N_players = 1 + Race_bots_active;
 }
 
 void race_bots_init(void)
@@ -1020,6 +1243,10 @@ void race_bots_init(void)
 		// per bot: a full grid then fields every kit exactly once, instead of
 		// three Trappers and no afterburner anywhere.
 		race_set_player_class(i, (class_seed + slot) % RACE_NUM_CLASSES);
+
+		// Dealt a kit is the whole of a bot's lobby: it locks in there and
+		// then, so the grid is only ever waiting on the people in the race.
+		race_bot_lock_in(i);
 
 		race_bot_place(b, race_route_back(base, BOT_GRID_SPACING * slot), 1);
 	}
