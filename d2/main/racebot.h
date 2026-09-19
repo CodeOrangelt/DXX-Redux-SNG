@@ -64,6 +64,11 @@ void race_bots_claim_slots(void);
 // True if player slot `pnum` (or object `obj`) is a bot. Both are safe to
 // call at any time, in any game mode.
 int race_player_is_bot(int pnum);
+
+// Netgame only: retires the bot running last so a joining human can have its
+// place, returning the slot freed (-1 if there was no bot to give up). The
+// caller disconnects the returned slot -- see net_udp_welcome_player().
+int race_bot_drop_one(void);
 int race_object_is_bot(const object *obj);
 
 // Builds the lap route and resets the field. Called from race_init_level().

@@ -1544,11 +1544,20 @@ void Laser_do_weapon_sequence(object *obj, int doHomerFrame, fix idealHomerFrame
 				obj->ctype.laser_info.track_goal = race_goal;
 				dot = F1_0;
 			}
+			//	A race shaker with no leader left to chase (a one-ship race,
+			//	the leader fired it and is alone out front, or the racer it
+			//	committed to has finished or dropped) flies straight on and
+			//	expires. It must not fall through to the tracking search
+			//	below: that hands a homer the nearest ship it can see, which
+			//	is how a missile aimed at the race leader ended up killing
+			//	whoever it happened to be passing in seventh place. It would
+			//	also assert on the shaker, which the HAM never marked as a
+			//	homer in the first place.
+			else if (race_force_homing(obj)) {
+				track_goal = -1;
+				obj->ctype.laser_info.track_goal = -1;
+			}
 			// CED -- Slow retro homers track cone check to idealHomerFPS.
-			//	The homing_flag test keeps a race earthshaker with no leader to
-			//	chase (a one-ship race, or the leader fired it and is alone out
-			//	front) out of the tracking search, which asserts on a weapon the
-			//	HAM never marked as a homer. It just flies straight.
 			else if(doHomerFrame && Weapon_info[obj->id].homing_flag) {
 				//	Make sure the object we are tracking is still trackable.
 				track_goal = track_track_goal(track_goal, obj, &dot, homerFrameCount);
@@ -2087,6 +2096,15 @@ void create_smart_children(object *objp, int num_smart_children)
 
 	if (objp->type == OBJ_WEAPON && objp->id == EARTHSHAKER_ID)
 		blast_nearby_glass(objp, Weapon_info[EARTHSHAKER_ID].strength[Difficulty_level]);
+
+	// A race shaker is one missile and one blast. The cloud of homing blobs
+	// stock D2 bursts it into does not belong on a track: each blob picked its
+	// own target out of whoever was standing nearby, which turned the race's
+	// catch-up weapon into a shotgun aimed at the pack. The shaker keeps its
+	// full badass blast (already dealt above by the caller) and the glass it
+	// shatters -- it just no longer scatters. Every other mode is untouched.
+	if ((Game_mode & GM_RACE) && objp->type == OBJ_WEAPON && objp->id == EARTHSHAKER_ID)
+		return;
 
 	if (((objp->type == OBJ_WEAPON) && (Weapon_info[objp->id].children != -1)) || (objp->type == OBJ_ROBOT)) {
 		int i;

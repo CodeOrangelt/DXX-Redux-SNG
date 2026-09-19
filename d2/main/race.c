@@ -47,8 +47,8 @@ int Race_finish_marked = 0;			// level marks its line with repair centers
 static int Race_respawn_segnum = -1;	// segment of the last checkpoint the local player took
 int Race_num_boxes = 0;
 int Race_laps_to_win = RACE_DEFAULT_LAPS;
-int Race_powerup_chance = 100;
 int Race_allowed_items = RACE_ALLOWED_ITEMS_ALL;
+int Race_item_chance[RACE_NUM_ITEM_SLOTS] = { 100, 100, 100, 100, 100, 100, 100 };
 
 static fix Race_countdown_timer = 0;	// seconds remaining, fix; only meaningful while Race_counting_down
 static int Race_counting_down = 0;
@@ -537,13 +537,6 @@ static const race_item *race_pick_item_for(int pnum)
 	fix catchup = race_catchup_factor_for(pnum);
 	int total = 0, roll, i;
 
-	// The "powerup chance" advanced option: below 100%, a roll can come up
-	// empty entirely -- one gate here covers both race_box_roll() (the local
-	// player) and race_roll_box_item() (the bot field), since both route
-	// through this function.
-	if (Race_powerup_chance < 100 && (d_rand() % 100) >= (unsigned)Race_powerup_chance)
-		return NULL;
-
 	// Weighted over what this racer can actually carry, not over the whole
 	// table -- rolling and then rejecting would quietly bias the draw towards
 	// whatever came first.
@@ -627,7 +620,9 @@ static void race_init_items(void)
 
 	for (i = 0; i < (int)(sizeof(base)/sizeof(base[0])); i++)
 		if (Race_allowed_items & (1 << base[i].slot))
-			race_add_item(CLASS_SECONDARY, base[i].index, base[i].front, base[i].back);
+			race_add_item(CLASS_SECONDARY, base[i].index,
+				base[i].front * Race_item_chance[base[i].slot] / 100,
+				base[i].back  * Race_item_chance[base[i].slot] / 100);
 
 	// The two powers ride the same rubber band as the missiles: rare out
 	// front, more common at the back. The tractor is unavailable to front-
@@ -635,9 +630,13 @@ static void race_init_items(void)
 	// more of it -- a 3-lap race keeps it very rare, a 10-lap race hands it
 	// out more freely at the back.
 	if (Race_allowed_items & (1 << RACE_ITEM_EMP))
-		race_add_item(CLASS_POWER, RACE_POWER_EMP, 2, 6);
+		race_add_item(CLASS_POWER, RACE_POWER_EMP,
+			2 * Race_item_chance[RACE_ITEM_EMP] / 100,
+			6 * Race_item_chance[RACE_ITEM_EMP] / 100);
 	if (Race_allowed_items & (1 << RACE_ITEM_TRACTOR))
-		race_add_item(CLASS_POWER, RACE_POWER_TRACTOR, 0, max(1, Race_laps_to_win / 2));
+		race_add_item(CLASS_POWER, RACE_POWER_TRACTOR,
+			0,
+			max(1, Race_laps_to_win / 2) * Race_item_chance[RACE_ITEM_TRACTOR] / 100);
 }
 
 // Maps a powerup type to the weapon it stands for. Returns 0 if that powerup
@@ -2506,6 +2505,14 @@ static int race_lobby_counts(int *ready_out, int *total_out)
 		if (Netgame.host_is_obs && i == 0)
 			continue;
 #endif
+		// A bot is locked in the moment it is dealt a class -- there is
+		// nobody at a keyboard to wait on. Counted in the roster it would
+		// never tick over to ready, so every netgame race with a bot field
+		// would start on the lobby timeout instead of when its people had
+		// finished picking.
+		if (race_player_is_bot(i))
+			continue;
+
 		total++;
 
 		if (Race_ready[i])
@@ -2523,6 +2530,17 @@ static int race_lobby_counts(int *ready_out, int *total_out)
 int race_lobby_ready_counts(int *ready_out, int *total_out)
 {
 	return race_lobby_counts(ready_out, total_out);
+}
+
+// Locks a bot in on the class it has just been dealt. Race_ready[] is this
+// file's to own and the lobby is the only thing that reads it, so the bot
+// code asks for this rather than reaching into it.
+void race_bot_lock_in(int pnum)
+{
+	if (pnum < 0 || pnum >= MAX_PLAYERS)
+		return;
+
+	Race_ready[pnum] = 1;
 }
 
 int race_player_is_ready(int pnum)
@@ -2888,13 +2906,16 @@ void race_init_level(void)
 		if (Netgame.LapsToWin > 0)
 			Race_laps_to_win = Netgame.LapsToWin;
 
-		Race_powerup_chance = Netgame.RacePowerupChance;
 		Race_allowed_items = Netgame.RaceAllowedItems;
+		for (i = 0; i < RACE_NUM_ITEM_SLOTS; i++)
+			Race_item_chance[i] = Netgame.RaceItemChance[i];
 	}
 
 	// race_init_items() reads Race_laps_to_win/Race_allowed_items, so rebuild
 	// the loot table for whatever this level's settings just became.
 	race_init_items();
+
+	race_shaker_reset();
 
 	for (i = 0; i < MAX_PLAYERS; i++)
 	{
@@ -3981,41 +4002,174 @@ int race_get_rank(int pnum)
 // A shaker is the heaviest thing in the loot table and it is weighted at the
 // back of the field, so in a race it is the catch-up weapon. Homing on the
 // nearest ship made it a weapon against whoever happened to be alongside --
-// usually another back-marker. Here it always flies at whoever is leading.
+// usually another back-marker. Here it goes after whoever is leading.
+//
+// The leader it picks is settled once, when the missile first asks, and then
+// kept for the rest of its life (see the lock table below). Re-reading the
+// standings every frame meant a missile changed its mind mid-flight every
+// time two racers swapped places, so nobody was ever actually being chased.
 //
 // If the leader is the one who fired it, it takes the next player down the
 // order instead: a missile that turned round on its own launcher would just
 // be a way to lose the race.
+
+// Per-missile state, keyed by object signature. One entry per shaker that can
+// be in the air at once, which is one per racer with a little room to spare.
+// Entries are reclaimed by age: a live missile touches its own entry every
+// homing frame, so anything that has gone quiet for RACE_SHAKER_LOCK_TIMEOUT
+// belongs to a missile that no longer exists.
+//
+// Every missile having its own entry is what stops two shakers in the air at
+// the same time from stealing each other's: the cache this replaced held a
+// fixed handful of slots and evicted whichever had gone longest without being
+// touched, so a pair of missiles passing each other traded slots every frame
+// and neither could hold a course.
+#define RACE_SHAKER_LOCKS         (MAX_PLAYERS * 2)
+#define RACE_SHAKER_LOCK_TIMEOUT  (F1_0 * 2)
+
+typedef struct {
+	int     signature;          // 0 == free
+	fix64   seen_at;
+	int     target_objnum;
+	int     target_signature;
+	int     route_idx;          // where along the lap route this missile is, -1 = not yet placed
+} race_shaker_lock;
+
+static race_shaker_lock Race_shaker_locks[RACE_SHAKER_LOCKS];
+
+void race_shaker_reset(void)
+{
+	memset(Race_shaker_locks, 0, sizeof(Race_shaker_locks));
+}
+
+// This missile's entry, claiming or reclaiming one if it has none yet.
+// Returns NULL only when every entry belongs to a missile that is still
+// alive, in which case the caller carries on without a lock rather than
+// taking one off somebody else.
+static race_shaker_lock *race_shaker_lock_for(const object *tracker, int *is_new)
+{
+	int i, free_idx = -1;
+
+	*is_new = 0;
+
+	for (i = 0; i < RACE_SHAKER_LOCKS; i++)
+	{
+		race_shaker_lock *l = &Race_shaker_locks[i];
+
+		if (l->signature == tracker->signature)
+		{
+			l->seen_at = GameTime64;
+			return l;
+		}
+
+		if (free_idx < 0 &&
+			(!l->signature || GameTime64 - l->seen_at > RACE_SHAKER_LOCK_TIMEOUT))
+			free_idx = i;
+	}
+
+	if (free_idx < 0)
+		return NULL;
+
+	{
+		race_shaker_lock *l = &Race_shaker_locks[free_idx];
+
+		memset(l, 0, sizeof(*l));
+		l->signature = tracker->signature;
+		l->seen_at = GameTime64;
+		l->target_objnum = -1;
+		l->route_idx = -1;
+		*is_new = 1;
+
+		return l;
+	}
+}
+
+// True if this player is somebody a shaker may chase right now.
+static int race_shaker_target_ok(int objnum, int launcher, const object *tracker)
+{
+	object *obj;
+
+	if (objnum < 0 || objnum > Highest_object_index)
+		return 0;
+
+	obj = &Objects[objnum];
+
+	if (obj->type != OBJ_PLAYER || (obj->flags & OF_SHOULD_BE_DEAD))
+		return 0;
+
+	if (objnum == launcher)
+		return 0;
+
+	if (laser_are_related(tracker - Objects, objnum))
+		return 0;
+
+	if (object_is_observer(obj))
+		return 0;
+
+	if (obj->id < 0 || obj->id >= MAX_PLAYERS)
+		return 0;
+
+	if ((Game_mode & GM_MULTI) && Players[obj->id].connected != CONNECT_PLAYING)
+		return 0;
+
+	// Racers who have crossed the line sort to the top of the standings, so
+	// without this every shaker fired after the first finish flies at
+	// somebody who is already done instead of at whoever is leading the race
+	// still being run.
+	if (Race_player[obj->id].finished)
+		return 0;
+
+	return 1;
+}
+
 int race_homing_target(const object *tracker)
 {
-	// One shaker bursts into a cloud of blobs and every one of them asks this
-	// question on every frame, so the standings are worked out once a frame
-	// and shared -- ranking walks every player's outstanding checkpoints.
+	// Ranking walks every player's outstanding checkpoints, so the standings
+	// are worked out once a frame and shared rather than per missile asking.
 	static fix64 ranked_at = 0;
 	static int sorted[MAX_PLAYERS];
 	static int ranked_n = 0;
-	int n, i, parent = -1;
+	race_shaker_lock *lock;
+	int n, i, launcher = -1, is_new = 0;
 
 	if (!(Game_mode & GM_RACE) || !tracker || tracker->type != OBJ_WEAPON)
 		return -1;
 
-	// The missile itself and the mega blobs it bursts into, so the whole
-	// spread converges on the leader rather than scattering to the nearest.
-	if (tracker->id != EARTHSHAKER_ID && tracker->id != EARTHSHAKER_MEGA_ID)
+	// A race shaker is one missile: create_smart_children() (laser.c) does not
+	// burst it into the homing blob cloud stock D2 gives it.
+	if (tracker->id != EARTHSHAKER_ID)
 		return -1;
 
-	if (tracker->ctype.laser_info.parent_type == OBJ_PLAYER)
-		parent = tracker->ctype.laser_info.parent_num;
-
-	// Whoever fired it is out of the running whatever the standings say, and
-	// so is anything else the engine considers related to it (create_smart_
-	// children hands the burst the missile's own parent, but a chain that has
-	// been through a recycled object slot can still come back wrong). A
+	// Whoever fired it is out of the running whatever the standings say: a
 	// missile that turns round on its own launcher is not a catch-up weapon,
 	// it is a way to lose the race.
-	if (parent >= 0 && parent <= Highest_object_index &&
-		Objects[parent].signature != tracker->ctype.laser_info.parent_signature)
-		parent = -1;
+	//
+	// Excluded on the object slot alone, with no signature test: a player who
+	// respawns keeps their slot but gets a fresh signature, and treating that
+	// as "launcher unknown" is what used to hand the shaker permission to
+	// come back and kill the player who fired it.
+	if (tracker->ctype.laser_info.parent_type == OBJ_PLAYER)
+		launcher = tracker->ctype.laser_info.parent_num;
+
+	lock = race_shaker_lock_for(tracker, &is_new);
+
+	// Already committed to somebody: keep flying at them. The check is by
+	// signature as well as slot, so a target who dies and respawns into the
+	// same slot counts as gone rather than as the same ship.
+	if (lock && lock->target_objnum >= 0)
+	{
+		if (lock->target_objnum <= Highest_object_index &&
+			Objects[lock->target_objnum].signature == lock->target_signature &&
+			race_shaker_target_ok(lock->target_objnum, launcher, tracker))
+			return lock->target_objnum;
+
+		// The racer it committed to is gone -- finished, disconnected, or
+		// dead. Rather than swinging round onto whoever is nearest, the
+		// missile gives up its lock and flies on: see race_force_homing().
+		lock->target_objnum = -1;
+		lock->target_signature = 0;
+		return -1;
+	}
 
 	if (!ranked_at || ranked_at != GameTime64)
 	{
@@ -4033,23 +4187,16 @@ int race_homing_target(const object *tracker)
 		if (pnum < 0 || pnum >= MAX_PLAYERS)
 			continue;
 
-		if ((Game_mode & GM_MULTI) && Players[pnum].connected != CONNECT_PLAYING)
-			continue;
-
 		objnum = Players[pnum].objnum;
 
-		if (objnum < 0 || objnum > Highest_object_index)
+		if (!race_shaker_target_ok(objnum, launcher, tracker))
 			continue;
-		if (objnum == parent)
-			continue;			// the leader fired it; take the next one down
-		if (laser_are_related(tracker - Objects, objnum))
-			continue;			// ...and never anything else it came out of
-		if (Objects[objnum].type != OBJ_PLAYER)
-			continue;
-		if (Objects[objnum].flags & OF_SHOULD_BE_DEAD)
-			continue;
-		if (object_is_observer(&Objects[objnum]))
-			continue;
+
+		if (lock)
+		{
+			lock->target_objnum = objnum;
+			lock->target_signature = Objects[objnum].signature;
+		}
 
 		return objnum;
 	}
@@ -4058,148 +4205,170 @@ int race_homing_target(const object *tracker)
 }
 
 // -------------------------------------------------------------------------
-// Earthshaker corridor steering
+// Earthshaker route steering
 // -------------------------------------------------------------------------
 //
 // race_homing_target() above picks *who* to aim at; this decides *where in
-// space* to point the missile so it actually gets there. Steering straight
-// at the leader's position made a shaker that turned a corner just fly into
-// the wall at the corner -- and detonate on whoever else was standing near
-// it, not on the leader it was chasing. Routed through the same BFS
-// segment-graph pathfinder the racebots steer their own laps with
-// (aipath.c's create_path_points -- see racebot.c's race_route_path() for
-// the pattern this follows).
+// space* to point the missile so it actually gets there. Steering straight at
+// the leader's position made a shaker that turned a corner fly into the wall
+// at the corner instead, and detonate on whoever was standing near it.
 //
-// Unlike racebot.c, which builds each leg's path once at level load and
-// keeps it for the whole race, a shaker's path has to be built live: the
-// leader it's chasing keeps moving, and there's no way to know in advance
-// which segment a missile will be fired from. create_path_points does an
-// O(segment count) BFS over a several-thousand-segment level and stack-
-// allocates megabyte-scale visited/queue arrays to do it, so it is not
-// something to call every frame for every blob in an earthshaker burst --
-// it's cached per missile here and only rebuilt when it goes stale.
-#define RACE_SHAKER_PATH_SLOTS   16
-#define RACE_SHAKER_PATH_REFRESH (F1_0 * 2)   // how long a cached path is trusted
-#define RACE_SHAKER_ARRIVE_DIST  (F1_0 * 20)  // close enough to a waypoint to advance past it
+// It follows the lap route the bot field drives (racebot.c's Bot_route, read
+// through race_route_*()): an ordered, one-way loop of points round the
+// track, which is the course the race is actually run on. That replaced a
+// per-missile BFS through the segment graph, which had three problems this
+// does not have -- it was blind to which way round the track it was going and
+// would happily route a missile backwards up the course, it cost a
+// whole-level search per missile that had to be cached in a handful of shared
+// slots (and two missiles in the air at once then spent every frame evicting
+// each other from them), and the cache was the thing that left an arriving
+// missile hovering.
+//
+// Steering only ever walks the route forwards. A shaker is chasing somebody
+// ahead of it, so forwards is where they are, and a missile that doubles back
+// down the course is exactly what this is here to stop.
 
-// create_path_points() can return max_depth + 1 points (the segment at the
-// depth cap plus the start segment) -- a buffer sized exactly
-// MAX_SEGMENTS_PER_PATH is one short. Learned the hard way: sized exactly
-// to MAX_SEGMENTS_PER_PATH with safety_flag set (see race_shaker_aim_point())
-// wrote past the end of this array and corrupted the stack.
-#define RACE_SHAKER_PATH_CAPACITY (MAX_SEGMENTS_PER_PATH + 1)
+// Within this far of the target there is nothing left for the course to tell
+// the missile: go straight at the ship.
+#define RACE_SHAKER_DIRECT_DIST     (F1_0 * 60)
+// How far down the route to aim. Far enough that the missile leads into the
+// corner rather than clipping its inside, close enough that it still follows
+// the track's shape.
+#define RACE_SHAKER_ROUTE_LOOKAHEAD 3
+// How far ahead to look when re-finding where a missile is on the route. It
+// only moves forwards, and never by much in one frame.
+#define RACE_SHAKER_ROUTE_WINDOW    24
 
-typedef struct {
-	int         signature;      // 0 == slot free
-	fix64       computed_at;
-	short       target_seg;
-	short       n;
-	short       idx;
-	point_seg   pts[RACE_SHAKER_PATH_CAPACITY];
-} race_shaker_path;
-
-static race_shaker_path Race_shaker_paths[RACE_SHAKER_PATH_SLOTS];
-
-// The slot for missile `signature` -- its own if it already has one, an
-// empty one, or (the burst is bigger than RACE_SHAKER_PATH_SLOTS) whichever
-// slot was computed longest ago. Never fails: worst case a fast-moving
-// burst thrashes slots and some blobs re-path more often than
-// RACE_SHAKER_PATH_REFRESH would otherwise call for.
-static race_shaker_path *race_shaker_path_slot(int signature)
+// Where the target is on the lap. Every blob in a burst is chasing the same
+// ship, so this is worked out once a frame and shared rather than rescanning
+// the route for each of them.
+static int race_shaker_target_route_idx(const object *target)
 {
-	int i, oldest = 0;
-	fix64 oldest_time = Race_shaker_paths[0].computed_at;
+	static fix64 cached_at = 0;
+	static int cached_objnum = -1;
+	static int cached_idx = -1;
 
-	for (i = 0; i < RACE_SHAKER_PATH_SLOTS; i++)
-	{
-		if (Race_shaker_paths[i].signature == signature || !Race_shaker_paths[i].signature)
-			return &Race_shaker_paths[i];
+	int objnum = target - Objects;
 
-		if (Race_shaker_paths[i].computed_at < oldest_time)
-		{
-			oldest_time = Race_shaker_paths[i].computed_at;
-			oldest = i;
-		}
-	}
+	if (cached_at == GameTime64 && cached_objnum == objnum)
+		return cached_idx;
 
-	return &Race_shaker_paths[oldest];
+	cached_idx = race_route_index_near(&target->pos, target->segnum);
+	cached_objnum = objnum;
+	cached_at = GameTime64;
+
+	return cached_idx;
 }
 
-// Fills *aim with the next waypoint the cached (or freshly built) path says
-// to steer at, advancing past any waypoint already reached. Returns 0 and
-// leaves *aim alone when no path exists -- an unreachable target, or the
-// pathfinder came back empty -- so the caller can fall back to aiming
-// straight at the target, same as before this existed.
+// Fills *aim with the point on the course to steer at. Returns 0 and leaves
+// *aim alone when there is no route to follow -- a level with no lap built --
+// so the caller falls back to aiming straight at the target.
 static int race_shaker_aim_point(object *tracker, int target_objnum, vms_vector *aim)
 {
-	race_shaker_path *p;
 	object *target = &Objects[target_objnum];
-	point_seg local_pts[RACE_SHAKER_PATH_CAPACITY];
-	short n;
+	race_shaker_lock *lock;
+	const vms_vector *lead;
+	int is_new = 0, my_idx, target_idx, gap;
 
-	if (tracker->segnum < 0 || target->segnum < 0)
+	if (race_route_len() < 2)
 		return 0;
 
-	p = race_shaker_path_slot(tracker->signature);
-
-	// Rebuild when this slot belongs to a different missile (evicted or
-	// never claimed), the cached path has gone stale, or the leader has
-	// moved into a different segment than the path was built for -- a path
-	// to where they used to be just walks the missile into the wall they
-	// turned behind.
-	if (p->signature != tracker->signature ||
-		!p->computed_at || GameTime64 - p->computed_at > RACE_SHAKER_PATH_REFRESH ||
-		p->target_seg != target->segnum)
-	{
-		// safety_flag off: it tells create_path_points() to splice extra
-		// midpoints in after the fact (insert_center_points()), and that
-		// function's own overflow guard only checks room in the engine's
-		// shared Point_segs pool -- not a caller-supplied buffer like this
-		// one, which is what let it write past the end of a fixed-size
-		// array here. Not needed anyway: that's for a robot physically
-		// steering along the path, not for picking a waypoint to aim a
-		// missile at.
-		if (create_path_points(tracker, tracker->segnum, target->segnum,
-								local_pts, &n, MAX_SEGMENTS_PER_PATH, 0, 0, -1) == -1 ||
-			n < 1)
-		{
-			p->signature = 0;		// give the slot back; nothing to cache
-			return 0;
-		}
-
-		// Belt and suspenders against the buffer this actually filled: even
-		// with safety_flag off, don't trust n past what local_pts can hold.
-		if (n > RACE_SHAKER_PATH_CAPACITY)
-			n = RACE_SHAKER_PATH_CAPACITY;
-
-		p->signature = tracker->signature;
-		p->computed_at = GameTime64;
-		p->target_seg = target->segnum;
-		p->n = n;
-		p->idx = 0;
-		memcpy(p->pts, local_pts, n * sizeof(point_seg));
-	}
-
-	while (p->idx < p->n - 1 &&
-		   vm_vec_dist_quick(&tracker->pos, &p->pts[p->idx].point) < RACE_SHAKER_ARRIVE_DIST)
-		p->idx++;
-
-	// The last waypoint is the centre of the segment the target was in when
-	// this path was built (or last refreshed) -- a fixed point in space, not
-	// the target. Steering at it to the end left the missile parked on that
-	// spot once it arrived, since nothing after this ever aimed at the
-	// target's actual, still-moving position again. On the final leg, home
-	// on the target directly; the corridor has already done its job of
-	// getting the missile into the target's neighborhood without clipping a
-	// wall on the way.
-	if (p->idx >= p->n - 1)
+	// Close enough, or already sharing a segment: fly at the ship itself.
+	// This is also the case that has to aim at the target and not at any
+	// fixed point in space, or an arriving missile parks on the spot the
+	// racer has already left.
+	if (tracker->segnum == target->segnum ||
+		vm_vec_dist_quick(&tracker->pos, &target->pos) < RACE_SHAKER_DIRECT_DIST)
 	{
 		*aim = target->pos;
 		return 1;
 	}
 
-	*aim = p->pts[p->idx].point;
+	lock = race_shaker_lock_for(tracker, &is_new);
+
+	// Re-find the missile on the route by looking forward from where it was
+	// last frame, so this costs a short window rather than a whole lap. Only
+	// a missile that has never been placed pays for the full search.
+	if (lock && lock->route_idx >= 0)
+		my_idx = race_route_index_advance(lock->route_idx, &tracker->pos,
+										  RACE_SHAKER_ROUTE_WINDOW);
+	else
+		my_idx = race_route_index_near(&tracker->pos, tracker->segnum);
+
+	target_idx = race_shaker_target_route_idx(target);
+
+	if (my_idx < 0 || target_idx < 0)
+		return 0;
+
+	if (lock)
+		lock->route_idx = my_idx;
+
+	// Measured the way the race runs, so a target who is barely behind reads
+	// as most of a lap ahead -- and the missile carries on round the course
+	// rather than turning back down it.
+	gap = race_route_gap(my_idx, target_idx);
+
+	if (gap < 0)
+		return 0;
+
+	// The target is within the lookahead: stop following the course and go
+	// straight for them.
+	if (gap <= RACE_SHAKER_ROUTE_LOOKAHEAD)
+	{
+		*aim = target->pos;
+		return 1;
+	}
+
+	lead = race_route_position(race_route_step(my_idx, RACE_SHAKER_ROUTE_LOOKAHEAD));
+
+	if (!lead)
+		return 0;
+
+	*aim = *lead;
 	return 1;
+}
+
+// laser.c steers a homing missile by normalising (its velocity + the direction
+// to its aim point). Those two cancel out when the aim point is dead astern:
+// the sum collapses to zero, vm_vec_normalize_quick() leaves a zero vector
+// alone rather than dividing by its magnitude, and scaling that by the
+// missile's speed hands the missile a zero velocity. It stops dead in mid-air
+// instead of turning round -- the other half of the hovering this used to do,
+// and reachable whenever a shaker overshoots and has to come back for its
+// target. Pushing the aim point square to the flight path gives the blend a
+// direction to turn through, so the missile carves round instead of stalling.
+#define RACE_SHAKER_REVERSE_DOT     (-F1_0 * 7 / 8)   // ~150 degrees astern or worse
+#define RACE_SHAKER_REVERSE_OFFSET  (F1_0 * 40)       // how far to one side to push the aim
+
+static void race_shaker_break_reversal(const object *tracker, vms_vector *aim)
+{
+	vms_vector to_aim, vel, side, axis;
+
+	vel = tracker->mtype.phys_info.velocity;
+	if (!vm_vec_normalize_quick(&vel))
+		return;						// not moving: nothing to reverse out of
+
+	vm_vec_sub(&to_aim, aim, &tracker->pos);
+	if (!vm_vec_normalize_quick(&to_aim))
+		return;						// sitting on the aim point already
+
+	if (vm_vec_dot(&to_aim, &vel) > RACE_SHAKER_REVERSE_DOT)
+		return;
+
+	// Any axis square to the flight path will do: cross with the world's up,
+	// or with its right instead when the missile is flying close enough to
+	// straight up or down that the first cross is degenerate itself.
+	vm_vec_zero(&axis);
+	if (abs(vel.y) < F1_0 * 7 / 8)
+		axis.y = F1_0;
+	else
+		axis.x = F1_0;
+
+	vm_vec_crossprod(&side, &vel, &axis);
+	if (!vm_vec_normalize_quick(&side))
+		return;
+
+	vm_vec_scale_add2(aim, &side, RACE_SHAKER_REVERSE_OFFSET);
 }
 
 void race_homing_aim_point(object *tracker, int target_objnum, vms_vector *aim)
@@ -4210,6 +4379,7 @@ void race_homing_aim_point(object *tracker, int target_objnum, vms_vector *aim)
 		return;
 
 	race_shaker_aim_point(tracker, target_objnum, aim);
+	race_shaker_break_reversal(tracker, aim);
 }
 
 // How fast a weapon is allowed to fly. Stock everywhere except a homing

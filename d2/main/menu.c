@@ -860,7 +860,7 @@ static int race_menu_handler(newmenu *menu, d_event *event, void *userdata)
 			// line closes the menu now; anything else stays put.
 			if (citem == RACE_MENU_ADVANCED)
 			{
-				net_udp_race_advanced_options(&Race_powerup_chance, &Race_allowed_items);
+				net_udp_race_advanced_options(&Race_allowed_items, Race_item_chance);
 				return 1;		// handled: stay in the menu
 			}
 

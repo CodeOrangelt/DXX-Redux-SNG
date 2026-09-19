@@ -24,6 +24,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "piggy.h"
 #include "newmenu.h"
 #include "powerup.h"
+#include "race.h"
 
 #ifdef USE_UDP
 #ifdef _WIN32
@@ -60,7 +61,7 @@ extern int multi_protocol; // set and determinate used protocol
 #define MULTI_PROTO_UDP 1 // UDP protocol
 
 // What version of the multiplayer protocol is this? Increment each time something drastic changes in Multiplayer without the version number changes. Can be reset to 0 each time the version of the game changes
-#define MULTI_PROTO_VERSION 30012 // + Race options (RacePowerupChance/RaceAllowedItems bytes in netgame_info/game-info packet)
+#define MULTI_PROTO_VERSION 30014 // + Race bots (RaceBotFill byte in netgame_info/game-info packet)
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -639,8 +640,10 @@ typedef struct netgame_info
 	ubyte						StaticPhoenix;
 	ubyte						StaticOmega;
 	ubyte						LapsToWin;		// race mode: laps needed to finish (0 = use default)
-	ubyte						RacePowerupChance;	// race mode: odds (0-100) a mystery box/bot draw yields anything (0 = use default)
 	ubyte						RaceAllowedItems;	// race mode: bitmask of RACE_ITEM_* slots the loot table may offer (0 = use default)
+	ubyte						RaceItemChance[RACE_NUM_ITEM_SLOTS];	// race mode: per-slot draw-frequency scale, 0-100% (see Race_item_chance)
+	ubyte						RaceBotFill;		// race mode: total field size the host tops up to with bots (0 = no bots)
+	ubyte						RaceBotSlots;		// race mode: bitmask of player slots the host is driving as bots
 	ubyte						team_color[2];
 } __pack__ netgame_info;
 
