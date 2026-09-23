@@ -5,19 +5,23 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleExecutable</key>
-	<string>d2x-redux</string>
+	<string>d2x-redux-sng</string>
 	<key>CFBundleIconFile</key>
-	<string>d2x-redux.icns</string>
+	<string>d2x-redux-sng.icns</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.dxx-redux.d2x-redux</string>
+	<string>com.dxx-redux.d2x-redux-sng</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>D2X-Redux-SNG</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleSignature</key>
 	<string>DCT2</string>
 	<key>CFBundleVersion</key>
-	<string>0.5</string>
+	<string>1.2</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.2</string>
 	<key>CSResourcesFileMapped</key>
 	<false/>
 	<key>LSApplicationCategoryType</key>
