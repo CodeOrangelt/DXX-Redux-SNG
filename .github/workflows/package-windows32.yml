@@ -39,6 +39,8 @@ jobs:
             mingw-w64-i686-SDL_mixer
             mingw-w64-i686-libpng
             mingw-w64-i686-glew
+            mingw-w64-i686-protobuf
+            mingw-w64-i686-openssl
             mingw-w64-i686-ntldd-git
             mingw-w64-i686-clang
             mingw-w64-i686-lld
