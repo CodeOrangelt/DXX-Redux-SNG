@@ -46,8 +46,8 @@ build_app() {
     rm -rf ${tmpdir}
 }
 
-build_app "buildd1/main" "d1x-redux" "D1X-Redux"
-build_app "buildd2/main" "d2x-redux" "D2X-Redux"
+build_app "buildd1/main" "d1x-redux-sng" "D1X-Redux-SNG"
+build_app "buildd2/main" "d2x-redux-sng" "D2X-Redux-SNG"
 
 # Clean up
 

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=D2X-Redux-SNG
+Version=1.0
+Comment=D2X-Redux-SNG source port of Descent 2: Counterstrike from 1996...
+Exec=d2x-redux-sng
+Icon=d2x-redux-sng
+Terminal=false
+Type=Application
+Categories=Game;ActionGame;
+StartupNotify=false
