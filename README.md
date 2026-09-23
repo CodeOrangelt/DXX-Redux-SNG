@@ -1,3 +1,5 @@
+<img width="128" height="128" alt="d1x-redux-sng" src="d1/d1x-redux-sng.png" /> <img width="128" height="128" alt="d2x-redux-sng" src="d2/d2x-redux-sng.png" />
+
 DXX-Redux
 =========
 
