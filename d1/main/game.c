@@ -798,52 +798,67 @@ static int free_help(newmenu *menu, d_event *event, void *userdata)
 	return 0;
 }
 
+// The three key-reference screens. Rows are "KEY\tACTION" pairs grouped
+// under all-caps headings, so each panel lays itself out in columns and any
+// group the reader does not care about folds away.
+#define HELP_ROW(k)	do { m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = (k); } while (0)
+
 void show_help()
 {
 	int nitems = 0;
 	newmenu_item *m;
 
-	MALLOC(m, newmenu_item, 26);
+	MALLOC(m, newmenu_item, 34);
 	if (!m)
 		return;
 
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = TXT_HELP_ESC;
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "SHIFT-ESC\t  SHOW GAME LOG";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "F1\t  THIS SCREEN";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = TXT_HELP_F2;
+	HELP_ROW("GAME");
+	HELP_ROW(TXT_HELP_ESC);
+	HELP_ROW("F1\t  This screen");
+	HELP_ROW(TXT_HELP_F2);
 #if !(defined(__APPLE__) || defined(macintosh))
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "Alt-F2/F3\t  SAVE/LOAD GAME";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "Alt-F1\t  Fast Save";
+	HELP_ROW(TXT_HELP_PAUSE);
+	HELP_ROW("Shift-Esc\t  Show game log");
 #else
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "Alt-F2/F3 (\x85-SHIFT-s/\x85-o)\t  SAVE/LOAD GAME";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "Alt-F1 (\x85-s)\t  Fast Save";
-#endif
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "F3\t  SWITCH COCKPIT MODES";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = TXT_HELP_F5;
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "ALT-F7\t  SWITCH HUD MODES";
-#if !(defined(__APPLE__) || defined(macintosh))
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = TXT_HELP_PAUSE;
-#else
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "Pause (\x85-P)\t  Pause";
-#endif
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = TXT_HELP_PRTSCN;
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = TXT_HELP_1TO5;
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = TXT_HELP_6TO10;
-#if !(defined(__APPLE__) || defined(macintosh))
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "Alt-Shift-F9\t  Eject Audio CD";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "Alt-Shift-F10\t  Play/Pause " EXT_MUSIC_TEXT;
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "Alt-Shift-F11/F12\t  Previous/Next Song";
-#else
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "\x85-E\t  Eject Audio CD";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "\x85-Up/Down\t  Play/Pause " EXT_MUSIC_TEXT;
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "\x85-Left/Right\t  Previous/Next Song";
-#endif
-#if (defined(__APPLE__) || defined(macintosh))
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "(Use \x85-# for F#. e.g. \x85-1 for F1)";
+	HELP_ROW("Pause (\x85-P)\t  Pause");
+	HELP_ROW("Shift-Esc\t  Show game log");
 #endif
 
-	newmenu_dotiny( NULL, TXT_KEYS, nitems, m, 0, free_help, NULL );
+	HELP_ROW("SAVED GAMES");
+#if !(defined(__APPLE__) || defined(macintosh))
+	HELP_ROW("Alt-F1\t  Fast save");
+	HELP_ROW("Alt-F2/F3\t  Save/load game");
+#else
+	HELP_ROW("Alt-F1 (\x85-s)\t  Fast save");
+	HELP_ROW("Alt-F2/F3 (\x85-Shift-s/\x85-o)\t  Save/load game");
+#endif
+
+	HELP_ROW("VIEW");
+	HELP_ROW("F3\t  Switch cockpit modes");
+	HELP_ROW("Alt-F7\t  Switch HUD modes");
+	HELP_ROW(TXT_HELP_PRTSCN);
+
+	HELP_ROW("WEAPONS");
+	HELP_ROW(TXT_HELP_1TO5);
+	HELP_ROW(TXT_HELP_6TO10);
+
+	HELP_ROW("DEMOS");
+	HELP_ROW(TXT_HELP_F5);
+
+	HELP_ROW("MUSIC");
+#if !(defined(__APPLE__) || defined(macintosh))
+	HELP_ROW("Alt-Shift-F9\t  Eject audio CD");
+	HELP_ROW("Alt-Shift-F10\t  Play/pause " EXT_MUSIC_TEXT);
+	HELP_ROW("Alt-Shift-F11/F12\t  Previous/next song");
+#else
+	HELP_ROW("\x85-E\t  Eject audio CD");
+	HELP_ROW("\x85-Up/Down\t  Play/pause " EXT_MUSIC_TEXT);
+	HELP_ROW("\x85-Left/Right\t  Previous/next song");
+	HELP_ROW("");
+	HELP_ROW("(Use \x85-# for F#. e.g. \x85-1 for F1)");
+#endif
+
+	newmenu_dotiny_nk( NULL, "GAME KEYS", nitems, m, 0, free_help, NULL );
 }
 
 void show_netgame_help()
@@ -851,52 +866,58 @@ void show_netgame_help()
 	int nitems = 0;
 	newmenu_item *m;
 
-	MALLOC(m, newmenu_item, 18);
+	MALLOC(m, newmenu_item, 34);
 	if (!m)
 		return;
 
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "F1\t  THIS SCREEN";
-	if (!is_observer()) {
+	HELP_ROW("GAME");
+	HELP_ROW("F1\t  This screen");
+	HELP_ROW("Pause\t  Show netgame information");
+	if (!is_observer())
+	{
 #if !(defined(__APPLE__) || defined(macintosh))
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "Alt-F2/F3\t  SAVE/LOAD COOP GAME";
+		HELP_ROW("Alt-F2/F3\t  Save/load coop game");
 #else
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "Alt-F2/F3 (\x85-SHIFT-s/\x85-o)\t  SAVE/LOAD COOP GAME";
+		HELP_ROW("Alt-F2/F3 (\x85-Shift-s/\x85-o)\t  Save/load coop game");
 #endif
 	}
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "ALT-F4\t  SHOW PLAYER NAMES ON HUD";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "F6\t  TOGGLE CONNECTION STATS";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "F7\t  TOGGLE KILL LIST";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "ALT-F7\t  SWITCH HUD MODES";
-	if (!is_observer()) {
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "F8\t  SEND MESSAGE";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "(SHIFT-)F9 to F12\t  (DEFINE)SEND MACRO";
+
+	HELP_ROW("HUD");
+	HELP_ROW("Alt-F4\t  Show player names on HUD");
+	HELP_ROW("Alt-F7\t  Switch HUD modes");
+	HELP_ROW("F6\t  Toggle connection stats");
+	HELP_ROW("F7\t  Toggle kill list");
+
+	if (!is_observer())
+	{
+		HELP_ROW("MESSAGING");
+		HELP_ROW("F8\t  Send message");
+		HELP_ROW("(Shift-)F9 to F12\t  (Define) send macro");
+
+		HELP_ROW("CHAT COMMANDS");
+		HELP_ROW("(*): text\t  Send text to player/team (*)");
+		HELP_ROW("/handicap: (*)\t  Set starting shields to (*) [10-100]");
+		HELP_ROW("/move: (*)\t  Move player (*) to other team (host)");
+		HELP_ROW("/kick: (*)\t  Kick player (*) from game (host)");
+		HELP_ROW("/killreactor\t  Blow up the mine (host)");
+		HELP_ROW("/noobs\t  Kick observers (host)");
 	}
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "PAUSE\t  SHOW NETGAME INFORMATION";
+	else
+	{
+		HELP_ROW("OBSERVING");
+		HELP_ROW("Ctrl-1 to Ctrl-7\t  Observe specific player");
+		HELP_ROW("Ctrl-8\t  Fly freely");
+		HELP_ROW("Ctrl-9/0\t  Observe previous/next player");
+		HELP_ROW("Ctrl-Minus\t  Observe player in first person");
+		HELP_ROW("Ctrl-Equals\t  Observe player in third person");
+	}
 
 #if (defined(__APPLE__) || defined(macintosh))
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "(Use \x85-# for F#. e.g. \x85-1 for F1)";
+	HELP_ROW("");
+	HELP_ROW("(Use \x85-# for F#. e.g. \x85-1 for F1)");
 #endif
-	if (is_observer()) {
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "OBSERVERS:";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "CTRL+1 to CTRL+7\t  OBSERVE SPECIFIC PLAYER";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "CTRL+8\t  FLY FREELY";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "CTRL+9/0\t  OBSERVE PREVIOUS/NEXT PLAYER";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "CTRL+MINUS\t  OBSERVE PLAYER IN FIRST PERSON";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "CTRL+EQUALS\t  OBSERVE PLAYER IN THIRD PERSON";
-	} else {
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "MULTIPLAYER MESSAGE COMMANDS:";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "(*): TEXT\t  SEND TEXT TO PLAYER/TEAM (*)";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "/Handicap: (*)\t  SET STARTING SHIELDS TO (*) [10-100]";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "/move: (*)\t  MOVE PLAYER (*) TO OTHER TEAM (Host-only)";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "/kick: (*)\t  KICK PLAYER (*) FROM GAME (Host-only)";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "/KillReactor\t  BLOW UP THE MINE (Host-only)";
-		m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "/noobs\t  KICK OBSERVERS (Host-only)";
-	}
 
-	newmenu_dotiny( NULL, TXT_KEYS, nitems, m, 0, free_help, NULL );
+	newmenu_dotiny_nk( NULL, "NETGAME KEYS", nitems, m, 0, free_help, NULL );
 }
 
 void show_newdemo_help()
@@ -904,29 +925,31 @@ void show_newdemo_help()
 	newmenu_item *m;
 	int nitems = 0;
 
-	MALLOC(m, newmenu_item, 15);
+	MALLOC(m, newmenu_item, 20);
 	if (!m)
 		return;
 
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "ESC\t  QUIT DEMO PLAYBACK";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "F1\t  THIS SCREEN";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = TXT_HELP_F2;
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "F3\t  SWITCH COCKPIT MODES";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "F4\t  TOGGLE PERCENTAGE DISPLAY";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "UP\t  PLAY";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "DOWN\t  PAUSE";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "RIGHT\t  ONE FRAME FORWARD";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "LEFT\t  ONE FRAME BACKWARD";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "SHIFT-RIGHT\t  FAST FORWARD";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "SHIFT-LEFT\t  FAST BACKWARD";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "CTRL-RIGHT\t  JUMP TO END";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "CTRL-LEFT\t  JUMP TO START";
+	HELP_ROW("PLAYBACK");
+	HELP_ROW("Up\t  Play");
+	HELP_ROW("Down\t  Pause");
+	HELP_ROW("Right/Left\t  One frame forward/backward");
+	HELP_ROW("Shift-Right/Left\t  Fast forward/backward");
+	HELP_ROW("Ctrl-Right/Left\t  Jump to end/start");
+
+	HELP_ROW("VIEW");
+	HELP_ROW("F3\t  Switch cockpit modes");
+	HELP_ROW("F4\t  Toggle percentage display");
+
+	HELP_ROW("GAME");
+	HELP_ROW("Esc\t  Quit demo playback");
+	HELP_ROW("F1\t  This screen");
+	HELP_ROW(TXT_HELP_F2);
 #if (defined(__APPLE__) || defined(macintosh))
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "";
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "(Use \x85-# for F#. e.g. \x85-1 for F1)";
+	HELP_ROW("");
+	HELP_ROW("(Use \x85-# for F#. e.g. \x85-1 for F1)");
 #endif
 
-	newmenu_dotiny( NULL, "DEMO PLAYBACK CONTROLS", nitems, m, 0, free_help, NULL );
+	newmenu_dotiny_nk( NULL, "DEMO KEYS", nitems, m, 0, free_help, NULL );
 }
 
 //temp function until Matt cleans up game sequencing

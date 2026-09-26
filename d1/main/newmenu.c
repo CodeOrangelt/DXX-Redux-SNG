@@ -61,6 +61,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #ifdef OGL
 #include "ogl_init.h"
 #endif
+#include "nk_ui.h"
 
 
 #define MAXDISPLAYABLEITEMS 14
@@ -82,6 +83,12 @@ struct newmenu
 	char			*filename;
 	int				tiny_mode;
 	int			tabs_flag;
+	int			use_nk;			// draw as a Nuklear panel, not the legacy bitmap menu
+	int			nk_refocus;		// hand typing focus to the current input item next frame
+	unsigned int		nk_collapsed;		// one bit per folded section heading
+	const char		*nk_section_key;	// what nk_collapsed is remembered under
+	ubyte			nk_fixed_sections;	// headings are labels, nothing folds
+	ubyte			nk_has_sections;	// menus without headings are not worth remembering
 	int			reorderitems;
 	int				scroll_offset, last_scroll_check, max_displayable;
 	int				all_text;		//set true if all text items
@@ -535,6 +542,27 @@ void strip_end_whitespace( char * text )
 	}
 }
 
+// SNG: set by the *_nk entry points, consumed by the next newmenu_do4()
+static int Newmenu_nk_request = 0;
+
+int newmenu_do1_nk( char * title, char * subtitle, int nitems, newmenu_item * item, int (*subfunction)(newmenu *menu, d_event *event, void *userdata), void *userdata, int citem )
+{
+	Newmenu_nk_request = 1;
+	return newmenu_do1( title, subtitle, nitems, item, subfunction, userdata, citem );
+}
+
+newmenu *newmenu_do3_nk( char * title, char * subtitle, int nitems, newmenu_item * item, int (*subfunction)(newmenu *menu, d_event *event, void *userdata), void *userdata, int citem, char * filename )
+{
+	Newmenu_nk_request = 1;
+	return newmenu_do3( title, subtitle, nitems, item, subfunction, userdata, citem, filename );
+}
+
+newmenu *newmenu_dotiny_nk( char * title, char * subtitle, int nitems, newmenu_item * item, int TabsFlag, int (*subfunction)(newmenu *menu, d_event *event, void *userdata), void *userdata )
+{
+	Newmenu_nk_request = 1;
+	return newmenu_dotiny( title, subtitle, nitems, item, TabsFlag, subfunction, userdata );
+}
+
 int newmenu_do( char * title, char * subtitle, int nitems, newmenu_item * item, int (*subfunction)(newmenu *menu, d_event *event, void *userdata), void *userdata )
 {
 	return newmenu_do2( title, subtitle, nitems, item, subfunction, userdata, 0, NULL );
@@ -580,7 +608,7 @@ int newmenu_doreorder( char * title, char * subtitle, int nitems, newmenu_item *
 	window *wind;
 	int rval = -1;
 
-	menu = newmenu_do3( title, subtitle, nitems, item, subfunction, userdata, 0, NULL );
+	menu = newmenu_do3_nk( title, subtitle, nitems, item, subfunction, userdata, 0, NULL );
 
 	if (!menu)
 		return -1;
@@ -1574,6 +1602,292 @@ int newmenu_draw(window *wind, newmenu *menu)
 	return 1;
 }
 
+#ifdef USE_NK_UI
+static int newmenu_dispatch_nk(newmenu *menu, int event_type, int item)
+{
+	d_event event;
+
+	menu->citem = item;
+	event.type = event_type;
+	if (menu->subfunction && (*menu->subfunction)(menu, &event, menu->userdata))
+		return 1;
+	if (event_type != EVENT_NEWMENU_SELECTED)
+		return 1;
+
+	if (menu->rval)
+		*menu->rval = menu->citem;
+	window_close(menu->wind);
+	return 1;
+}
+
+static int newmenu_item_is_selectable_nk(newmenu *menu, int index)
+{
+	int selectable;
+
+	if (index < 0 || index >= menu->nitems)
+		return 0;
+	nk_ui_set_fixed_sections(menu->nk_fixed_sections);
+	// A heading that folds a section is the one text row worth landing on.
+	if (menu->items[index].type == NM_TYPE_TEXT)
+		selectable = nk_ui_is_collapsible_head(menu->items, menu->nitems, index);
+	else
+		selectable = !nk_ui_item_is_folded(menu->items, menu->nitems, index, menu->nk_collapsed);
+	nk_ui_set_fixed_sections(0);
+	return selectable;
+}
+
+void newmenu_set_fixed_sections(newmenu *menu)
+{
+	menu->nk_fixed_sections = 1;
+	menu->nk_has_sections = 0;
+	menu->nk_collapsed = 0;
+}
+
+// Moves the keyboard selection to the next selectable item, wrapping.
+static void newmenu_step_nk(newmenu *menu, int direction)
+{
+	int candidate = menu->citem;
+	int tries;
+
+	for (tries = 0; tries < menu->nitems; tries++)
+	{
+		candidate = (candidate + direction + menu->nitems) % menu->nitems;
+		if (newmenu_item_is_selectable_nk(menu, candidate))
+		{
+			menu->citem = candidate;
+			menu->nk_refocus = 1;
+			return;
+		}
+	}
+}
+
+static void newmenu_fix_citem_nk(newmenu *menu)
+{
+	if (newmenu_item_is_selectable_nk(menu, menu->citem))
+		return;
+	menu->citem = -1;
+	newmenu_step_nk(menu, 1);
+}
+
+// A run of options is picked in a list of its own rather than by unfolding
+// it into the menu underneath.
+struct option_run_picker
+{
+	newmenu *menu;
+	int start, end;
+	char **labels;
+};
+
+static int newmenu_option_run_handler(listbox *lb, d_event *event, void *userdata)
+{
+	struct option_run_picker *pick = (struct option_run_picker *)userdata;
+	int citem = listbox_get_citem(lb);
+
+	switch (event->type)
+	{
+		case EVENT_NEWMENU_SELECTED:
+			if (citem >= 0 && citem < pick->end - pick->start)
+			{
+				int index = pick->start + citem;
+
+				nk_ui_select_radio(pick->menu->items, pick->menu->nitems, index);
+				newmenu_dispatch_nk(pick->menu, EVENT_NEWMENU_CHANGED, index);
+			}
+			break;
+
+		case EVENT_WINDOW_CLOSE:
+			d_free(pick->labels);
+			d_free(pick);
+			break;
+
+		default:
+			break;
+	}
+
+	return 0;
+}
+
+static void newmenu_open_options_nk(newmenu *menu)
+{
+	int start = nk_ui_radio_run_start(menu->items, menu->citem);
+	int end = nk_ui_radio_run_end(menu->items, menu->nitems, start);
+	struct option_run_picker *pick;
+	char *caption;
+	int chosen, i;
+
+	if (end - start < 3)
+	{
+		nk_ui_select_radio(menu->items, menu->nitems, menu->citem);
+		newmenu_dispatch_nk(menu, EVENT_NEWMENU_CHANGED, menu->citem);
+		return;
+	}
+
+	MALLOC(pick, struct option_run_picker, 1);
+	if (!pick)
+		return;
+	MALLOC(pick->labels, char *, end - start);
+	if (!pick->labels)
+	{
+		d_free(pick);
+		return;
+	}
+	pick->menu = menu;
+	pick->start = start;
+	pick->end = end;
+	for (i = start; i < end; i++)
+		pick->labels[i - start] = menu->items[i].text;
+
+	// The text row above a run names it ("MOUSE", "While recording, show:"),
+	// which is the only caption the list can honestly carry.
+	caption = (start > 0 && menu->items[start - 1].type == NM_TYPE_TEXT && menu->items[start - 1].text[0])
+		? menu->items[start - 1].text : "Select";
+
+	chosen = nk_ui_radio_chosen(menu->items, start, end);
+	if (!newmenu_listbox1(caption, end - start, pick->labels,
+			1, chosen < 0 ? 0 : chosen - start, newmenu_option_run_handler, pick))
+	{
+		d_free(pick->labels);
+		d_free(pick);
+	}
+}
+
+static void newmenu_adjust_nk(newmenu *menu, int delta)
+{
+	newmenu_item *item = &menu->items[menu->citem];
+	int value = item->value + delta;
+
+	if (item->type != NM_TYPE_SLIDER && item->type != NM_TYPE_NUMBER)
+		return;
+	if (value < item->min_value || value > item->max_value)
+		return;
+	item->value = value;
+	newmenu_dispatch_nk(menu, EVENT_NEWMENU_CHANGED, menu->citem);
+}
+
+static void newmenu_activate_nk(newmenu *menu)
+{
+	newmenu_item *item = &menu->items[menu->citem];
+
+	switch (item->type)
+	{
+		case NM_TYPE_TEXT:
+			nk_ui_toggle_section(menu->items, menu->nitems, menu->citem, &menu->nk_collapsed);
+			break;
+		case NM_TYPE_MENU:
+			newmenu_dispatch_nk(menu, EVENT_NEWMENU_SELECTED, menu->citem);
+			break;
+		case NM_TYPE_CHECK:
+			item->value = !item->value;
+			newmenu_dispatch_nk(menu, EVENT_NEWMENU_CHANGED, menu->citem);
+			break;
+		case NM_TYPE_RADIO:
+			newmenu_open_options_nk(menu);
+			break;
+		case NM_TYPE_INPUT:
+		case NM_TYPE_INPUT_MENU:
+			newmenu_step_nk(menu, 1);
+			break;
+	}
+}
+
+static int newmenu_draw_nk(window *wind, newmenu *menu)
+{
+	grs_canvas *save_canvas = grd_curcanv;
+	int changed, selected;
+
+	if (menu->filename)
+	{
+		gr_set_current_canvas(NULL);
+		nm_draw_background1(menu->filename);
+		gr_set_current_canvas(save_canvas);
+	}
+
+	newmenu_fix_citem_nk(menu);
+	nk_ui_set_fixed_sections(menu->nk_fixed_sections);
+	nk_ui_newmenu_frame(menu, menu->title, menu->subtitle, menu->items, menu->nitems, menu->citem, menu->nk_refocus, menu->reorderitems, &menu->nk_collapsed, wind == window_get_front(), &changed, &selected);
+	nk_ui_set_fixed_sections(0);
+	menu->nk_refocus = 0;
+
+	if (changed < 0 && selected < 0)
+		return 1;
+
+	// A handler may run an event loop of its own (a message box, the netgame
+	// setup), which draws this panel again. Present the frame it was just
+	// built into first, or that second build lands in the same frame and
+	// Nuklear aborts on the duplicate.
+	nk_ui_flush();
+
+	if (changed >= 0)
+		newmenu_dispatch_nk(menu, EVENT_NEWMENU_CHANGED, changed);
+	if (selected >= 0 && window_exists(wind))
+		newmenu_dispatch_nk(menu, EVENT_NEWMENU_SELECTED, selected);
+	return 1;
+}
+
+// Arrows move the highlight, Enter/Space act on it, Left/Right nudge
+// sliders: every Nuklear menu works without the mouse.
+static int newmenu_key_command_nk(newmenu *menu, d_event *event)
+{
+	int key = event_key_get(event);
+
+	newmenu_fix_citem_nk(menu);
+
+	// A priority list has nothing to adjust, so the sideways keys move the
+	// highlighted entry through the order instead.
+	if (menu->reorderitems && (key == KEY_LEFT || key == KEY_RIGHT))
+	{
+		int target = menu->citem + (key == KEY_LEFT ? -1 : 1);
+
+		if (target >= 0 && target < menu->nitems)
+		{
+			nk_ui_swap_items(menu->items, menu->citem, target);
+			menu->citem = target;
+		}
+		return 1;
+	}
+
+	switch (key)
+	{
+		case KEY_ESC:
+			window_close(menu->wind);
+			break;
+		case KEY_UP:
+		case KEY_PAD8:
+			newmenu_step_nk(menu, -1);
+			break;
+		case KEY_DOWN:
+		case KEY_PAD2:
+			newmenu_step_nk(menu, 1);
+			break;
+		case KEY_LEFT:
+			newmenu_adjust_nk(menu, -1);
+			break;
+		case KEY_RIGHT:
+			newmenu_adjust_nk(menu, 1);
+			break;
+		case KEY_ENTER:
+		case KEY_PADENTER:
+			// Legacy semantics: Enter accepts the menu and lets the handler
+			// decide whether to stay. It never toggles the current item --
+			// that is Space -- or menus of pure checkboxes (the netgame
+			// player-wait screen) could never be accepted at all.
+			// Except on an option run, where Enter opens or picks like Space.
+			if (menu->citem >= 0 && menu->items[menu->citem].type == NM_TYPE_RADIO)
+				newmenu_open_options_nk(menu);
+			else if (menu->citem >= 0 && menu->items[menu->citem].type == NM_TYPE_TEXT)
+				nk_ui_toggle_section(menu->items, menu->nitems, menu->citem, &menu->nk_collapsed);
+			else if (menu->citem >= 0)
+				newmenu_dispatch_nk(menu, EVENT_NEWMENU_SELECTED, menu->citem);
+			break;
+		case KEY_SPACEBAR:
+			if (menu->citem >= 0 && menu->items[menu->citem].type != NM_TYPE_INPUT && menu->items[menu->citem].type != NM_TYPE_INPUT_MENU)
+				newmenu_activate_nk(menu);
+			break;
+	}
+	return 1;
+}
+#endif
+
 int newmenu_handler(window *wind, d_event *event, newmenu *menu)
 {
 	if (event->type == EVENT_WINDOW_CLOSED)
@@ -1619,25 +1933,49 @@ int newmenu_handler(window *wind, d_event *event, newmenu *menu)
 		case EVENT_MOUSE_BUTTON_UP:
 		{
 			int button = event_mouse_get_button(event);
+#ifdef USE_NK_UI
+			if (menu->use_nk)
+				return 1;
+#endif
 			menu->mouse_state = event->type == EVENT_MOUSE_BUTTON_DOWN;
 			return newmenu_mouse(wind, event, menu, button);
 		}
 
 		case EVENT_KEY_COMMAND:
+#ifdef USE_NK_UI
+			if (menu->use_nk)
+				return newmenu_key_command_nk(menu, event);
+#endif
 			return newmenu_key_command(wind, event, menu);
 			break;
 
 		case EVENT_IDLE:
 			timer_delay2(50);
 
+#ifdef USE_NK_UI
+			if (menu->use_nk)
+				return 1;
+#endif
 			return newmenu_mouse(wind, event, menu, -1);
 			break;
 
 		case EVENT_WINDOW_DRAW:
+#ifdef USE_NK_UI
+			if (menu->use_nk)
+				return newmenu_draw_nk(wind, menu);
+#endif
 			return newmenu_draw(wind, menu);
 			break;
 
 		case EVENT_WINDOW_CLOSE:
+#ifdef USE_NK_UI
+			if (menu->use_nk)
+			{
+				if (menu->nk_has_sections)
+					nk_ui_remember_sections(menu->nk_section_key, menu->nk_collapsed);
+				nk_ui_menu_closed();
+			}
+#endif
 			d_free(menu);
 			break;
 
@@ -1677,6 +2015,16 @@ newmenu *newmenu_do4( char * title, char * subtitle, int nitems, newmenu_item * 
 	menu->reorderitems = 0; // will be set if needed
 	menu->rval = NULL;		// Default to not returning a value - respond to EVENT_NEWMENU_SELECTED instead
 	menu->userdata = userdata;
+#ifdef USE_NK_UI
+	menu->use_nk = Newmenu_nk_request;
+	menu->nk_section_key = title ? title : subtitle;
+	menu->nk_refocus = 1;	// claim the first field's focus on the opening frame
+	menu->nk_has_sections = nk_ui_has_sections(item, nitems);
+	menu->nk_collapsed = nk_ui_recall_sections(menu->nk_section_key, item, nitems);
+	if (menu->use_nk)
+		nk_ui_menu_opened();
+#endif
+	Newmenu_nk_request = 0;
 
 	newmenu_free_background();
 
@@ -1731,7 +2079,7 @@ int nm_messagebox1( char *title, int (*subfunction)(newmenu *menu, d_event *even
 
 	Assert(strlen(nm_text) < MESSAGEBOX_TEXT_SIZE);
 
-	return newmenu_do( title, nm_text, nchoices, nm_message_items, subfunction, userdata );
+	return newmenu_do1_nk( title, nm_text, nchoices, nm_message_items, subfunction, userdata, 0 );
 }
 
 int nm_messagebox( char *title, int nchoices, ... )
@@ -1758,7 +2106,7 @@ int nm_messagebox( char *title, int nchoices, ... )
 
 	Assert(strlen(nm_text) < MESSAGEBOX_TEXT_SIZE );
 
-	return newmenu_do( title, nm_text, nchoices, nm_message_items, NULL, NULL );
+	return newmenu_do1_nk( title, nm_text, nchoices, nm_message_items, NULL, NULL, 0 );
 }
 
 // Example listbox callback function...
@@ -1793,6 +2141,9 @@ struct listbox
 	int allow_abort_flag;
 	int (*listbox_callback)(listbox *lb, d_event *event, void *userdata);
 	int citem, first_item;
+	int use_nk, nk_last_citem;
+	char nk_filter[NK_UI_FILTER_LEN];
+	unsigned int nk_scroll_y;
 	int marquee_maxchars, marquee_charpos, marquee_scrollback;
 	fix64 marquee_lasttime; // to scroll text if string does not fit in box
 	int box_w, height, box_x, box_y, title_height;
@@ -1964,6 +2315,77 @@ int listbox_mouse(window *wind, d_event *event, listbox *lb, int button)
 	return 0;
 }
 
+#ifdef USE_NK_UI
+// Moves to the next row matching the search box, wrapping, so the keyboard
+// walks what is on screen rather than the hidden full list.
+static void listbox_step_nk(listbox *lb, int direction)
+{
+	int candidate = lb->citem;
+	int tries;
+
+	for (tries = 0; tries < lb->nitems; tries++)
+	{
+		candidate = (candidate + direction + lb->nitems) % lb->nitems;
+		if (nk_ui_filter_matches(lb->item[candidate], lb->nk_filter))
+		{
+			lb->citem = candidate;
+			return;
+		}
+	}
+}
+
+static int listbox_key_command_nk(window *wind, d_event *event, listbox *lb)
+{
+	int key = event_key_get(event);
+	int i;
+
+	switch (key)
+	{
+		case KEY_ESC:
+			if (!lb->allow_abort_flag)
+				break;
+			lb->citem = -1;
+			window_close(wind);
+			break;
+		case KEY_HOME:
+			lb->citem = -1;
+			listbox_step_nk(lb, 1);
+			break;
+		case KEY_END:
+			lb->citem = 0;
+			listbox_step_nk(lb, -1);
+			break;
+		case KEY_UP:
+			listbox_step_nk(lb, -1);
+			break;
+		case KEY_DOWN:
+			listbox_step_nk(lb, 1);
+			break;
+		case KEY_PAGEUP:
+			for (i = 0; i < LB_ITEMS_ON_SCREEN; i++)
+				listbox_step_nk(lb, -1);
+			break;
+		case KEY_PAGEDOWN:
+			for (i = 0; i < LB_ITEMS_ON_SCREEN; i++)
+				listbox_step_nk(lb, 1);
+			break;
+		case KEY_ENTER:
+		case KEY_PADENTER:
+		{
+			d_event selected = { EVENT_NEWMENU_SELECTED };
+
+			if (lb->citem < 0)
+				break;
+			if (lb->listbox_callback && (*lb->listbox_callback)(lb, &selected, lb->userdata))
+				break;
+			window_close(wind);
+			break;
+		}
+	}
+	return 1;	// everything else belongs to the search box
+}
+#endif
+
 int listbox_key_command(window *wind, d_event *event, listbox *lb)
 {
 	// Note: statics are required to be zero-initialized in C, so we don't need to do it explicitly
@@ -1977,6 +2399,11 @@ int listbox_key_command(window *wind, d_event *event, listbox *lb)
 
 	int key = event_key_get(event);
 	int rval = 1;
+
+#ifdef USE_NK_UI
+	if (lb->use_nk)
+		return listbox_key_command_nk(wind, event, lb);
+#endif
 
 	switch(key)	{
 		case KEY_HOME:
@@ -2202,6 +2629,34 @@ int listbox_draw(window *wind, listbox *lb)
 	return 1;
 }
 
+#ifdef USE_NK_UI
+static int listbox_draw_nk(window *wind, listbox *lb)
+{
+	d_event event;
+	int action = nk_ui_listbox_frame(lb, lb->title, lb->item, lb->nitems, &lb->citem, &lb->nk_last_citem, &lb->nk_scroll_y, lb->nk_filter, lb->allow_abort_flag, wind == window_get_front());
+
+	if (action == NK_UI_LISTBOX_CANCEL)
+	{
+		lb->citem = -1;
+		window_close(wind);
+		return 1;
+	}
+	if (action != NK_UI_LISTBOX_ACCEPT)
+		return 1;
+
+	// Present this frame before the callback runs: picking a mission enters
+	// the netgame setup, whose own event loop would redraw this list into
+	// the very frame it was just built into. See newmenu_draw_nk().
+	nk_ui_flush();
+
+	event.type = EVENT_NEWMENU_SELECTED;
+	if (lb->listbox_callback && (*lb->listbox_callback)(lb, &event, lb->userdata))
+		return 1;
+	window_close(wind);
+	return 1;
+}
+#endif
+
 int listbox_handler(window *wind, d_event *event, listbox *lb)
 {
 	if (event->type == EVENT_WINDOW_CLOSED)
@@ -2231,6 +2686,10 @@ int listbox_handler(window *wind, d_event *event, listbox *lb)
 		case EVENT_MOUSE_BUTTON_UP:
 		{
 			int button = event_mouse_get_button(event);
+#ifdef USE_NK_UI
+			if (lb->use_nk)
+				return 1;
+#endif
 			lb->mouse_state = event->type == EVENT_MOUSE_BUTTON_DOWN;
 			return listbox_mouse(wind, event, lb, button);
 		}
@@ -2242,14 +2701,26 @@ int listbox_handler(window *wind, d_event *event, listbox *lb)
 		case EVENT_IDLE:
 			timer_delay2(50);
 
+#ifdef USE_NK_UI
+			if (lb->use_nk)
+				return 1;
+#endif
 			return listbox_mouse(wind, event, lb, -1);
 			break;
 
 		case EVENT_WINDOW_DRAW:
+#ifdef USE_NK_UI
+			if (lb->use_nk)
+				return listbox_draw_nk(wind, lb);
+#endif
 			return listbox_draw(wind, lb);
 			break;
 
 		case EVENT_WINDOW_CLOSE:
+#ifdef USE_NK_UI
+			if (lb->use_nk)
+				nk_ui_menu_closed();
+#endif
 			d_free(lb);
 			break;
 
@@ -2285,6 +2756,11 @@ listbox *newmenu_listbox1( char * title, int nitems, char * items[], int allow_a
 	lb->allow_abort_flag = allow_abort_flag;
 	lb->listbox_callback = listbox_callback;
 	lb->userdata = userdata;
+#ifdef USE_NK_UI
+	lb->use_nk = 1;
+	lb->nk_last_citem = -2;
+	nk_ui_menu_opened();
+#endif
 
 	set_screen_mode(SCREEN_MENU);	//hafta set the screen mode here or fonts might get changed/freed up if screen res changes
 	

@@ -2252,7 +2252,7 @@ multi_send_message_dialog(void)
 	Network_message[0] = 0;             // Get rid of old contents
 
 	m[0].type=NM_TYPE_INPUT; m[0].text = Network_message; m[0].text_len = MAX_MESSAGE_LEN-1;
-	choice = newmenu_do( NULL, TXT_SEND_MESSAGE, 1, m, NULL, NULL );
+	choice = newmenu_do1_nk( NULL, TXT_SEND_MESSAGE, 1, m, NULL, NULL, 0 );
 
 	if ((choice > -1) && (strlen(Network_message) > 0)) {
 		Network_message_reciever = 100;

@@ -39,6 +39,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "render.h"
 #include "digi.h"
 #include "newmenu.h"
+#include "nk_ui.h"
 #include "endlevel.h"
 #include "multi.h"
 #include "timer.h"
@@ -58,9 +59,6 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #endif
 
 #define TABLE_CREATION 1
-
-// Array used to 'blink' the cursor while waiting for a keypress.
-static const sbyte fades[64] = { 1,1,1,2,2,3,4,4,5,6,8,9,10,12,13,15,16,17,19,20,22,23,24,26,27,28,28,29,30,30,31,31,31,31,31,30,30,29,28,28,27,26,24,23,22,20,19,17,16,15,13,12,10,9,8,6,5,4,4,3,2,2,1,1 };
 
 static const char invert_text[2][2] = { "N", "Y" };
 char *joybutton_text[JOY_MAX_BUTTONS];
@@ -111,6 +109,18 @@ typedef struct kc_item {
 	ubyte *const ci_count_ptr;
 } kc_item;
 
+#define KC_MAX_SLOTS NK_UI_BIND_MAX_SLOTS
+#define KC_MAX_ROWS 32
+#define KC_BINDING_LEN 12
+
+// One action and the binding slots that drive it.
+typedef struct kc_row
+{
+	const char	*label;
+	short	slot[KC_MAX_SLOTS];
+	short	nslots;
+} kc_row;
+
 typedef struct kc_menu
 {
 	window	*wind;
@@ -118,10 +128,11 @@ typedef struct kc_menu
 	const char	*title;
 	int	nitems;
 	int	citem;
+	kc_row	rows[KC_MAX_ROWS];
+	int	nrows;
 	int	old_jaxis[JOY_MAX_AXES];
 	int	old_maxis[3];
 	ubyte	changing;
-	ubyte	q_fade_i;	// for flashing the question mark
 	ubyte	mouse_state;
 } kc_menu;
 
@@ -408,160 +419,184 @@ int find_next_item_left( kc_item * items, int nitems, int citem )
 }
 #endif
 
-int get_item_height(kc_item *item)
+void kconfig_start_changing(kc_menu *menu);
+
+// The binding text a slot shows: the key, button, axis or invert flag it
+// holds, or nothing when it is unbound.
+static void kc_binding_text(const kc_item *item, char *out, size_t out_size)
 {
-	int w, h, aw;
-	char btext[10];
-
-	if (item->value==255) {
-		strcpy(btext, "");
-	} else {
-		switch( item->type )	{
-			case BT_KEY:
-				strncpy( btext, key_properties[item->value].key_text, 10 ); break;
-			case BT_MOUSE_BUTTON:
-				strncpy( btext, mousebutton_text[item->value], 10); break;
-			case BT_MOUSE_AXIS:
-				strncpy( btext, mouseaxis_text[item->value], 10 ); break;
-			case BT_JOY_BUTTON:
-				if (joybutton_text[item->value])
-					strncpy(btext, joybutton_text[item->value], 10);
-				else
-					sprintf(btext, "BTN%2d", item->value + 1);
-				break;
-			case BT_JOY_AXIS:
-				if (joyaxis_text[item->value])
-					strncpy(btext, joyaxis_text[item->value], 10);
-				else
-					sprintf(btext, "AXIS%2d", item->value + 1);
-				break;
-			case BT_INVERT:
-				strncpy( btext, invert_text[item->value], 10 ); break;
-		}
+	out[0] = '\0';
+	if (item->value == 255)
+		return;
+	switch (item->type)
+	{
+		case BT_KEY:
+			snprintf(out, out_size, "%s", key_properties[item->value].key_text);
+			break;
+		case BT_MOUSE_BUTTON:
+			snprintf(out, out_size, "%s", mousebutton_text[item->value]);
+			break;
+		case BT_MOUSE_AXIS:
+			snprintf(out, out_size, "%s", mouseaxis_text[item->value]);
+			break;
+		case BT_JOY_BUTTON:
+			if (joybutton_text[item->value])
+				snprintf(out, out_size, "%s", joybutton_text[item->value]);
+			else
+				snprintf(out, out_size, "BTN%d", item->value + 1);
+			break;
+		case BT_JOY_AXIS:
+			if (joyaxis_text[item->value])
+				snprintf(out, out_size, "%s", joyaxis_text[item->value]);
+			else
+				snprintf(out, out_size, "AXIS%d", item->value + 1);
+			break;
+		case BT_INVERT:
+			snprintf(out, out_size, "%s", invert_text[item->value]);
+			break;
 	}
-	gr_get_string_size(btext, &w, &h, &aw  );
-
-	return h;
 }
 
-void kc_drawquestion( kc_menu *menu, kc_item *item );
+// One row per action. The tables list a second (and for the weapon keys a
+// third) binding for the same action far from the first, so rows are
+// gathered by label rather than by adjacency.
+static void kconfig_build_rows(kc_menu *menu)
+{
+	int i, r;
+
+	menu->nrows = 0;
+	for (i = 0; i < menu->nitems; i++)
+	{
+		for (r = 0; r < menu->nrows; r++)
+			if (!strcmp(menu->rows[r].label, menu->items[i].text))
+				break;
+		if (r == menu->nrows)
+		{
+			if (r == KC_MAX_ROWS)
+				return;
+			menu->rows[r].label = menu->items[i].text;
+			menu->rows[r].nslots = 0;
+			menu->nrows++;
+		}
+		if (menu->rows[r].nslots < KC_MAX_SLOTS)
+			menu->rows[r].slot[menu->rows[r].nslots++] = i;
+	}
+}
+
+static void kconfig_find_pos(kc_menu *menu, int *row, int *slot)
+{
+	int r, s;
+
+	for (r = 0; r < menu->nrows; r++)
+		for (s = 0; s < menu->rows[r].nslots; s++)
+			if (menu->rows[r].slot[s] == menu->citem)
+			{
+				*row = r;
+				*slot = s;
+				return;
+			}
+	*row = 0;
+	*slot = 0;
+}
+
+static void kconfig_move(kc_menu *menu, int drow, int dslot)
+{
+	int row, slot;
+
+	if (!menu->nrows)
+		return;
+	kconfig_find_pos(menu, &row, &slot);
+	if (drow)
+		row = (row + drow + menu->nrows) % menu->nrows;
+	slot += dslot;
+	if (slot < 0)
+		slot = 0;
+	if (slot >= menu->rows[row].nslots)
+		slot = menu->rows[row].nslots - 1;
+	menu->citem = menu->rows[row].slot[slot];
+}
+
+static void kconfig_restore_defaults(kc_menu *menu)
+{
+	int i;
+
+	if (menu->items == kc_keyboard)
+		for (i = 0; i < NUM_KEY_CONTROLS; i++)
+			menu->items[i].value = DefaultKeySettings[0][i];
+	if (menu->items == kc_joystick)
+		for (i = 0; i < NUM_JOYSTICK_CONTROLS; i++)
+			menu->items[i].value = DefaultKeySettings[1][i];
+	if (menu->items == kc_mouse)
+		for (i = 0; i < NUM_MOUSE_CONTROLS; i++)
+			menu->items[i].value = DefaultKeySettings[2][i];
+	if (menu->items == kc_d1x)
+		for (i = 0; i < NUM_D1X_CONTROLS; i++)
+			menu->items[i].value = DefaultKeySettingsD1X[i];
+}
+
+static const char *kconfig_hint(kc_menu *menu)
+{
+	if (!menu->changing)
+		return "Pick a binding to change it  -  Ctrl-D clears  -  Ctrl-R restores defaults  -  Esc exits";
+	switch (menu->items[menu->citem].type)
+	{
+		case BT_KEY:		return TXT_PRESS_NEW_KEY;
+		case BT_MOUSE_BUTTON:	return TXT_PRESS_NEW_MBUTTON;
+		case BT_MOUSE_AXIS:	return TXT_MOVE_NEW_MSE_AXIS;
+		case BT_JOY_BUTTON:	return TXT_PRESS_NEW_JBUTTON;
+		case BT_JOY_AXIS:	return TXT_MOVE_NEW_JOY_AXIS;
+	}
+	return "";
+}
+
+// The weapon-key screen binds the same action on all three devices, so its
+// slots are worth naming; everywhere else they are just alternatives.
+static const char *const kc_d1x_slot_names[KC_MAX_SLOTS] = { "KEYBOARD", "JOYSTICK", "MOUSE" };
 
 void kconfig_draw(kc_menu *menu)
 {
-	grs_canvas * save_canvas = grd_curcanv;
-	grs_font * save_font;
-	char * p;
-	int i;
-	int w = FSPACX(290), h = FSPACY(170);
+	struct nk_ui_bind_row rows[KC_MAX_ROWS];
+	char text[KC_MAX_ROWS][KC_MAX_SLOTS][KC_BINDING_LEN];
+	int current_row, current_slot, picked_row, picked_slot;
+	int r, s, action;
 
-	gr_set_current_canvas(NULL);
-	nm_draw_background(((SWIDTH-w)/2)-BORDERX,((SHEIGHT-h)/2)-BORDERY,((SWIDTH-w)/2)+w+BORDERX,((SHEIGHT-h)/2)+h+BORDERY);
-
-	gr_set_current_canvas(window_get_canvas(menu->wind));
-
-	save_font = grd_curcanv->cv_font;
-	grd_curcanv->cv_font = MEDIUM3_FONT;
-
-	p = strchr( menu->title, '\n' );
-	if ( p ) *p = 32;
-	gr_string( 0x8000, FSPACY(8), menu->title );
-	if ( p ) *p = '\n';
-
-	grd_curcanv->cv_font = GAME_FONT;
-	gr_set_fontcolor( BM_XRGB(28,28,28), -1 );
-	gr_string( 0x8000, FSPACY(21), "Enter changes, ctrl-d deletes, ctrl-r resets defaults, ESC exits");
-	gr_set_fontcolor( BM_XRGB(28,28,28), -1 );
-
-	if ( menu->items == kc_keyboard )
+	for (r = 0; r < menu->nrows; r++)
 	{
-		gr_set_fontcolor( BM_XRGB(31,27,6), -1 );
-		gr_setcolor( BM_XRGB(31,27,6) );
-		
-		gr_rect( FSPACX( 98), FSPACY(42), FSPACX(106), FSPACY(42) ); // horiz/left
-		gr_rect( FSPACX(120), FSPACY(42), FSPACX(128), FSPACY(42) ); // horiz/right
-		gr_rect( FSPACX( 98), FSPACY(42), FSPACX( 98), FSPACY(44) ); // vert/left
-		gr_rect( FSPACX(128), FSPACY(42), FSPACX(128), FSPACY(44) ); // vert/right
-		
-		gr_string( FSPACX(109), FSPACY(40), "OR" );
-
-		gr_rect( FSPACX(253), FSPACY(42), FSPACX(261), FSPACY(42) ); // horiz/left
-		gr_rect( FSPACX(275), FSPACY(42), FSPACX(283), FSPACY(42) ); // horiz/right
-		gr_rect( FSPACX(253), FSPACY(42), FSPACX(253), FSPACY(44) ); // vert/left
-		gr_rect( FSPACX(283), FSPACY(42), FSPACX(283), FSPACY(44) ); // vert/right
-
-		gr_string( FSPACX(264), FSPACY(40), "OR" );
-	}
-	else if ( menu->items == kc_joystick )
-	{
-		gr_set_fontcolor( BM_XRGB(31,27,6), -1 );
-		gr_setcolor( BM_XRGB(31,27,6) );
-		gr_string( 0x8000, FSPACY(30), TXT_BUTTONS );
-		gr_string( 0x8000,FSPACY(137), TXT_AXES );
-		gr_set_fontcolor( BM_XRGB(28,28,28), -1 );
-		gr_string( FSPACX( 81), FSPACY(145), TXT_AXIS );
-		gr_string( FSPACX(111), FSPACY(145), TXT_INVERT );
-		gr_string( FSPACX(230), FSPACY(145), TXT_AXIS );
-		gr_string( FSPACX(260), FSPACY(145), TXT_INVERT );
-		gr_set_fontcolor( BM_XRGB(31,27,6), -1 );
-		gr_setcolor( BM_XRGB(31,27,6) );
-
-		gr_rect( FSPACX(115), FSPACY(40), FSPACX(123), FSPACY(40) ); // horiz/left
-		gr_rect( FSPACX(137), FSPACY(40), FSPACX(145), FSPACY(40) ); // horiz/right
-		gr_rect( FSPACX(115), FSPACY(40), FSPACX(115), FSPACY(42) ); // vert/left
-		gr_rect( FSPACX(145), FSPACY(40), FSPACX(145), FSPACY(42) ); // vert/right
-
-		gr_string( FSPACX(126), FSPACY(38), "OR" );
-
-		gr_rect( FSPACX(261), FSPACY(40), FSPACX(269), FSPACY(40) ); // horiz/left
-		gr_rect( FSPACX(283), FSPACY(40), FSPACX(291), FSPACY(40) ); // horiz/right
-		gr_rect( FSPACX(261), FSPACY(40), FSPACX(261), FSPACY(42) ); // vert/left
-		gr_rect( FSPACX(291), FSPACY(40), FSPACX(291), FSPACY(42) ); // vert/right
-
-		gr_string( FSPACX(272), FSPACY(38), "OR" );
-	}
-	else if ( menu->items == kc_mouse )
-	{
-		gr_set_fontcolor( BM_XRGB(31,27,6), -1 );
-		gr_setcolor( BM_XRGB(31,27,6) );
-		gr_string( 0x8000, FSPACY(35), TXT_BUTTONS );
-		gr_string( 0x8000,FSPACY(137), TXT_AXES );
-		gr_set_fontcolor( BM_XRGB(28,28,28), -1 );
-		gr_string( FSPACX( 87), FSPACY(145), TXT_AXIS );
-		gr_string( FSPACX(120), FSPACY(145), TXT_INVERT );
-		gr_string( FSPACX(242), FSPACY(145), TXT_AXIS );
-		gr_string( FSPACX(274), FSPACY(145), TXT_INVERT );
-	}
-	else if ( menu->items == kc_d1x )
-	{
-		gr_set_fontcolor( BM_XRGB(31,27,6), -1 );
-		gr_setcolor( BM_XRGB(31,27,6) );
-
-		gr_string(FSPACX(152), FSPACY(60), "KEYBOARD");
-		gr_string(FSPACX(210), FSPACY(60), "JOYSTICK");
-		gr_string(FSPACX(273), FSPACY(60), "MOUSE");
-	}
-	
-	for (i=0; i<menu->nitems; i++ )	{
-		kc_drawitem( &menu->items[i], 0 );
-	}
-	kc_drawitem( &menu->items[menu->citem], 1 );
-	
-	if (menu->changing)
-	{
-		switch( menu->items[menu->citem].type )
+		rows[r].label = menu->rows[r].label;
+		rows[r].nslots = menu->rows[r].nslots;
+		for (s = 0; s < KC_MAX_SLOTS; s++)
 		{
-			case BT_KEY:            gr_string( 0x8000, FSPACY(INFO_Y), TXT_PRESS_NEW_KEY ); break;
-			case BT_MOUSE_BUTTON:   gr_string( 0x8000, FSPACY(INFO_Y), TXT_PRESS_NEW_MBUTTON ); break;
-			case BT_MOUSE_AXIS:     gr_string( 0x8000, FSPACY(INFO_Y), TXT_MOVE_NEW_MSE_AXIS ); break;
-			case BT_JOY_BUTTON:     gr_string( 0x8000, FSPACY(INFO_Y), TXT_PRESS_NEW_JBUTTON ); break;
-			case BT_JOY_AXIS:       gr_string( 0x8000, FSPACY(INFO_Y), TXT_MOVE_NEW_JOY_AXIS ); break;
+			if (s >= menu->rows[r].nslots)
+			{
+				rows[r].slot[s] = NULL;
+				continue;
+			}
+			kc_binding_text(&menu->items[menu->rows[r].slot[s]], text[r][s], KC_BINDING_LEN);
+			rows[r].slot[s] = text[r][s];
 		}
-		kc_drawquestion( menu, &menu->items[menu->citem] );
 	}
-	
-	gr_set_fontcolor( BM_XRGB(28,28,28), -1 );
-	grd_curcanv->cv_font	= save_font;
-	gr_set_current_canvas( save_canvas );
+
+	kconfig_find_pos(menu, &current_row, &current_slot);
+	action = nk_ui_bind_frame(menu, menu->title, kconfig_hint(menu), rows, menu->nrows,
+		menu->items == kc_d1x ? kc_d1x_slot_names : NULL,
+		current_row, current_slot, menu->changing, &picked_row, &picked_slot);
+
+	switch (action)
+	{
+		case NK_UI_BIND_PICK:
+			menu->citem = menu->rows[picked_row].slot[picked_slot];
+			kconfig_start_changing(menu);
+			break;
+		case NK_UI_BIND_CLEAR:
+			menu->items[menu->citem].value = 255;
+			break;
+		case NK_UI_BIND_DEFAULTS:
+			kconfig_restore_defaults(menu);
+			break;
+		case NK_UI_BIND_CLOSE:
+			window_close(menu->wind);
+			break;
+	}
 }
 
 void kconfig_start_changing(kc_menu *menu)
@@ -572,62 +607,7 @@ void kconfig_start_changing(kc_menu *menu)
 		return;
 	}
 
-	menu->q_fade_i = 0;	// start question mark flasher
 	menu->changing = 1;
-}
-
-int kconfig_mouse(window *wind, d_event *event, kc_menu *menu)
-{
-	grs_canvas * save_canvas = grd_curcanv;
-	int mx, my, mz, x1, x2, y1, y2;
-	int i;
-	int rval = 0;
-
-	gr_set_current_canvas(window_get_canvas(wind));
-	
-	if (menu->mouse_state)
-	{
-		int item_height;
-		
-		mouse_get_pos(&mx, &my, &mz);
-		for (i=0; i<menu->nitems; i++ )	{
-			item_height = get_item_height( &menu->items[i] );
-			x1 = grd_curcanv->cv_bitmap.bm_x + FSPACX(menu->items[i].x) + FSPACX(menu->items[i].w1);
-			x2 = x1 + FSPACX(menu->items[i].w2);
-			y1 = grd_curcanv->cv_bitmap.bm_y + FSPACY(menu->items[i].y);
-			y2 = y1 + item_height;
-			if (((mx > x1) && (mx < x2)) && ((my > y1) && (my < y2))) {
-				menu->citem = i;
-				rval = 1;
-				break;
-			}
-		}
-	}
-	else if (event->type == EVENT_MOUSE_BUTTON_UP)
-	{
-		int item_height;
-		
-		mouse_get_pos(&mx, &my, &mz);
-		item_height = get_item_height( &menu->items[menu->citem] );
-		x1 = grd_curcanv->cv_bitmap.bm_x + FSPACX(menu->items[menu->citem].x) + FSPACX(menu->items[menu->citem].w1);
-		x2 = x1 + FSPACX(menu->items[menu->citem].w2);
-		y1 = grd_curcanv->cv_bitmap.bm_y + FSPACY(menu->items[menu->citem].y);
-		y2 = y1 + item_height;
-		if (((mx > x1) && (mx < x2)) && ((my > y1) && (my < y2))) {
-			kconfig_start_changing(menu);
-			rval = 1;
-		}
-		else
-		{
-			// Click out of changing mode - kreatordxx
-			menu->changing = 0;
-			rval = 1;
-		}
-	}
-	
-	gr_set_current_canvas(save_canvas);
-	
-	return rval;
 }
 
 int kconfig_key_command(window *wind, d_event *event, kc_menu *menu)
@@ -645,53 +625,27 @@ int kconfig_key_command(window *wind, d_event *event, kc_menu *menu)
 		case KEY_CTRLED+KEY_D:
 			menu->items[menu->citem].value = 255;
 			return 1;
-		case KEY_CTRLED+KEY_R:	
-			if ( menu->items==kc_keyboard )
-				for (i=0; i<NUM_KEY_CONTROLS; i++ )
-					menu->items[i].value=DefaultKeySettings[0][i];
-
-			if ( menu->items==kc_joystick )
-				for (i=0; i<NUM_JOYSTICK_CONTROLS; i++ )
-					menu->items[i].value = DefaultKeySettings[1][i];
-
-			if ( menu->items==kc_mouse )
-				for (i=0; i<NUM_MOUSE_CONTROLS; i++ )
-					menu->items[i].value = DefaultKeySettings[2][i];
-
-			if ( menu->items==kc_d1x )
-				for(i=0;i<NUM_D1X_CONTROLS;i++)
-					menu->items[i].value=DefaultKeySettingsD1X[i];
+		case KEY_CTRLED+KEY_R:
+			kconfig_restore_defaults(menu);
 			return 1;
 		case KEY_DELETE:
 			menu->items[menu->citem].value=255;
 			return 1;
-		case KEY_UP: 		
+		case KEY_UP:
 		case KEY_PAD8:
-#ifdef TABLE_CREATION
-			if (menu->items[menu->citem].u==-1) menu->items[menu->citem].u=find_next_item_up( menu->items,menu->nitems, menu->citem);
-#endif
-			menu->citem = menu->items[menu->citem].u; 
+			kconfig_move(menu, -1, 0);
 			return 1;
 		case KEY_DOWN:
 		case KEY_PAD2:
-#ifdef TABLE_CREATION
-			if (menu->items[menu->citem].d==-1) menu->items[menu->citem].d=find_next_item_down( menu->items,menu->nitems, menu->citem);
-#endif
-			menu->citem = menu->items[menu->citem].d; 
+			kconfig_move(menu, 1, 0);
 			return 1;
 		case KEY_LEFT:
 		case KEY_PAD4:
-#ifdef TABLE_CREATION
-			if (menu->items[menu->citem].l==-1) menu->items[menu->citem].l=find_next_item_left( menu->items,menu->nitems, menu->citem);
-#endif
-			menu->citem = menu->items[menu->citem].l; 
+			kconfig_move(menu, 0, -1);
 			return 1;
 		case KEY_RIGHT:
 		case KEY_PAD6:
-#ifdef TABLE_CREATION
-			if (menu->items[menu->citem].r==-1) menu->items[menu->citem].r=find_next_item_right( menu->items,menu->nitems, menu->citem);
-#endif
-			menu->citem = menu->items[menu->citem].r; 
+			kconfig_move(menu, 0, 1);
 			return 1;
 		case KEY_ENTER:
 		case KEY_PADENTER:
@@ -828,7 +782,7 @@ int kconfig_handler(window *wind, d_event *event, kc_menu *menu)
 				return 0;
 
 			menu->mouse_state = (event->type == EVENT_MOUSE_BUTTON_DOWN);
-			return kconfig_mouse(wind, event, menu);
+			return 1;
 
 		case EVENT_MOUSE_MOVED:
 			if (menu->changing && menu->items[menu->citem].type == BT_MOUSE_AXIS) kc_change_mouseaxis(menu, event, &menu->items[menu->citem]);
@@ -859,10 +813,6 @@ int kconfig_handler(window *wind, d_event *event, kc_menu *menu)
 			return 0;
 		}
 
-		case EVENT_IDLE:
-			kconfig_mouse(wind, event, menu);
-			break;
-			
 		case EVENT_WINDOW_DRAW:
 			if (menu->changing)
 				timer_delay(f0_1/10);
@@ -872,6 +822,7 @@ int kconfig_handler(window *wind, d_event *event, kc_menu *menu)
 			break;
 			
 		case EVENT_WINDOW_CLOSE:
+			nk_ui_menu_closed();
 			d_free(menu);
 			
 			// Update save values...
@@ -914,87 +865,17 @@ void kconfig_sub(kc_item * items,int nitems, char *title)
 	menu->citem = 0;
 	menu->changing = 0;
 	menu->mouse_state = 0;
+	kconfig_build_rows(menu);
 
-	if (!(menu->wind = window_create(&grd_curscreen->sc_canvas, (SWIDTH - FSPACX(320))/2, (SHEIGHT - FSPACY(200))/2, FSPACX(320), FSPACY(200),
+	if (!(menu->wind = window_create(&grd_curscreen->sc_canvas, 0, 0, SWIDTH, SHEIGHT,
 					   (int (*)(window *, d_event *, void *))kconfig_handler, menu)))
+	{
 		d_free(menu);
-}
-
-
-void kc_drawitem( kc_item *item, int is_current )
-{
-	int x, w, h, aw;
-	char btext[10];
-
-	if (is_current)
-		gr_set_fontcolor( BM_XRGB(20,20,29), -1 );
-	else
-		gr_set_fontcolor( BM_XRGB(15,15,24), -1 );
-
-	gr_string( FSPACX(item->x), FSPACY(item->y), item->text );
-
-	if (item->value==255) {
-		strcpy( btext, "" );
-	} else {
-		switch( item->type )	{
-			case BT_KEY:
-				strncpy( btext, key_properties[item->value].key_text, 10 ); break;
-			case BT_MOUSE_BUTTON:
-				strncpy( btext, mousebutton_text[item->value], 10 ); break;
-			case BT_MOUSE_AXIS:
-				strncpy( btext, mouseaxis_text[item->value], 10 ); break;
-			case BT_JOY_BUTTON:
-				if (joybutton_text[item->value])
-					strncpy(btext, joybutton_text[item->value], 10);
-				else
-					sprintf(btext, "BTN%2d", item->value + 1);
-				break;
-			case BT_JOY_AXIS:
-				if (joyaxis_text[item->value])
-					strncpy(btext, joyaxis_text[item->value], 10);
-				else
-					sprintf(btext, "AXIS%2d", item->value + 1);
-				break;
-			case BT_INVERT:
-				strncpy( btext, invert_text[item->value], 10 ); break;
-		}
+		return;
 	}
-	gr_get_string_size(btext, &w, &h, &aw  );
-
-	if (is_current)
-		gr_setcolor( BM_XRGB(21,0,24) );
-	else
-		gr_setcolor( BM_XRGB(16,0,19) );
-	gr_urect( FSPACX(item->w1+item->x), FSPACY(item->y-1), FSPACX(item->w1+item->x+item->w2), FSPACY(item->y)+h );
-	
-	gr_set_fontcolor( BM_XRGB(28,28,28), -1 );
-
-	x = FSPACX(item->w1+item->x)+((FSPACX(item->w2)-w)/2);
-
-	gr_string( x, FSPACY(item->y), btext );
+	nk_ui_menu_opened();
 }
 
-
-void kc_drawquestion( kc_menu *menu, kc_item *item )
-{
-	int c, x, w, h, aw;
-
-	gr_get_string_size("?", &w, &h, &aw  );
-
-	c = BM_XRGB(21,0,24);
-
-	gr_setcolor( gr_fade_table[fades[menu->q_fade_i]*256+c] );
-	menu->q_fade_i++;
-	if (menu->q_fade_i>63) menu->q_fade_i=0;
-
-	gr_urect( FSPACX(item->w1+item->x), FSPACY(item->y-1), FSPACX(item->w1+item->x+item->w2), FSPACY(item->y)+h );
-	
-	gr_set_fontcolor( BM_XRGB(28,28,28), -1 );
-
-	x = FSPACX(item->w1+item->x)+((FSPACX(item->w2)-w)/2);
-
-	gr_string( x, FSPACY(item->y), "?" );
-}
 
 void kc_change_key( kc_menu *menu, d_event *event, kc_item * item )
 {
