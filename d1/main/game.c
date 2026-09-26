@@ -129,6 +129,7 @@ char	faded_in;
 int	Game_suspended=0; //if non-zero, nothing moves but player
 fix64	Auto_fire_fusion_cannon_time = 0;
 fix	Fusion_charge = 0;
+extern int Turkey_target;
 int	Game_mode = GM_GAME_OVER;
 int	Global_laser_firing_count = 0;
 int	Global_missile_firing_count = 0;
@@ -1387,6 +1388,15 @@ void GameProcessFrame(void)
 //				    cannon.
 void FireLaser()
 {
+	// A turkey never charges fusion: the charge is what overcharges, hurts,
+	// and squeals, and do_laser_firing_player() only stops the shot itself.
+	if ((Game_mode & GM_TURKEY_SHOOT) && Player_num == Turkey_target)
+	{
+		Global_laser_firing_count = 0;
+		Fusion_charge = 0;
+		Auto_fire_fusion_cannon_time = 0;
+		return;
+	}
 
 	Global_laser_firing_count = Controls.fire_primary_state?Weapon_info[Primary_weapon_to_weapon_info[Players[Player_num].primary_weapon]].fire_count:0;
 

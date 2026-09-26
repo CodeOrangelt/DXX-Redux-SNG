@@ -1130,6 +1130,18 @@ extern int Player_fired_laser_this_frame;
 // Assumption: This is only called by the actual console player, not for
 //   network players
 
+#define TURKEY_WARN_INTERVAL F1_0	// the trigger is held down; message once a second
+
+static void turkey_warn_cannot_fire(void)
+{
+	static fix64 last_warning = 0;
+
+	if (GameTime64 < last_warning + TURKEY_WARN_INTERVAL && GameTime64 >= last_warning)
+		return;
+	last_warning = GameTime64;
+	HUD_init_message(HM_DEFAULT, "Turkeys can't fire any weapons!");
+}
+
 void do_laser_firing_player(void)
 {
 	player	*plp = &Players[Player_num];
@@ -1145,8 +1157,7 @@ void do_laser_firing_player(void)
 	// Block turkey from firing ANY primary weapon
 	if ((Game_mode & GM_TURKEY_SHOOT) && (Player_num == Turkey_target))
 	{
-		digi_play_sample(SOUND_HUD_MESSAGE, F1_0);
-		HUD_init_message(HM_DEFAULT, "Turkeys can't fire any weapons!");
+		turkey_warn_cannot_fire();
 		return;
 	}
 
@@ -1528,7 +1539,7 @@ void do_missile_firing(int drop_bomb)
 	// Turkey can't fire missiles or drop bombs
 	if ((Game_mode & GM_TURKEY_SHOOT) && (Player_num == Turkey_target))
 	{
-		HUD_init_message(HM_DEFAULT, "Turkeys can't fire any weapons!");
+		turkey_warn_cannot_fire();
 		return;
 	}
 

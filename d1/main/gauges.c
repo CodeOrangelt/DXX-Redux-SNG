@@ -347,10 +347,8 @@ extern fix Cruise_speed;
 extern int linedotscale;
 
 // Turkey Shoot mode variables
-extern fix64 Turkey_time_as_turkey[MAX_PLAYERS];
 extern int Turkey_hunter_kills[MAX_PLAYERS];
 extern int Turkey_target;
-extern fix64 Turkey_start_time;
 
 int Observer_message_y_start = 0;
 
@@ -1254,52 +1252,24 @@ void hud_show_cloak_invuln(void)
 	}
 }
 
-void hud_show_turkey_stats(void)
+// Both sides' objectives at a glance: hunters count turkey kills up to the
+// target, turkeys watch the clock run down.
+static void hud_show_turkey_round(void)
 {
-	if (!(Game_mode & GM_TURKEY_SHOOT))
-		return;
-
-	char turkey_time_str[40];
-	int w, h, aw;
-	fix64 player_turkey_time;
-	int turkey_mins, turkey_secs;
+	char line[48];
 
 	gr_set_curfont(GAME_FONT);
-
-	// Turkey team (team 0) = RED - use orange color for turkey times
-	gr_set_fontcolor(BM_XRGB(20, 10, 0), -1);
-	gr_string(FSPACX(2), LINE_SPACING + FSPACY(1), "Turkey Times:");
-
-	int left_y = LINE_SPACING * 2 + FSPACY(1);
-
-	// Display all players' turkey times
-	for (int i = 0; i < N_players; i++)
+	if (Turkey_round_over)
 	{
-		if (!Players[i].connected)
-			continue;
-
-		// Calculate this player's turkey time
-		player_turkey_time = Turkey_time_as_turkey[i];
-		if (i == Turkey_target)
-		{
-			player_turkey_time += GameTime64 - Turkey_start_time;
-		}
-
-		// Convert to minutes and seconds
-		turkey_secs = f2i(player_turkey_time);
-		turkey_mins = turkey_secs / 60;
-		turkey_secs = turkey_secs % 60;
-
-		// Display turkey time - ORANGE colors for turkey times
-		if (i == Turkey_target)
-			gr_set_fontcolor(BM_XRGB(31, 16, 0), -1); // Bright orange for current turkey
-		else
-			gr_set_fontcolor(BM_XRGB(20, 10, 0), -1); // Darker orange for others
-
-		sprintf(turkey_time_str, "%s: %d:%02d", Players[i].callsign, turkey_mins, turkey_secs);
-		gr_string(FSPACX(4), left_y, turkey_time_str);
-		left_y += LINE_SPACING;
+		gr_set_fontcolor(BM_XRGB(31, 31, 0), -1);
+		gr_printf(0x8000, grd_curcanv->cv_bitmap.bm_h - LINE_SPACING * 4, "ROUND OVER");
+		return;
 	}
+
+	snprintf(line, sizeof(line), "HUNTERS %d/%d   TURKEYS %d:%02d",
+		Turkey_round_kills, Turkey_round_goal, Turkey_round_secs_left / 60, Turkey_round_secs_left % 60);
+	gr_set_fontcolor(BM_XRGB(20, 26, 31), -1);
+	gr_printf(0x8000, grd_curcanv->cv_bitmap.bm_h - LINE_SPACING * 4, "%s", line);
 }
 
 void hud_show_shield(void)
@@ -2321,6 +2291,9 @@ void fontcolor_ehh() {
 	gr_set_fontcolor(BM_XRGB(255, 165, 0), -1);  // Orange "medium" warning color
 }
 
+#define TURKEY_STATS_EXTRA_W 30	// "m:ss kills" is wider than a plain score
+#define KILL_LIST_NAME_LEN 24	// "[TURKEY] " plus a callsign
+
 int n_players,player_list[MAX_PLAYERS];
 
 #ifdef NETWORK
@@ -2386,7 +2359,7 @@ void hud_show_kill_list()
 		}
 
 
-		char name[9];
+		char name[KILL_LIST_NAME_LEN];
 		int sw,sh,aw;
 
 		if (i>=n_left) {
@@ -2419,6 +2392,11 @@ void hud_show_kill_list()
 				}
 			}
 
+			if (Game_mode & GM_TURKEY_SHOOT) {
+				x1 -= FSPACX(TURKEY_STATS_EXTRA_W);
+				x0 -= FSPACX(TURKEY_STATS_EXTRA_W);
+			}
+
 			if(Netgame.AllowPreferredColors) {
 				x1 -= FSPACX(5);
 				x0 -= FSPACX(5);
@@ -2437,6 +2415,8 @@ void hud_show_kill_list()
 		lagx = x1 + FSPACX(15);
 		if (Netgame.KillGoal || Netgame.PlayTimeAllowed)
 				lagx+=FSPACX(18);
+		if (Game_mode & GM_TURKEY_SHOOT)
+			lagx += FSPACX(TURKEY_STATS_EXTRA_W);
 
 		loss_upx = lagx + FSPACX(15);
 		if(Netgame.RetroProtocol) {
@@ -2464,7 +2444,7 @@ void hud_show_kill_list()
 		else if (Game_mode & GM_BOUNTY && player_num == Bounty_target && GameTime64&0x10000)
 			strcpy(name,"[TARGET]");
 		else if ((Game_mode & GM_TURKEY_SHOOT) && player_num == Turkey_target)
-			sprintf(name, "[TURKEY] %s", Players[player_num].callsign);
+			snprintf(name, sizeof(name), "[TURKEY] %s", Players[player_num].callsign);
 		else
 			strcpy(name,Players[player_num].callsign);	// Note link to above if!!
 		gr_get_string_size(name,&sw,&sh,&aw);
@@ -2485,7 +2465,23 @@ void hud_show_kill_list()
 			}
 		}
 
-		if (Show_kill_list==2)
+		if (Game_mode & GM_TURKEY_SHOOT)
+		{
+			int seconds = f2i(multi_turkey_get_current_time(player_num));
+
+			int hunter_color = get_color_for_team(TURKEY_TEAM_HUNTERS);
+			int turkey_color = get_color_for_team(TURKEY_TEAM_TURKEYS);
+			char clock[12];
+			int clock_w, clock_h, clock_aw;
+
+			snprintf(clock, sizeof(clock), "%d:%02d ", seconds / 60, seconds % 60);
+			gr_set_fontcolor(BM_XRGB(selected_player_rgb[turkey_color].r, selected_player_rgb[turkey_color].g, selected_player_rgb[turkey_color].b), -1);
+			gr_string(x1, y, clock);
+			gr_get_string_size(clock, &clock_w, &clock_h, &clock_aw);
+			gr_set_fontcolor(BM_XRGB(selected_player_rgb[hunter_color].r, selected_player_rgb[hunter_color].g, selected_player_rgb[hunter_color].b), -1);
+			gr_printf(x1 + clock_w, y, "%d", Turkey_hunter_kills[player_num]);
+		}
+		else if (Show_kill_list==2)
 		{
 			if (Players[player_num].net_killed_total+Players[player_num].net_kills_total==0)
 				gr_string (x1,y,"NA");
@@ -4654,7 +4650,7 @@ void draw_hud()
 	// Turkey Shoot HUD
 	if (Game_mode & GM_TURKEY_SHOOT)
 	{
-		hud_show_turkey_stats();
+		hud_show_turkey_round();
 		gr_set_curfont(GAME_FONT);
 		if (Player_num == Turkey_target)
 		{

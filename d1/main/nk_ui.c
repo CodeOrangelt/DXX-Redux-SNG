@@ -530,6 +530,15 @@ static void nk_ui_checkbox_ubyte(struct nk_context *ctx, const char *label, ubyt
 	*field = val ? 1 : 0;
 }
 
+static void nk_ui_ubyte_slider(struct nk_context *ctx, const char *label_fmt, ubyte *field, int lo, int hi)
+{
+	int v = *field;
+
+	nk_labelf(ctx, NK_TEXT_LEFT, label_fmt, v);
+	nk_slider_int(ctx, lo, &v, hi, 1);
+	*field = (ubyte)v;
+}
+
 static void nk_ui_checkbox_short(struct nk_context *ctx, const char *label, short *field)
 {
 	nk_bool val = *field ? nk_true : nk_false;
@@ -1602,6 +1611,18 @@ void nk_ui_weapon_autoselect(void)
 // Advanced options
 // ==============================
 
+static void nk_ui_build_turkey_rules(struct nk_context *ctx)
+{
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_ui_ubyte_slider(ctx, "Round Length (min): %d", &Netgame.TurkeyRoundMinutes, 1, 30);
+	nk_ui_ubyte_slider(ctx, "Turkey Shields: %d", &Netgame.TurkeyShields, 10, 200);
+	nk_ui_ubyte_slider(ctx, "Turkey Speed: %d%%", &Netgame.TurkeySpeedPct, 100, 200);
+	nk_ui_ubyte_slider(ctx, "Cloak Every (s): %d", &Netgame.TurkeyCloakInterval, 5, 120);
+	nk_ui_ubyte_slider(ctx, "Cloak Lasts (s): %d", &Netgame.TurkeyCloakDuration, 0, 60);
+	nk_ui_ubyte_slider(ctx, "Min Kills to Win (Hunters): %d", &Netgame.TurkeyMinKills, 1, 100);
+	nk_ui_ubyte_slider(ctx, "Extra Kills per Hunter: %d", &Netgame.TurkeyKillsPerHunter, 0, 20);
+}
+
 static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 {
 	int *running = (int *)userdata;
@@ -1862,6 +1883,8 @@ static void nk_ui_build_hosting(struct nk_context *ctx, void *userdata)
 	if (nk_option_label(ctx, TXT_COOPERATIVE, Netgame.gamemode == NETGAME_COOPERATIVE)) { Netgame.gamemode = NETGAME_COOPERATIVE; }
 	if (nk_option_label(ctx, "Bounty", Netgame.gamemode == NETGAME_BOUNTY)) { Netgame.gamemode = NETGAME_BOUNTY; }
 	if (nk_option_label(ctx, "Turkey Shoot", Netgame.gamemode == NETGAME_TURKEY_SHOOT)) { Netgame.gamemode = NETGAME_TURKEY_SHOOT; }
+	if (Netgame.gamemode == NETGAME_TURKEY_SHOOT)
+		nk_ui_build_turkey_rules(ctx);
 	if (nk_option_label(ctx, "Arcade", Netgame.gamemode == NETGAME_ARCADE)) { Netgame.gamemode = NETGAME_ARCADE; Netgame.CTF = 0; }
 	if (nk_option_label(ctx, "Survival", Netgame.gamemode == NETGAME_SURVIVAL)) { Netgame.gamemode = NETGAME_SURVIVAL; Netgame.CTF = 0; }
 		nk_tree_pop(ctx);

@@ -70,7 +70,7 @@ extern int multi_protocol; // set and determinate used protocol
 // bump matters: an old peer would happily relay gameplay that a new peer
 // now discards, which would look like a totally broken game rather than the
 // version mismatch it is.
-#define MULTI_PROTO_VERSION 30084 // SNG 1.7 + Arcade mode + Survival (+ shop ready-check)
+#define MULTI_PROTO_VERSION 30087 // SNG 1.7 + Arcade mode + Survival (+ shop ready-check) + Turkey Shoot rounds
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -142,6 +142,8 @@ extern int multi_protocol; // set and determinate used protocol
 	VALUE(MULTI_SURVIVAL_ELIMINATED  , 2)   \
 	VALUE(MULTI_SURVIVAL_SHIELDS     , 10)  \
 	VALUE(MULTI_SURVIVAL_SHOP_READY  , 2)   \
+	VALUE(MULTI_TURKEY_ROUND         , 13)   /* (ubyte kills, short secs_left, ubyte goal, ubyte hunter_kills[MAX_PLAYERS]) */ \
+	VALUE(MULTI_TURKEY_END           , 3)   /* (ubyte winner, ubyte hunter_kills) */ \
 	AFTER
 for_each_multiplayer_command(enum {, define_multiplayer_command, });
 
@@ -341,6 +343,25 @@ void multi_turkey_update_teams(void);
 void multi_turkey_announce_target(void);
 void multi_turkey_handle_kill(int killer_pnum, int killed_pnum);
 void multi_turkey_handle_cloak(void);
+void multi_turkey_limit_shields(void);
+void multi_turkey_round_frame(void);
+void multi_send_turkey_round(void);
+void multi_do_turkey_round(const ubyte *buf);
+void multi_do_turkey_end(const ubyte *buf);
+
+#define TURKEY_DEFAULT_ROUND_MINUTES 7
+#define TURKEY_DEFAULT_SHIELDS 50
+#define TURKEY_DEFAULT_SPEED_PCT 123
+#define TURKEY_DEFAULT_CLOAK_INTERVAL 30
+#define TURKEY_DEFAULT_CLOAK_DURATION 10
+#define TURKEY_DEFAULT_MIN_KILLS 10
+#define TURKEY_DEFAULT_KILLS_PER_HUNTER 5
+#define TURKEY_TEAM_HUNTERS 0
+#define TURKEY_TEAM_TURKEYS 1
+extern int Turkey_round_goal;
+extern int Turkey_round_kills;
+extern int Turkey_round_secs_left;
+extern int Turkey_round_over;
 fix64 multi_turkey_get_current_time(int pnum);
 void multi_new_turkey_target(int pnum);
 
@@ -565,6 +586,13 @@ typedef struct netgame_info
 	ubyte						SmallerSpawn;
 	ubyte						WeaponStun;
 	ubyte						QuietFan;
+	ubyte						TurkeyRoundMinutes;
+	ubyte						TurkeyShields;
+	ubyte						TurkeySpeedPct;
+	ubyte						TurkeyCloakInterval;
+	ubyte						TurkeyCloakDuration;
+	ubyte						TurkeyMinKills;
+	ubyte						TurkeyKillsPerHunter;
 	ubyte						FusionShake;
 	ubyte						VulcanShake;
 	ubyte						StaticPowerups;

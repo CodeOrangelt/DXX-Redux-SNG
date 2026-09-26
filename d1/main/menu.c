@@ -240,6 +240,131 @@ try_again:
 
 void delete_player_saved_games(char * name);
 
+// SNG: Ctrl-R in the pilot list renames a pilot together with everything
+// filed under its name.
+#define PILOT_RENAME_MAX 32	// renamed entries alive in one visit to the list
+#define PILOT_SAVE_SLOTS 10
+
+static char Pilot_renamed[PILOT_RENAME_MAX][CALLSIGN_LEN + 1];
+static int Num_pilot_renamed;
+
+static void pilot_file_name(char *out, size_t size, const char *pilot, const char *ext)
+{
+	snprintf(out, size, GameArg.SysUsePlayersDir ? "Players/%.8s.%s" : "%.8s.%s", pilot, ext);
+}
+
+// Every extension a pilot owns: profile, extras, netgame prefs, effects and
+// the ten savegame and mission-game slots.
+static int pilot_extension(int index, char *ext, size_t size)
+{
+	static const char *const fixed[] = { "plr", "plx", "eff", "ngp" };
+	const int nfixed = sizeof(fixed) / sizeof(fixed[0]);
+
+	if (index < nfixed)
+		snprintf(ext, size, "%s", fixed[index]);
+	else if (index < nfixed + PILOT_SAVE_SLOTS)
+		snprintf(ext, size, "sg%x", index - nfixed);
+	else if (index < nfixed + 2 * PILOT_SAVE_SLOTS)
+		snprintf(ext, size, "mg%x", index - nfixed - PILOT_SAVE_SLOTS);
+	else
+		return 0;
+	return 1;
+}
+
+static int rename_pilot_file(const char *from, const char *to, const char *ext)
+{
+	char oldfile[PATH_MAX], newfile[PATH_MAX];
+
+	pilot_file_name(oldfile, sizeof(oldfile), from, ext);
+	if (!PHYSFSX_exists(oldfile, 0))
+		return 1;
+	pilot_file_name(newfile, sizeof(newfile), to, ext);
+	return PHYSFSX_rename(oldfile, newfile);
+}
+
+// All or nothing: a failure part-way puts back what was already moved.
+static int rename_pilot_files(const char *from, const char *to)
+{
+	char ext[8];
+	int i, j;
+
+	for (i = 0; pilot_extension(i, ext, sizeof(ext)); i++)
+	{
+		if (rename_pilot_file(from, to, ext))
+			continue;
+		for (j = 0; j < i; j++)
+		{
+			pilot_extension(j, ext, sizeof(ext));
+			rename_pilot_file(to, from, ext);
+		}
+		return 0;
+	}
+	return 1;
+}
+
+// Asks for the new name. Returns 1 with it in `name`, 0 if they backed out.
+static int prompt_pilot_rename(const char *old_name, char *name)
+{
+	char text[CALLSIGN_LEN + 9] = "";
+	char filename[PATH_MAX];
+	newmenu_item m;
+	int x;
+
+	strncpy(text, old_name, CALLSIGN_LEN);
+
+	for (;;)
+	{
+		m.type = NM_TYPE_INPUT; m.text_len = CALLSIGN_LEN; m.text = text;
+		Newmenu_allowed_chars = playername_allowed_chars;
+		x = newmenu_do(NULL, "Rename pilot to:", 1, &m, NULL, NULL);
+		Newmenu_allowed_chars = NULL;
+
+		if (x < 0 || !d_stricmp(text, old_name))
+			return 0;
+		if (text[0] == 0)
+			continue;
+
+		d_strlwr(text);
+		pilot_file_name(filename, sizeof(filename), text, "plr");
+		if (!PHYSFSX_exists(filename, 0))
+			break;
+		nm_messagebox(NULL, 1, TXT_OK, "%s '%s' %s", TXT_PLAYER, text, TXT_ALREADY_EXISTS);
+	}
+
+	snprintf(name, CALLSIGN_LEN + 1, "%s", text);
+	return 1;
+}
+
+static void rename_pilot(listbox *lb, int citem)
+{
+	char **items = listbox_get_items(lb);
+	char old_name[CALLSIGN_LEN + 1], new_name[CALLSIGN_LEN + 1];
+
+	if (Num_pilot_renamed >= PILOT_RENAME_MAX)
+	{
+		nm_messagebox(NULL, 1, TXT_OK, "Too many renames in one visit -- reopen the pilot list");
+		return;
+	}
+
+	snprintf(old_name, sizeof(old_name), "%s", items[citem]);
+	if (!prompt_pilot_rename(old_name, new_name))
+		return;
+
+	if (!rename_pilot_files(old_name, new_name))
+	{
+		nm_messagebox(NULL, 1, TXT_OK, "%s rename pilot %s", TXT_COULDNT, old_name);
+		return;
+	}
+
+	snprintf(Pilot_renamed[Num_pilot_renamed], sizeof(Pilot_renamed[0]), "%s", new_name);
+	items[citem] = Pilot_renamed[Num_pilot_renamed++];
+
+	if (!d_stricmp(Players[Player_num].callsign, old_name))
+		snprintf(Players[Player_num].callsign, sizeof(Players[Player_num].callsign), "%s", new_name);
+	if (!d_stricmp(GameCfg.LastPlayer, old_name))
+		snprintf(GameCfg.LastPlayer, sizeof(GameCfg.LastPlayer), "%s", new_name);
+}
+
 int player_menu_keycommand( listbox *lb, d_event *event )
 {
 	char **items = listbox_get_items(lb);
@@ -247,6 +372,14 @@ int player_menu_keycommand( listbox *lb, d_event *event )
 
 	switch (event_key_get(event))
 	{
+		case KEY_CTRLED+KEY_R:
+			if (citem > 0)
+			{
+				rename_pilot(lb, citem);
+				return 1;
+			}
+			break;
+
 		case KEY_CTRLED+KEY_D:
 			if (citem > 0)
 			{
@@ -418,6 +551,7 @@ int RegisterPlayer()
 		if (!d_stricmp(Players[Player_num].callsign, m[i]) )
 			citem = i;
 
+	Num_pilot_renamed = 0;
 	newmenu_listbox1(TXT_SELECT_PILOT, NumItems, m, allow_abort_flag, citem, (int (*)(listbox *, d_event *, void *))player_menu_handler, list);
 
 	return 1;
