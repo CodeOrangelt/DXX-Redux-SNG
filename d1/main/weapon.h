@@ -110,6 +110,9 @@ typedef struct weapon_info {
 #define CLASS_SECONDARY     1
 
 #define LASER_INDEX         0
+// Not a weapon slot: the pseudo-index the autoselect order uses for "lasers
+// while quads are fitted", which ranks separately from plain lasers.
+#define QUAD_LASER_INDEX    16
 #define VULCAN_INDEX        1
 #define SPREADFIRE_INDEX    2
 #define PLASMA_INDEX        3

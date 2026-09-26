@@ -52,6 +52,7 @@ add_executable (d1x-redux
     powerup.c
     render.c
     robot.c
+    peerbook.c
     scores.c
     slew.c
     snddecom.c

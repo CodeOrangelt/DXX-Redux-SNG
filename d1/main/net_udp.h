@@ -10,6 +10,8 @@
 int net_udp_setup_game(void);
 char *net_udp_get_my_port_buf(void); // for nk_ui.c: direct access to the (otherwise file-static) UDP_MyPort edit buffer
 void net_udp_manual_join_game();
+// SNG: manual join, prefilled with a "host:port" from the peer book.
+void net_udp_join_peer(const char *addr);
 void net_udp_list_join_game();
 int net_udp_objnum_is_past(int objnum);
 void net_udp_do_frame(int force, int listen);

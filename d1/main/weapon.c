@@ -50,7 +50,7 @@ static const ubyte DefaultSecondaryOrder[] = { 4, 3, 1, 0, 255, 2 };
 extern ubyte MenuReordering;
 
 int player_has_weapon_lasers_not_quads(int weapon_num, int secondary_flag) {
-	if(weapon_num == 16) {
+	if(weapon_num == QUAD_LASER_INDEX) {
 		if(Players[Player_num].flags & PLAYER_FLAGS_QUAD_LASERS)
 			return player_has_weapon(Player_num, LASER_INDEX, 0); 
 		else
@@ -494,6 +494,10 @@ void auto_select_weapon(int weapon_type)
 
 		if(next_weapon == 255) { continue; } // Breakpoint in list
 		if(next_weapon == PROXIMITY_INDEX && weapon_type == 1) { continue; } // Don't autoselect proxies.  Ever.
+		// Lasers and quads are the same gun; a weak one is often worse than
+		// the next weapon down, so the player sets the level worth taking.
+		if(weapon_type == 0 && (next_weapon == LASER_INDEX || next_weapon == QUAD_LASER_INDEX)
+			&& Players[Player_num].laser_level + 1 < PlayerCfg.LaserAutoselectMinLevel) { continue; }
 		if(player_has_weapon_lasers_not_quads(next_weapon, weapon_type) != HAS_ALL) { continue; } // Missing weapon or ammo
 
 		select_weapon(next_weapon, weapon_type, 0, 1); 

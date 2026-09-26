@@ -31,6 +31,7 @@
 #include "gameseq.h"
 #include "fireball.h"
 #include "net_udp.h"
+#include "peerbook.h"
 #include "dxma.h"
 #include "game.h"
 #include "multi.h"
@@ -1991,6 +1992,16 @@ static int manual_join_game_handler(newmenu *menu, d_event *event, direct_join *
 	return 0;
 }
 
+// SNG: the peer book hands an address straight to the manual-join screen.
+static const char *Udp_prefill_addr = NULL;
+
+void net_udp_join_peer(const char *addr)
+{
+	Udp_prefill_addr = addr;
+	net_udp_manual_join_game();
+	Udp_prefill_addr = NULL;
+}
+
 void net_udp_manual_join_game()
 {
 	direct_join *dj;
@@ -2008,6 +2019,19 @@ void net_udp_manual_join_game()
 
 	memset(&dj->addrbuf,'\0', sizeof(char)*128);
 	snprintf(dj->addrbuf, sizeof(dj->addrbuf), "%s", GameArg.MplUdpHostAddr);
+	if (Udp_prefill_addr)
+	{
+		// The book stores "host:port"; the screen keeps the two apart.
+		const char *colon = strrchr(Udp_prefill_addr, ':');
+		size_t host_len = colon ? (size_t)(colon - Udp_prefill_addr) : strlen(Udp_prefill_addr);
+
+		if (host_len >= sizeof(dj->addrbuf))
+			host_len = sizeof(dj->addrbuf) - 1;
+		memcpy(dj->addrbuf, Udp_prefill_addr, host_len);
+		dj->addrbuf[host_len] = '\0';
+		if (colon && colon[1])
+			snprintf(dj->portbuf, sizeof(dj->portbuf), "%s", colon + 1);
+	}
 
 	if (GameArg.MplUdpHostPort != 0)
 		snprintf(dj->portbuf, sizeof(dj->portbuf), "%d", GameArg.MplUdpHostPort);
@@ -2029,7 +2053,7 @@ void net_udp_manual_join_game()
 	m[nitems].type = NM_TYPE_INPUT; m[nitems].text=UDP_MyPort; m[nitems].text_len=5;	nitems++;
 	m[nitems].type = NM_TYPE_TEXT;  m[nitems].text=blank;								nitems++;	// for connecting_txt
 
-	newmenu_do1( NULL, "ENTER GAME ADDRESS", nitems, m, (int (*)(newmenu *, d_event *, void *))manual_join_game_handler, dj, 0 );
+	newmenu_do1_nk( NULL, "ENTER GAME ADDRESS", nitems, m, (int (*)(newmenu *, d_event *, void *))manual_join_game_handler, dj, 0 );
 }
 
 static char *ljtext;
@@ -2370,7 +2394,7 @@ void net_udp_list_join_game()
 	}
 
 	num_active_udp_changed = 1;
-	newmenu_dotiny("NETGAMES", NULL,(UDP_NETGAMES_PPAGE+4), m, 1, (int (*)(newmenu *, d_event *, void *))net_udp_list_join_poll, dj);
+	newmenu_dotiny_nk("NETGAMES", NULL,(UDP_NETGAMES_PPAGE+4), m, 1, (int (*)(newmenu *, d_event *, void *))net_udp_list_join_poll, dj);
 }
 
 int color_used(int wingcolor, int missilecolor, int ignore) {
@@ -2688,6 +2712,8 @@ net_udp_new_player(UDP_sequence_packet *their)
 	}
 	//memcpy(&Netgame.players[pnum].protocol.udp.addr, &their->player.protocol.udp.addr, sizeof(struct _sockaddr));
 	update_address_for_player(pnum, their->player.protocol.udp.addr);
+	peerbook_note_player(their->player.callsign, &Netgame.players[pnum].protocol.udp.addr,
+		gns_bridge_is_connected(pnum));
 
 #ifdef USE_GNS
 	/* Migrate any live pre-join ICE connection to this permanent player slot. */
@@ -5013,7 +5039,7 @@ void net_udp_arcade_menu(void)
 
 	net_udp_arcade_menu_text(m);
 
-	newmenu_do1( NULL, "Arcade Options", opt, m, menu_arcade_handler, NULL, 0 );
+	newmenu_do1_nk( NULL, "Arcade Options", opt, m, menu_arcade_handler, NULL, 0 );
 
 	Netgame.ArcadeTeams       = m[opt_arcade_teams].value;
 	Netgame.ArcadeInterval    = (m[opt_arcade_interval].value + 1) * ARCADE_INTERVAL_STEP;
@@ -5839,7 +5865,7 @@ void save_preset()
 	int len;
 
 	m[0].type=NM_TYPE_INPUT; m[0].text_len = sizeof(name) - 1; m[0].text = name;
-	menu_ret = newmenu_do( NULL, "Save preset as", 1, m, NULL, NULL );
+	menu_ret = newmenu_do1_nk( NULL, "Save preset as", 1, m, NULL, NULL, 0 );
 	if (menu_ret == -1)
 		return;
 
@@ -6381,7 +6407,7 @@ net_udp_select_teams(void)
 
 		Assert(opt <= SDL_arraysize(m));
 	
-		choice = newmenu_do(NULL, TXT_TEAM_SELECTION, opt, m, net_udp_menu_select_teams_handler, &menu_data);
+		choice = newmenu_do1_nk(NULL, TXT_TEAM_SELECTION, opt, m, net_udp_menu_select_teams_handler, &menu_data, 0);
 
 		if (choice == opt-1)
 		{
@@ -6470,7 +6496,7 @@ GetPlayersAgain:
          while(j==opt_msg)
           {
 		  timer_update();
-            j=newmenu_do1( NULL, title, opts, m, net_udp_start_poll, NULL, 1 );
+            j=newmenu_do1_nk( NULL, title, opts, m, net_udp_start_poll, NULL, 1 );
 
             if(j==opt_msg)
              {
@@ -6607,7 +6633,7 @@ int net_udp_start_game(void)
 		m[0].type = NM_TYPE_TEXT;
 		m[0].text = "Setting up peer-to-peer hosting\n\nPlease wait...";
 
-		wait_menu = newmenu_do3(NULL, NULL, 1, m, NULL, NULL, 0, NULL);
+		wait_menu = newmenu_do3_nk(NULL, NULL, 1, m, NULL, NULL, 0, NULL);
 		timer_delay(F1_0 / 4);
 		event_process();
 
@@ -6678,7 +6704,7 @@ net_udp_wait_for_sync(void)
 	while (choice > -1)
 	{		
 		timer_update();
-		choice=newmenu_do( NULL, TXT_WAIT, 2, m, net_udp_sync_poll, NULL );
+		choice=newmenu_do1_nk( NULL, TXT_WAIT, 2, m, net_udp_sync_poll, NULL, 0 );
 	}
 
 
@@ -6747,7 +6773,7 @@ int net_udp_wait_for_requests(void)
 	Players[Player_num].connected = CONNECT_PLAYING;
 
 menu:
-	choice = newmenu_do(NULL, TXT_WAIT, 1, m, net_udp_request_poll, NULL);	
+	choice = newmenu_do1_nk(NULL, TXT_WAIT, 1, m, net_udp_request_poll, NULL, 0);	
 
 	if (choice == -1)
 	{

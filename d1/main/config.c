@@ -66,6 +66,7 @@ static const char ClassicDepthStr[] ="ClassicDepth";
 static const char FPSIndicatorStr[] ="FPSIndicator";
 static const char GrabinputStr[] ="GrabInput";
 static const char BorderlessWindowStr[] ="BorderlessWindow";
+static const char MenuColorStr[] ="MenuColor";	// SNG: accent colour of the Nuklear menus
 
 int ReadConfigFile()
 {
@@ -118,6 +119,7 @@ int ReadConfigFile()
 	GameCfg.FOVZoom = 0;
 	GameCfg.Grabinput = 1;
 	GameCfg.BorderlessWindow = 0;
+	GameCfg.MenuColor = 0;
 
 	infile = PHYSFSX_openReadBuffered("descent.cfg");
 
@@ -235,6 +237,8 @@ int ReadConfigFile()
 				GameCfg.Grabinput = strtol(value, NULL, 10);
 			else if (!strcmp(token, BorderlessWindowStr))
 				GameCfg.BorderlessWindow = strtol(value, NULL, 10);
+			else if (!strcmp(token, MenuColorStr))
+				GameCfg.MenuColor = strtol(value, NULL, 10);
 		}
 		d_free(line);
 	}
@@ -293,6 +297,7 @@ int WriteConfigFile()
 	PHYSFSX_printf(infile, "FOVZoom=%i\n", GameCfg.FOVZoom);
 	PHYSFSX_printf(infile, "%s=%i\n", GrabinputStr, GameCfg.Grabinput);
 	PHYSFSX_printf(infile, "%s=%i\n", BorderlessWindowStr, GameCfg.BorderlessWindow);
+	PHYSFSX_printf(infile, "%s=%i\n", MenuColorStr, GameCfg.MenuColor);
 
 	PHYSFS_close(infile);
 

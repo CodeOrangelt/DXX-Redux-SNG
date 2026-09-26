@@ -52,6 +52,7 @@ typedef struct Cfg
 	int Grabinput;
 	int ClassicDepth;
 	int BorderlessWindow;
+	int MenuColor;	// SNG: accent colour family of the menus, see nk_ui.c
 } __pack__ Cfg;
 
 extern struct Cfg GameCfg;

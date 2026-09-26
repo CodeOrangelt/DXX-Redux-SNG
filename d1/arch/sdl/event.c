@@ -16,6 +16,7 @@
 #include "args.h"
 
 #include "joy.h"
+#include "nk_ui.h"
 
 extern void key_handler(SDL_KeyboardEvent *event);
 extern void mouse_button_handler(SDL_MouseButtonEvent *mbe);
@@ -30,6 +31,9 @@ void event_poll()
 	int clean_uniframe=1;
 	window *wind = window_get_front();
 	int idle = 1;
+#ifdef USE_NK_UI
+	int nk_menu_input = nk_ui_menus_open();
+#endif
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 	int i = 0;
 	int j = 0;
@@ -37,8 +41,16 @@ void event_poll()
 	
 	// If the front window changes, exit this loop, otherwise unintended behavior can occur
 	// like pressing 'Return' really fast at 'Difficulty Level' causing multiple games to be started
+#ifdef USE_NK_UI
+	if (nk_menu_input)
+		nk_ui_input_begin();
+#endif
 	while ((wind == window_get_front()) && SDL_PollEvent(&event))
 	{
+#ifdef USE_NK_UI
+		if (nk_menu_input)
+			nk_ui_feed_event(&event);
+#endif
 		switch(event.type) {
 			case SDL_KEYDOWN:
 			case SDL_KEYUP:
@@ -114,6 +126,11 @@ void event_poll()
 			} break;
 		}
 	}
+
+#ifdef USE_NK_UI
+	if (nk_menu_input)
+		nk_ui_input_end();
+#endif
 
 	// Send the idle event if there were no other events
 	if (idle)
@@ -212,6 +229,10 @@ void event_process(void)
 		else
 			wind = window_get_next(wind);
 	}
+
+#ifdef USE_NK_UI
+	nk_ui_flush();
+#endif
 
 	gr_flip();
 }

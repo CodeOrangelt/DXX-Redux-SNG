@@ -953,7 +953,7 @@ int dxma_download_mission(int index)
 	newmenu_item wm; char msg[256];
 	snprintf(msg, sizeof(msg), "Downloading:\n%.60s\n\nPlease wait...", filename);
 	wm.type = NM_TYPE_TEXT; wm.text = msg;
-	newmenu *wait_menu = newmenu_do3(NULL, NULL, 1, &wm, NULL, NULL, 0, NULL);
+	newmenu *wait_menu = newmenu_do3_nk(NULL, NULL, 1, &wm, NULL, NULL, 0, NULL);
 	timer_delay(F1_0 / 4);
 	event_process();
 
@@ -1475,6 +1475,7 @@ static int dxma_menu_handler(newmenu *menu, d_event *event, void *userdata)
 
 	case EVENT_WINDOW_CLOSE:
 		if (ListText) { d_free(ListText); ListText = NULL; }
+		d_free(items);
 		break;
 
 	default: break;
@@ -1588,6 +1589,6 @@ void dxma_missions_menu(void)
 	}
 
 	if (InitialSelection >= on_page + 3) InitialSelection = 3;
-	newmenu_dotiny("DXMA MISSIONS", NULL, n_items, m, 1, dxma_menu_handler, NULL);
+	newmenu_dotiny_nk("DXMA MISSIONS", NULL, n_items, m, 1, dxma_menu_handler, NULL);
 	InitialSelection = 3;
 }

@@ -150,6 +150,7 @@ int new_player_config()
 	}
 	PlayerCfg.NoChatSound = 0;
 	PlayerCfg.ClassicAutoselectWeapon = 0;
+	PlayerCfg.LaserAutoselectMinLevel = 1;
 
 	// Default taunt macros
 	#ifdef NETWORK
@@ -469,6 +470,8 @@ int read_player_d1x(char *filename)
 					PlayerCfg.NoChatSound = atoi(line);
 				if(!strcmp(word,"CLASSICAUTOSELECTWEAPON"))
 					PlayerCfg.ClassicAutoselectWeapon = atoi(line);
+				if(!strcmp(word,"LASERAUTOSELECTMINLEVEL"))
+					PlayerCfg.LaserAutoselectMinLevel = atoi(line);
 
 				// Observer settings - migrate from old version
 				// If migrating from an older version, set all observer modes to the same value
@@ -924,6 +927,7 @@ int write_player_d1x(char *filename)
 		PHYSFSX_printf(fout,"maxfps=%i\n",PlayerCfg.maxFps);	
 		PHYSFSX_printf(fout,"nochatsound=%i\n",PlayerCfg.NoChatSound);
 		PHYSFSX_printf(fout,"classicautoselectweapon=%i\n",PlayerCfg.ClassicAutoselectWeapon);
+		PHYSFSX_printf(fout,"laserautoselectminlevel=%i\n",PlayerCfg.LaserAutoselectMinLevel);
 		PHYSFSX_printf(fout,"[end]\n");
 		PHYSFSX_printf(fout, "[observer]\n");
 		PHYSFSX_printf(fout, "obssharesettings=%i\n", PlayerCfg.ObsShareSettings);
