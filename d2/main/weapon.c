@@ -37,6 +37,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "ai.h"
 #include "args.h"
 #include "playsave.h"
+#include "race.h"
 
 int POrderList (int num);
 int SOrderList (int num);
@@ -184,7 +185,13 @@ int player_has_weapon(ubyte pnum, int weapon_num, int secondary_flag)
 				return_value |= HAS_AMMO_FLAG;
 
 		if (weapon_num == OMEGA_INDEX) {	// Hack: Make sure player has energy to omega
-			if (Players[pnum].energy || Omega_charge)
+			// Reaper (race.c's blood-cannon class) pays for the Omega in
+			// shields, not energy -- see race_omega_drain_shields(), called
+			// from the same energy-deduction sites in laser.c everyone else
+			// goes through -- so energy never gates it for them at all.
+			const race_class_info *rci = race_get_class_info(race_get_class(pnum));
+
+			if ((rci && rci->omega_blood_cannon) || Players[pnum].energy || Omega_charge)
 				return_value |= HAS_ENERGY_FLAG;
 		} else
 			if (Weapon_info[weapon_index].energy_usage <= Players[pnum].energy)

@@ -43,6 +43,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #ifdef NETWORK
 #include "multi.h"
 #include "race.h"
+#include "survival.h"
 #include "racebot.h"
 #endif
 #include "endlevel.h"
@@ -1177,46 +1178,38 @@ static void race_timer_line(int right, int y, const char *label, const char *val
 	race_string(right - colw - FSPACX(3) - label_w, y, label, color);
 }
 
-// Mario-Kart-style clock: running total, current lap, best lap so far, then
-// every completed lap underneath. Returns the y just past the last row.
+// One clock in the corner: the running race total while it's still going,
+// frozen at the finish time once it's over. THIS LAP, BEST LAP and every
+// completed split used to stack up underneath this too, but four-to-six
+// timers competing for the same corner is clutter a HUD glanced at mid-race
+// doesn't need -- best lap and the full set of splits are local-only numbers
+// anyway (every other machine only ever hears totals), so they've moved to
+// the results screen where there's room and reason to read them
+// (kmatrix_redraw_race(), kmatrix.c). Returns the y just past this row.
 static int race_draw_timer(int right, int y)
 {
-	char label[16];
 	char time[16];
-	const fix64 *splits;
-	fix64 best;
-	int n = race_get_splits(&splits, &best);
-	int i;
-	// A little leading: at the sizes the cockpit modes scale this block down
-	// to, rows at exactly LINE_SPACING run into each other.
-	int line = LINE_SPACING + FSPACY(1);
 
 	race_format_time(time, sizeof(time), race_get_total_time());
-	race_timer_line(right, y, "TOTAL", time, BM_XRGB(28, 28, 31));
-	y += line;
+	race_timer_line(right, y, "TIME", time, BM_XRGB(28, 28, 31));
+	y += LINE_SPACING + FSPACY(1);
 
-	if (!Race_player[Player_num].finished)
+	// Percent of cruise speed -- a plain number reads as clearly as it needs
+	// to without disturbing the view the way the FOV effect can, so it has
+	// its own toggle (PlayerCfg.RaceSpeedometer) independent of
+	// PlayerCfg.RaceSpeedFOV.
+	if (PlayerCfg.RaceSpeedometer)
 	{
-		race_format_time(time, sizeof(time), race_get_lap_time());
-		race_timer_line(right, y, "THIS LAP", time, BM_XRGB(6, 31, 6));
-		y += line;
-	}
+		char pct[16];
+		int color = BM_XRGB(20, 20, 24);
 
-	if (best)
-	{
-		race_format_time(time, sizeof(time), best);
-		race_timer_line(right, y, "BEST LAP", time, BM_XRGB(31, 24, 4));
-		y += line;
-	}
+		snprintf(pct, sizeof(pct), "%d%%", race_get_speed_percent());
 
-	// Completed laps, oldest first, with the best one picked out.
-	for (i = 0; i < n; i++)
-	{
-		race_format_time(time, sizeof(time), splits[i]);
-		snprintf(label, sizeof(label), "LAP %d", i + 1);
-		race_timer_line(right, y, label, time,
-						(splits[i] == best) ? BM_XRGB(31, 24, 4) : BM_XRGB(18, 18, 20));
-		y += line;
+		if (race_get_speed_percent() > 100)
+			color = BM_XRGB(6, 28, 31);
+
+		race_timer_line(right, y, "SPD", pct, color);
+		y += LINE_SPACING + FSPACY(1);
 	}
 
 	return y;
@@ -1742,6 +1735,8 @@ static void race_draw_lobby(void)
 	int locked = race_player_is_ready(Player_num);
 	int ready = 0, total = 0, secs;
 	int panel_w, panel_h, x, y, inner_x, inner_right, row_y, row_h, row_gap, i;
+	race_hud_box box;
+	int box_w;
 
 	gr_set_curfont(GAME_FONT);
 
@@ -1750,9 +1745,17 @@ static void race_draw_lobby(void)
 	row_h = LINE_SPACING*2 + FSPACY(14);
 	row_gap = FSPACY(7);
 
+	// Centre and clamp against the same box the rest of the race HUD lays out
+	// in -- box.left/right already carve out the full cockpit's side casing,
+	// which GWIDTH does not. Centering on GWIDTH instead let the panel drift
+	// into the cockpit art (and off past it, text and all) on wide/cockpit
+	// combinations where the casing eats a lot of the canvas.
+	race_hud_get_box(&box);
+	box_w = box.right - box.left;
+
 	panel_w = FSPACX(360);
-	if (panel_w > GWIDTH - FSPACX(20))
-		panel_w = GWIDTH - FSPACX(20);
+	if (panel_w > box_w - FSPACX(20))
+		panel_w = box_w - FSPACX(20);
 
 	panel_h = race_lobby_panel_h(row_h, row_gap);
 
@@ -1760,11 +1763,7 @@ static void race_draw_lobby(void)
 	// gets longer -- if the panel no longer fits, the rows give up their
 	// padding first rather than the frame hanging off the bottom.
 	{
-		race_hud_box box;
-		int avail;
-
-		race_hud_get_box(&box);
-		avail = box.bottom - box.top;
+		int avail = box.bottom - box.top;
 
 		if (panel_h > avail)
 		{
@@ -1780,7 +1779,7 @@ static void race_draw_lobby(void)
 		}
 	}
 
-	x = (GWIDTH - panel_w)/2;
+	x = box.left + (box_w - panel_w)/2;
 	y = race_panel_y(panel_h);
 
 	nm_draw_background(x, y, x + panel_w, y + panel_h);
@@ -1839,10 +1838,9 @@ static void race_draw_lobby(void)
 // than chase that down inside piggy's bitmap cache.)
 //
 // Fills left to right as race_trichord_charge() builds from holding a
-// genuine diagonal (see RACE_TRICHORD_CHARGE_* in race.h -- this is the
-// charge meter, not the instant race_trichord_strength() the FOV widening
-// rides, so the readout tracks exactly what race_trichord_charge_scale() is
-// paying out). Nothing draws at zero charge, and once it is full the fill
+// genuine diagonal (see RACE_TRICHORD_CHARGE_* in race.h), so the readout
+// tracks exactly what race_trichord_charge_scale() is paying out. Nothing
+// draws at zero charge, and once it is full the fill
 // pulses in brightness instead of sitting flat, so a fully charged, held
 // diagonal reads as an event rather than a bar that happened to fill.
 static void race_draw_trichord(const race_hud_box *box)
@@ -2791,6 +2789,22 @@ void hud_show_shield(void)
 
 	if (Newdemo_state==ND_STATE_RECORDING )
 		newdemo_record_player_shields(f2ir(Players[pnum].shields));
+}
+
+// Survival: banked extra lives, sitting directly above the shield readout in
+// the same bottom-left text stack (shield is at *6, energy at *5, cruise
+// speed at *10, so *7 is free). Drawn alongside the other survival-relevant
+// numbers rather than off in a corner of its own.
+void hud_show_survival_extra_lives(void)
+{
+	if (Netgame.gamemode != NETGAME_SURVIVAL)
+		return;
+	if (PlayerCfg.HudMode >= 2)
+		return; // player has the text HUD turned off
+
+	gr_set_curfont( GAME_FONT );
+	gr_set_fontcolor(BM_XRGB(31,31,0),-1 );
+	gr_printf(FSPACX(1), (grd_curcanv->cv_bitmap.bm_h-(LINE_SPACING*7)), "EL: %d", survival_extra_lives());
 }
 
 //draw the icons for number of lives
@@ -4085,8 +4099,17 @@ void hud_show_kill_list()
 						  min(Race_player[player_num].laps_completed + 1, Race_laps_to_win),
 						  Race_laps_to_win);
 
-		} else if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) )
-			gr_printf(x1,y,"%-6d",Players[player_num].score);
+		} else if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) ) {
+			// Survival: score and EL count are one printf, not two separate
+			// ones at x1 and lagx -- a wide score (several digits once
+			// you've been playing a while) printed left-justified from x1
+			// could run right into whatever sat at lagx. One string that
+			// flows left-to-right can't overlap itself.
+			if (Netgame.gamemode == NETGAME_SURVIVAL && player_num == Player_num && Show_kill_list != 3)
+				gr_printf(x1,y,"%d  EL:%d",Players[player_num].score, survival_extra_lives());
+			else
+				gr_printf(x1,y,"%-6d",Players[player_num].score);
+		}
 
 		else {
 
@@ -5615,6 +5638,13 @@ int see_object(int objnum)
 }
 
 #ifdef NETWORK
+// Survival: mini hull/energy bars tucked under a teammate's name tag -- see
+// the show_HUD_names() call site below for why this is scoped to Survival
+// rather than added to every co-op game.
+#define SURVIVAL_MINIBAR_WIDTH  56
+#define SURVIVAL_MINIBAR_HEIGHT 4
+#define SURVIVAL_MINIBAR_GAP    1
+
 //show names of teammates & players carrying flags
 void show_HUD_names()
 {
@@ -5718,6 +5748,61 @@ void show_HUD_names()
 						{
 							gr_set_fontcolor(BM_XRGB(selected_player_rgb[color_num].r,selected_player_rgb[color_num].g,selected_player_rgb[color_num].b),-1 );
 							gr_string (x1, y1, s);
+						}
+
+						// Survival: a mini hull bar tucked under the name, so
+						// you can see at a glance which teammate is in
+						// trouble. Only meaningful here because Survival
+						// broadcasts everyone's shields (see
+						// multi_do_survival_shields()); no other mode tells
+						// ordinary clients that, which is why this is scoped
+						// to Survival rather than added to every co-op game.
+						// Observers keep their own richer bar below.
+						if (Netgame.gamemode == NETGAME_SURVIVAL && !is_observer())
+						{
+							int bx = f2i(x) - SURVIVAL_MINIBAR_WIDTH / 2;
+							int by = y1 + h + 1;
+							int hull = f2i(Players[pnum].shields); // 100 == full bar
+							int nrg = f2i(Players[pnum].energy);
+							int fill;
+
+							if (hull < 0) hull = 0;
+							if (hull > 100) hull = 100;
+							if (nrg < 0) nrg = 0;
+							if (nrg > 100) nrg = 100;
+
+							// Hull: green when healthy, amber when hurt, red
+							// when nearly out -- readable without a number.
+							fill = (SURVIVAL_MINIBAR_WIDTH * hull) / 100;
+							if (hull > 60)
+								gr_setcolor(BM_XRGB(0, 28, 0));
+							else if (hull > 25)
+								gr_setcolor(BM_XRGB(28, 24, 0));
+							else
+								gr_setcolor(BM_XRGB(31, 4, 4));
+
+							if (fill > 0)
+								gr_urect(bx, by, bx + fill, by + SURVIVAL_MINIBAR_HEIGHT);
+							if (fill < SURVIVAL_MINIBAR_WIDTH)
+							{
+								gr_setcolor(BM_XRGB(6, 6, 6));
+								gr_urect(bx + fill, by, bx + SURVIVAL_MINIBAR_WIDTH, by + SURVIVAL_MINIBAR_HEIGHT);
+							}
+
+							// Energy, directly underneath. Always the same
+							// blue so the two bars can't be confused at a
+							// glance -- only the hull bar changes color.
+							by += SURVIVAL_MINIBAR_HEIGHT + SURVIVAL_MINIBAR_GAP;
+							fill = (SURVIVAL_MINIBAR_WIDTH * nrg) / 100;
+
+							gr_setcolor(BM_XRGB(0, 16, 31));
+							if (fill > 0)
+								gr_urect(bx, by, bx + fill, by + SURVIVAL_MINIBAR_HEIGHT);
+							if (fill < SURVIVAL_MINIBAR_WIDTH)
+							{
+								gr_setcolor(BM_XRGB(6, 6, 6));
+								gr_urect(bx + fill, by, bx + SURVIVAL_MINIBAR_WIDTH, by + SURVIVAL_MINIBAR_HEIGHT);
+							}
 						}
 					}
 					if (is_observer() && PlayerCfg.ObsShowShieldBar[get_observer_game_mode()] &&
@@ -5954,6 +6039,7 @@ void draw_hud()
 				hud_show_energy();
 				hud_show_shield();
 				hud_show_afterburner();
+				hud_show_survival_extra_lives();
 				hud_show_weapons();
 				hud_show_keys();
 				hud_show_cloak_invuln();
@@ -5986,6 +6072,9 @@ void draw_hud()
 
 	if (PlayerCfg.HudMode==3) // no hud, "immersion mode"
 		return;
+
+	// Survival HUD - wave counter (top-left)
+	survival_draw_hud();
 
 	// Cruise speed
 	if ( Player_num > -1 && Viewer->type==OBJ_PLAYER && Viewer->id==Player_num && PlayerCfg.CurrentCockpitMode != CM_REAR_VIEW)	{
@@ -6371,4 +6460,128 @@ abort:;
 	Viewer = viewer_save;
 
 	Rear_view = rear_view_save;
+}
+
+// Survival: draws a health bar under each currently-alive boss robot, same
+// screen-space-projected-rect technique the observer shield bar above uses
+// for players (see show_HUD_names()) -- just anchored on a robot object
+// instead of a player one.
+#define SURVIVAL_BOSS_BAR_WIDTH 120
+void show_survival_boss_bars(void)
+{
+	short boss_objnums[8];
+	fix boss_fracs[8];
+	int num_bosses, i;
+
+	if (!(Game_mode & GM_MULTI) || Netgame.gamemode != NETGAME_SURVIVAL)
+		return;
+
+	num_bosses = survival_get_active_bosses(boss_objnums, boss_fracs, 8);
+
+	for (i = 0; i < num_bosses; i++)
+	{
+		int objnum = boss_objnums[i];
+		g3s_point boss_point;
+		fix frac;
+		char s[8];
+		int w, h, aw;
+
+		g3_rotate_point(&boss_point, &Objects[objnum].pos);
+
+		if (boss_point.p3_codes != 0) // off screen
+			continue;
+
+		g3_project_point(&boss_point);
+
+		if (boss_point.p3_flags & PF_OVERFLOW)
+			continue;
+
+		fix x = boss_point.p3_sx;
+		fix y = boss_point.p3_sy;
+		fix dy = -fixmuldiv(fixmul(Objects[objnum].size, Matrix_scale.y), i2f(grd_curcanv->cv_bitmap.bm_h) / 2, boss_point.p3_z);
+
+		frac = boss_fracs[i];
+		if (frac < 0) frac = 0;
+		if (frac > F1_0) frac = F1_0;
+
+		gr_set_curfont(GAME_FONT);
+		gr_set_fontcolor(BM_XRGB(31, 8, 8), -1);
+		snprintf(s, sizeof(s), "BOSS");
+		gr_get_string_size(s, &w, &h, &aw);
+		int x1 = f2i(x) - w / 2;
+		int y1 = f2i(y - dy) + FSPACY(1);
+		gr_string(x1, y1, s);
+
+		int x2 = f2i(x) - SURVIVAL_BOSS_BAR_WIDTH / 2;
+		int y2 = f2i(y - dy) + FSPACY(6);
+		int fill_px = f2i(fixmul(i2f(SURVIVAL_BOSS_BAR_WIDTH), frac));
+
+#ifdef OGL
+		glLineWidth(1);
+#endif
+		// Filled portion (remaining shields)
+		gr_setcolor(BM_XRGB(28, 4, 4));
+		gr_urect(x2, y2, x2 + fill_px, y2 + 6);
+
+		// Empty portion
+		if (frac < F1_0)
+		{
+			gr_setcolor(BM_XRGB(6, 6, 6));
+			gr_urect(x2 + fill_px, y2, x2 + SURVIVAL_BOSS_BAR_WIDTH, y2 + 6);
+		}
+#ifdef OGL
+		glLineWidth(linedotscale);
+#endif
+	}
+}
+
+// Kind-name readout under each elite robot's model ("BOUNTY"/"BRUTE"/"SWARMER"), the same way BOSS's
+// label sits under its health bar above -- projected with the identical g3_rotate_point()/g3_project
+// _point() pair so it tracks the model in screen space frame to frame, and skipped the same way on
+// an off-screen or degenerate projection. Colored per kind (survival_robot_elite_color()) so the
+// label reinforces the outline rather than repeating information the outline color already gave.
+//
+// Scans every object rather than keeping a tracked list the way bosses do (Survival_bosses[],
+// survival.c): a boss is worth tracking because its max_shields needs to be remembered separately
+// from its current shields for the bar's fill fraction, but an elite has no second number to carry,
+// so there is nothing a tracked list would save.
+void survival_draw_elite_labels(void)
+{
+	int i;
+
+	if (!(Game_mode & GM_MULTI) || Netgame.gamemode != NETGAME_SURVIVAL)
+		return;
+
+	gr_set_curfont(GAME_FONT);
+
+	for (i = 0; i <= Highest_object_index; i++)
+	{
+		object *obj = &Objects[i];
+		int kind = survival_robot_is_elite(i);
+		g3s_point pt;
+		fix dy;
+		const char *s;
+		int w, h, aw;
+
+		if (kind == SURVIVAL_ELITE_NONE)
+			continue;
+		if (obj->flags & (OF_SHOULD_BE_DEAD | OF_EXPLODING))
+			continue;
+
+		g3_rotate_point(&pt, &obj->pos);
+		if (pt.p3_codes != 0) // off screen
+			continue;
+
+		g3_project_point(&pt);
+		if (pt.p3_flags & PF_OVERFLOW)
+			continue;
+
+		dy = -fixmuldiv(fixmul(obj->size, Matrix_scale.y), i2f(grd_curcanv->cv_bitmap.bm_h) / 2, pt.p3_z);
+
+		s = survival_robot_elite_name(kind);
+		gr_get_string_size(s, &w, &h, &aw);
+
+		gr_set_fontcolor(survival_robot_elite_color(kind), -1);
+		gr_string(f2i(pt.p3_sx) - w / 2, f2i(pt.p3_sy - dy) + FSPACY(1), s);
+	}
 }

@@ -133,6 +133,8 @@ typedef struct player_config
 	ubyte ClassicAutoselectWeapon;
 	ubyte RaceTrackLabels;
 	ubyte RaceMinimap;
+	ubyte RaceSpeedFOV;
+	ubyte RaceSpeedometer;
 } __pack__ player_config;
 
 extern struct player_config PlayerCfg;

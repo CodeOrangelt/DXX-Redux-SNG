@@ -56,7 +56,7 @@ build_app() {
     zip -r -X ${zipfilename} ${prettyname}.app
 }
 
-build_app "buildd1/main" "d1x-redux" "D1X-Redux" "DCNT"
-build_app "buildd2/main" "d2x-redux" "D2X-Redux" "DCT2"
+build_app "buildd1/main" "d1x-redux-sng" "D1X-Redux-SNG" "DCNT"
+build_app "buildd2/main" "d2x-redux-sng" "D2X-Redux-SNG" "DCT2"
 
 # Clean up

@@ -860,7 +860,7 @@ static int race_menu_handler(newmenu *menu, d_event *event, void *userdata)
 			// line closes the menu now; anything else stays put.
 			if (citem == RACE_MENU_ADVANCED)
 			{
-				net_udp_race_advanced_options(&Race_powerup_chance, &Race_allowed_items);
+				net_udp_race_advanced_options(&Race_allowed_items, Race_item_chance);
 				return 1;		// handled: stay in the menu
 			}
 
@@ -2222,7 +2222,7 @@ struct misc_menu_data {
 
 void do_misc_menu()
 {
-	newmenu_item m[45];
+	newmenu_item m[47];
 	int i = 0;
 	struct misc_menu_data misc_menu_data;
 
@@ -2343,6 +2343,8 @@ void do_misc_menu()
 
 		ADD_CHECK(41, "Race: floating track labels", PlayerCfg.RaceTrackLabels);
 		ADD_CHECK(42, "Race: minimap", PlayerCfg.RaceMinimap);
+		ADD_CHECK(45, "Race: speed-linked FOV", PlayerCfg.RaceSpeedFOV);
+		ADD_CHECK(46, "Race: speedometer", PlayerCfg.RaceSpeedometer);
 
 		m[43].type = NM_TYPE_TEXT;
 		m[43].text = "";
@@ -2391,6 +2393,8 @@ void do_misc_menu()
 		PlayerCfg.RaceTrackLabels = m[41].value;
 		PlayerCfg.RaceMinimap = m[42].value;
 		PlayerCfg.DisableIdleDemo = m[44].value;
+		PlayerCfg.RaceSpeedFOV = m[45].value;
+		PlayerCfg.RaceSpeedometer = m[46].value;
 
 	} while( i>-1 );
 

@@ -23,6 +23,16 @@
 // because it needs to be genuinely rare -- it's a free revive, not a pickup.
 #define SURVIVAL_EXTRA_LIFE_DROP_PERMILLE 8   // 0.8% per robot killed
 
+// Cloak/invulnerability drop off a killed robot. Split out of Survival_weapon_
+// types[] into its own rare independent roll (same treatment as extra life
+// above) rather than being one slot among many in that table -- being lumped
+// in at 1-in-16 made them show up about as often as any other single weapon,
+// which is too common for something that grants temporary immunity/stealth.
+// This is the floor/robot-drop odds only; the shop's paid "Random Supply"
+// roll (Survival_shop_supply_types[], survival.c) is unaffected since that's
+// a player's own spending choice, not a random gift.
+#define SURVIVAL_SITUATIONAL_DROP_PERMILLE 10   // 1.0% per robot killed, split 50/50 cloak vs invuln
+
 // Picks one of Survival mode's sustain (shield/energy/ammo) powerup ids at
 // random. Also used for the periodic scheduled ammo drops.
 int survival_random_ammo_type(void);

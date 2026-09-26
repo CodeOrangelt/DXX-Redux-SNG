@@ -404,9 +404,16 @@ static int dxma_write_cache_from_missions(void)
 
 static int dxma_refresh_by_scraping(void)
 {
-	dxma_mission incoming[MAX_DXMA_MISSIONS];
+	// Heap, not stack: MAX_DXMA_MISSIONS * sizeof(dxma_mission) is ~3.8MB,
+	// which blows MinGW/Windows' 1MB default thread stack outright (Linux's
+	// 8MB default absorbed it fine, which is why this only ever crashed
+	// there).
+	dxma_mission *incoming = d_malloc(sizeof(dxma_mission) * MAX_DXMA_MISSIONS);
 	int incoming_count = 0;
 	int saw_any_page = 0;
+
+	if (!incoming)
+		return 0;
 
 	for (int page = 1; page <= DXMA_REFRESH_MAX_PAGES; page++)
 	{
@@ -535,7 +542,10 @@ static int dxma_refresh_by_scraping(void)
 	}
 
 	if (!saw_any_page)
+	{
+		d_free(incoming);
 		return 0;
+	}
 
 	if (incoming_count > 0)
 	{
@@ -550,6 +560,7 @@ static int dxma_refresh_by_scraping(void)
 		con_printf(CON_NORMAL, "DXMA: refresh found no new %s missions via page scraping\n", DXMA_GAME_TAG);
 	}
 
+	d_free(incoming);
 	return 1;
 }
 
@@ -599,17 +610,22 @@ int dxma_load(void)
 			char *buf = d_malloc((size_t)sz);
 			if (buf && PHYSFS_read(fp, buf, 1, (PHYSFS_uint32)sz) == sz)
 			{
-				dxma_mission tmp[MAX_DXMA_MISSIONS];
-				int cn = dxma_parse_csv_buffer(buf, (size_t)sz, tmp, MAX_DXMA_MISSIONS);
-				int added = 0;
-				for (int i = 0; i < cn && MissionCount < MAX_DXMA_MISSIONS; i++)
-					if (!dxma_has_id(Missions, MissionCount, tmp[i].id))
-					{
-						Missions[MissionCount++] = tmp[i];
-						added++;
-					}
-				if (added > 0)
-					con_printf(CON_NORMAL, "DXMA: +%d missions merged from saved cache\n", added);
+				// Heap, not stack -- see dxma_refresh_by_scraping().
+				dxma_mission *tmp = d_malloc(sizeof(dxma_mission) * MAX_DXMA_MISSIONS);
+				if (tmp)
+				{
+					int cn = dxma_parse_csv_buffer(buf, (size_t)sz, tmp, MAX_DXMA_MISSIONS);
+					int added = 0;
+					for (int i = 0; i < cn && MissionCount < MAX_DXMA_MISSIONS; i++)
+						if (!dxma_has_id(Missions, MissionCount, tmp[i].id))
+						{
+							Missions[MissionCount++] = tmp[i];
+							added++;
+						}
+					if (added > 0)
+						con_printf(CON_NORMAL, "DXMA: +%d missions merged from saved cache\n", added);
+					d_free(tmp);
+				}
 			}
 			if (buf) d_free(buf);
 		}
@@ -1014,9 +1030,14 @@ int dxma_refresh(void)
 						char *buf = d_malloc((size_t)sz);
 						if (buf && PHYSFS_read(fp, buf, 1, (PHYSFS_uint32)sz) == sz)
 						{
-							dxma_mission tmp[MAX_DXMA_MISSIONS];
-							int n = dxma_parse_csv_buffer(buf, (size_t)sz, tmp, MAX_DXMA_MISSIONS);
-							good = (n >= 10);
+							// Heap, not stack -- see dxma_refresh_by_scraping().
+							dxma_mission *tmp = d_malloc(sizeof(dxma_mission) * MAX_DXMA_MISSIONS);
+							if (tmp)
+							{
+								int n = dxma_parse_csv_buffer(buf, (size_t)sz, tmp, MAX_DXMA_MISSIONS);
+								good = (n >= 10);
+								d_free(tmp);
+							}
 						}
 						if (buf) d_free(buf);
 					}

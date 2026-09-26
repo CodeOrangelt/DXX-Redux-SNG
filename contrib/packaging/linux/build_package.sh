@@ -28,6 +28,13 @@ chmod a+x linuxdeploy-x86_64.AppImage
 # And the soundfont
 curl -s -L -O https://github.com/arbruijn/TimGM6mb/releases/download/v20100822/TimGM6mb.sf2 || exit 3
 
+# And the Descent 1 hi-res graphics pack, which ships inside the D1 AppImage so
+# nobody has to go and find it: PHYSFS mounts any .dxa sitting next to the
+# executable (see PHYSFSX_addArchiveContent), and the game then prefers the
+# hi-res menu/briefing art whenever the screen is 640x480 or larger. There is
+# no Descent 2 equivalent -- D2's own data already ships hi-res menu art.
+curl -s -L -O https://www.dxx-rebirth.com/download/dxx/res/d1xr-hires.dxa || true
+
 build_appimage() {
     name="$1"
     prettyname="$2"
@@ -53,6 +60,11 @@ build_appimage() {
         exit 1
     fi
     cp build${dir}/main/${exename} ${appdir}/usr/bin/${name}
+
+    # Hi-res add-on, D1 only (see the download above).
+    if [ "${dir}" = "d1" ] && [ -f d1xr-hires.dxa ]; then
+        cp -p d1xr-hires.dxa ${appdir}/usr/bin/
+    fi
 
     # Icons
     mkdir -p ${appdir}/usr/share/pixmaps
@@ -109,8 +121,8 @@ build_appimage() {
 }
 
 # Build each subunit
-build_appimage "d1x-redux" "d1x-redux" "d1x-redux-sng"
-build_appimage "d2x-redux" "d2x-redux" "d2x-redux-sng"
+build_appimage "d1x-redux-sng" "D1X-Redux-SNG" "d1x-redux-sng"
+build_appimage "d2x-redux-sng" "D2X-Redux-SNG" "d2x-redux-sng"
 
 # Clean
 rm -f appimagetool* AppRun* linuxdeploy-*

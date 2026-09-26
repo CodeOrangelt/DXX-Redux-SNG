@@ -88,6 +88,7 @@ extern void ai_turn_towards_vector(vms_vector *vec_to_player, object *obj, fix r
 extern void ai_turn_towards_vel_vec(object *objp, fix rate);
 extern void init_ai_objects(void);
 extern void do_ai_robot_hit(object *robot, int type);
+extern void ai_path_set_orient_and_vel(object *objp, vms_vector *goal_point, int player_visibility, vms_vector *vec_to_player);
 extern void create_n_segment_path(object *objp, int path_length, int avoid_seg);
 extern void create_n_segment_path_to_door(object *objp, int path_length, int avoid_seg);
 extern void make_random_vector(vms_vector *vec);
@@ -101,6 +102,10 @@ extern void move_towards_player(object *objp, vms_vector *vec_to_player);
 // max_length is maximum depth of path to create.
 // If -1, use default: MAX_DEPTH_TO_SEARCH_FOR_PLAYER
 extern void create_path_to_player(object *objp, int max_length, int safety_flag);
+extern int survival_horde_hunts(void);
+extern fix survival_boss_fire_rate_scale(int objnum);
+extern fix survival_boss_turn_time(int objnum, robot_info *robptr);
+extern int survival_segment_is_reachable(int segnum);
 extern void attempt_to_resume_path(object *objp);
 
 // When a robot and a player collide, some robots attack!

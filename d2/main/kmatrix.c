@@ -336,6 +336,40 @@ void kmatrix_redraw_race()
 		kmatrix_draw_race_item( i, sorted );
 	}
 
+	// Per-lap splits and the best lap are local-only -- every other player's
+	// machine only ever hears their lap/finish totals, not their individual
+	// lap times -- so this is the one place left to show them at all now
+	// that the in-race HUD clock is down to a single running total (see
+	// race_draw_timer() in gauges.c). Drawn below the standings table rather
+	// than competing with it for the same block of the screen.
+	{
+		const fix64 *splits;
+		fix64 best;
+		int n = race_get_splits(&splits, &best);
+
+		if (n > 0)
+		{
+			int y = FSPACY(50 + N_players*9 + 12);
+			char buf[16];
+			int col;
+
+			gr_set_fontcolor( BM_XRGB(63,31,31),-1 );
+			gr_string( 0x8000, y, "YOUR LAPS" );
+			y += FSPACY(9);
+
+			for (i = 0, col = 0; i < n; i++, col++)
+			{
+				int x = CENTERSCREEN - FSPACX(90) + (col%4) * FSPACX(60);
+				int row_y = y + (col/4) * FSPACY(9);
+
+				race_format_time(buf, sizeof(buf), splits[i]);
+
+				gr_set_fontcolor((splits[i] == best) ? BM_XRGB(60,50,10) : BM_XRGB(40,40,44), -1);
+				gr_printf( x, row_y, "%d: %s", i+1, buf );
+			}
+		}
+	}
+
 	gr_palette_load(gr_palette);
 }
 
