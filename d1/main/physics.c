@@ -34,6 +34,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include <math.h>
 
 extern int Turkey_target;
+#define TURKEY_SPEED_SCALE (F1_0 / 100 * Netgame.TurkeySpeedPct)
 
 //Global variables for physics system
 
@@ -519,11 +520,8 @@ void do_physics_sim(object *obj)
 
 				vm_vec_copy_scale(&accel,&obj->mtype.phys_info.thrust,fixdiv(f1_0,obj->mtype.phys_info.mass));
 				
-				// TURKEY SPEED BOOST - Increase acceleration by 1.3x
 				if ((Game_mode & GM_TURKEY_SHOOT) && obj->type == OBJ_PLAYER && (obj->id == Turkey_target))
-				{
-					vm_vec_scale(&accel, fixmul(F1_0, F1_0 + F1_0/3));
-				}
+					vm_vec_scale(&accel, TURKEY_SPEED_SCALE);
 				
 				have_accel = (accel.x || accel.y || accel.z);
 

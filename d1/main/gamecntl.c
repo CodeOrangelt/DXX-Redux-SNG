@@ -593,7 +593,7 @@ int HandleSystemKey(int key)
 
 		KEY_MAC(case KEY_COMMAND+KEY_7:)
 		case KEY_F7:
-			Show_kill_list = (Show_kill_list+1) % ((Game_mode & GM_TEAM) ? 4 : 3);
+			Show_kill_list = (Show_kill_list+1) % ((Game_mode & GM_TURKEY_SHOOT) ? 2 : (Game_mode & GM_TEAM) ? 4 : 3);
 			if (Game_mode & GM_MULTI)
 				multi_sort_kill_list();
 			break;

@@ -3903,6 +3903,13 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.FusionShake;							len++;
 		buf[len] = Netgame.FastDoor;							len++;
 		buf[len] = Netgame.QuietFan;							len++;
+		buf[len] = Netgame.TurkeyRoundMinutes;							len++;
+		buf[len] = Netgame.TurkeyShields;							len++;
+		buf[len] = Netgame.TurkeySpeedPct;							len++;
+		buf[len] = Netgame.TurkeyCloakInterval;							len++;
+		buf[len] = Netgame.TurkeyCloakDuration;							len++;
+		buf[len] = Netgame.TurkeyMinKills;							len++;
+		buf[len] = Netgame.TurkeyKillsPerHunter;							len++;
 		buf[len] = Netgame.SmallerSpawn;						len++;
 		buf[len] = Netgame.StaticPowerups;						len++;
 		buf[len] = Netgame.StaticFusion;						len++;
@@ -4179,6 +4186,13 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		Netgame.FusionShake = data[len];						len++;
 		Netgame.FastDoor = data[len];							len++;
 		Netgame.QuietFan = data[len];							len++;
+		Netgame.TurkeyRoundMinutes = data[len];							len++;
+		Netgame.TurkeyShields = data[len];							len++;
+		Netgame.TurkeySpeedPct = data[len];							len++;
+		Netgame.TurkeyCloakInterval = data[len];							len++;
+		Netgame.TurkeyCloakDuration = data[len];							len++;
+		Netgame.TurkeyMinKills = data[len];							len++;
+		Netgame.TurkeyKillsPerHunter = data[len];							len++;
 		Netgame.SmallerSpawn = data[len];						len++;
 		Netgame.StaticPowerups = data[len];						len++;
 		Netgame.StaticFusion = data[len];						len++;
@@ -5725,6 +5739,13 @@ void netgame_set_defaults(void)
 	Netgame.SmallerSpawn = 0;
 	Netgame.WeaponStun = 0;
 	Netgame.QuietFan = 0;
+	Netgame.TurkeyRoundMinutes = TURKEY_DEFAULT_ROUND_MINUTES;
+	Netgame.TurkeyShields = TURKEY_DEFAULT_SHIELDS;
+	Netgame.TurkeySpeedPct = TURKEY_DEFAULT_SPEED_PCT;
+	Netgame.TurkeyCloakInterval = TURKEY_DEFAULT_CLOAK_INTERVAL;
+	Netgame.TurkeyCloakDuration = TURKEY_DEFAULT_CLOAK_DURATION;
+	Netgame.TurkeyMinKills = TURKEY_DEFAULT_MIN_KILLS;
+	Netgame.TurkeyKillsPerHunter = TURKEY_DEFAULT_KILLS_PER_HUNTER;
 	Netgame.FusionShake = 0;
 	Netgame.VulcanShake = 0;
 	Netgame.StaticPowerups = 0;
@@ -6053,7 +6074,7 @@ net_udp_set_game_mode(int gamemode, ubyte join_as_obs)
 	else if( gamemode == NETGAME_TURKEY_SHOOT )
 	{
 		Game_mode = GM_NETWORK | GM_TEAM | GM_TURKEY_SHOOT;
-		Show_kill_list = 3;
+		Show_kill_list = 1;	// the list carries turkey times, not team scores
 	}
 	else if( gamemode == NETGAME_ARCADE )
 	{
@@ -6892,8 +6913,10 @@ int net_udp_do_join_game(ubyte join_as_obs)
 void net_udp_leave_game()
 {
 	int nsave, i;
+	int64_t t0 = timer_query_usec();
 
 	net_udp_do_frame(1, 1);
+	con_printf(CON_NORMAL, "Leave: last frame %d ms\n", (int)((timer_query_usec() - t0) / 1000));
 
 	if ((multi_i_am_master()))
 	{
@@ -6920,6 +6943,7 @@ void net_udp_leave_game()
 #endif
 	}
 
+	con_printf(CON_NORMAL, "Leave: host notices %d ms\n", (int)((timer_query_usec() - t0) / 1000));
 	Players[Player_num].connected = CONNECT_DISCONNECTED;
 
 	if (Current_obs_player == Player_num) {
@@ -6928,7 +6952,9 @@ void net_udp_leave_game()
 
 	change_playernum_to(0);
 	net_udp_flush();
+	con_printf(CON_NORMAL, "Leave: flushed %d ms\n", (int)((timer_query_usec() - t0) / 1000));
 	net_udp_close();
+	con_printf(CON_NORMAL, "Leave: closed %d ms\n", (int)((timer_query_usec() - t0) / 1000));
 }
 
 void net_udp_flush()

@@ -1363,10 +1363,13 @@ void multi_compute_kill(int killer, int killed)
 		if (Game_mode & GM_TURKEY_SHOOT && killed_pnum == Turkey_target && multi_i_am_master())
 		{
 			/* Turkey suicided - pick a new random target */
-			int new = d_rand() % MAX_PLAYERS;
-			while (!Players[new].connected || new == killed_pnum)
-				new = d_rand() % MAX_PLAYERS;
-			multi_turkey_set_target(new);
+			int candidates[MAX_PLAYERS], ncandidates = 0, i;
+
+			for (i = 0; i < MAX_PLAYERS; i++)
+				if (Players[i].connected && i != killed_pnum)
+					candidates[ncandidates++] = i;
+			if (ncandidates)
+				multi_turkey_set_target(candidates[d_rand() % ncandidates]);
 		}
 
 		add_observatory_stat(killed_pnum, OBSEV_DEATH | OBSEV_SELF);
@@ -1408,30 +1411,17 @@ void multi_compute_kill(int killer, int killed)
 					multi_new_bounty_target( killer_pnum );
 			}
 		}
-		else if( Game_mode & GM_TURKEY_SHOOT )
-		{
-			/* Turkey Shoot scoring: only killing the turkey counts */
-			if( killed_pnum == Turkey_target && killer_pnum != killed_pnum )
-			{
-				/* Increment kill counts */
-				Players[killer_pnum].net_kills_total++;
-				Players[killer_pnum].KillGoalCount++;
-				
-				/* Record the kill in a demo */
-				if( Newdemo_state == ND_STATE_RECORDING )
-					newdemo_record_multi_kill( killer_pnum, 1 );
-				
-				/* Handle turkey kill (sets new target to killer) */
-				if( multi_i_am_master() )
-					multi_turkey_handle_kill( killer_pnum, killed_pnum );
-			}
-		}
 		else
 		{
 			Players[killer_pnum].net_kills_total += 1;
 			Players[killer_pnum].KillGoalCount+=1;
 		}
 		
+		// Turkey Shoot is team play, so scoring above already ran; all that is
+		// left is handing the turkey role to whoever brought it down.
+		if ((Game_mode & GM_TURKEY_SHOOT) && killed_pnum == Turkey_target && multi_i_am_master())
+			multi_turkey_handle_kill(killer_pnum, killed_pnum);
+
 			if (Newdemo_state == ND_STATE_RECORDING && !( Game_mode & GM_BOUNTY ) )
 				newdemo_record_multi_kill(killer_pnum, 1);
 
@@ -1580,11 +1570,15 @@ void multi_do_frame(void)
 		if (GameTime64 - last_turkey_sync >= F1_0)
 		{
 			multi_send_turkey_time_sync();
+			multi_send_turkey_round();
 			last_turkey_sync = GameTime64;
 		}
 		// Handle turkey cloaking
 		multi_turkey_handle_cloak();
+		multi_turkey_round_frame();
 	}
+	if (Game_mode & GM_TURKEY_SHOOT)
+		multi_turkey_limit_shields();
 
 	// Arcade Mode handling - spawns super powers around the mine (spawner only)
 	multi_arcade_do_frame();
@@ -2947,6 +2941,11 @@ multi_do_decloak(const ubyte *buf)
 
 	pnum = buf[1];
 
+	// Turkey Shoot ends its cloaks early, so the flag has to come off here
+	// rather than wait out the stock 30 second timer.
+	if (pnum >= 0 && pnum < MAX_PLAYERS)
+		Players[pnum].flags &= ~PLAYER_FLAGS_CLOAKED;
+
 	if (Newdemo_state == ND_STATE_RECORDING)
 		newdemo_record_multi_decloak(pnum);
 
@@ -3244,10 +3243,15 @@ fix64 Turkey_time_as_turkey[MAX_PLAYERS] = {0,0,0,0,0,0,0,0};
 int Turkey_hunter_kills[MAX_PLAYERS] = {0,0,0,0,0,0,0,0};
 fix64 Turkey_start_time = 0;
 int Turkey_last_target = -1;
+int Turkey_round_kills = 0;
+int Turkey_round_secs_left = 0;
+int Turkey_round_over = 0;
+int Turkey_round_goal = TURKEY_DEFAULT_MIN_KILLS;
 
-#define TURKEY_GAME_DURATION (F1_0 * 60 * 7)  // 7 minutes
-#define TURKEY_CLOAK_INTERVAL (F1_0 * 30)     // 30 seconds
-#define TURKEY_CLOAK_DURATION (F1_0 * 10)     // 10 seconds of cloak
+#define TURKEY_SHIELDS (Netgame.TurkeyShields)
+#define TURKEY_GAME_DURATION (F1_0 * 60 * Netgame.TurkeyRoundMinutes)
+#define TURKEY_CLOAK_INTERVAL (F1_0 * max(1, (int)Netgame.TurkeyCloakInterval))	// divisor
+#define TURKEY_CLOAK_DURATION (F1_0 * Netgame.TurkeyCloakDuration)
 
 void multi_turkey_init_game(void)
 {
@@ -3260,6 +3264,9 @@ void multi_turkey_init_game(void)
     Turkey_game_start_time = GameTime64;
     Turkey_assign_time = 0;
     Turkey_start_time = 0;
+    Turkey_round_kills = 0;
+    Turkey_round_over = 0;
+    Turkey_round_secs_left = f2i(TURKEY_GAME_DURATION);
 
     // Clear all turkey times and kills with bounds checking
     for (int i = 0; i < MAX_PLAYERS; i++)
@@ -3290,6 +3297,17 @@ void multi_turkey_init_game(void)
 }
 
 // Set a specific player as the turkey (MASTER ONLY)
+static void multi_turkey_clear_cloak(int pnum)
+{
+    if (pnum < 0 || pnum >= MAX_PLAYERS || !(Players[pnum].flags & PLAYER_FLAGS_CLOAKED))
+        return;
+
+    Players[pnum].flags &= ~PLAYER_FLAGS_CLOAKED;
+    multibuf[0] = MULTI_DECLOAK;
+    multibuf[1] = pnum;
+    multi_send_data(multibuf, 2, 2);
+}
+
 void multi_turkey_set_target(int pnum)
 {
     if (!multi_i_am_master())
@@ -3314,6 +3332,11 @@ void multi_turkey_set_target(int pnum)
         con_printf(CON_NORMAL, "Turkey %d accumulated %f seconds\n",
                    Turkey_target, f2fl(time_as_turkey));
     }
+
+    // A cloak belongs to the turkey's timer, so it must not follow the role
+    // to a new player -- nor stay behind on the old one.
+    multi_turkey_clear_cloak(Turkey_target);
+    multi_turkey_clear_cloak(pnum);
 
     // Set new turkey
     Turkey_last_target = Turkey_target;
@@ -3478,6 +3501,7 @@ void multi_turkey_handle_kill(int killer_pnum, int killed_pnum)
 
     // Track hunter kills
     Turkey_hunter_kills[killer_pnum]++;
+    Turkey_round_kills++;
 
     // Set killer as new turkey
     multi_turkey_set_target(killer_pnum);
@@ -3526,6 +3550,16 @@ void multi_do_turkey_time_sync(const ubyte *buf)
         if (target == Turkey_target)
             Turkey_start_time = GameTime64;
     }
+}
+
+// The turkey always runs on TURKEY_SHIELDS: whatever a hunter carried into the
+// role is shed, and a fresh ship's full shields are cut back the same frame.
+void multi_turkey_limit_shields(void)
+{
+	if (Turkey_target != Player_num || Player_is_dead)
+		return;
+	if (Players[Player_num].shields > i2f(TURKEY_SHIELDS))
+		Players[Player_num].shields = i2f(TURKEY_SHIELDS);
 }
 
 // Handle turkey cloaking logic
@@ -3601,6 +3635,125 @@ void multi_turkey_handle_cloak(void)
         multibuf[1] = Turkey_target;
         multi_send_data(multibuf, 2, 2);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Survive vs Hunt: hunters race to the scaled kill goal,
+// turkeys race the clock. Whichever comes first ends the round.
+// ---------------------------------------------------------------------------
+#define TURKEY_ROUND_END_COUNTDOWN 5	// seconds; no 30s reactor wait after the verdict
+#define TURKEY_WINNER_HUNTERS 0
+#define TURKEY_WINNER_TURKEYS 1
+
+void multi_send_turkey_round(void)
+{
+    int i;
+
+    if (!multi_i_am_master())
+        return;
+
+    multibuf[0] = MULTI_TURKEY_ROUND;
+    multibuf[1] = Turkey_round_kills;
+    PUT_INTEL_SHORT(multibuf + 2, Turkey_round_secs_left);
+    multibuf[4] = Turkey_round_goal;
+    for (i = 0; i < MAX_PLAYERS; i++)
+        multibuf[5 + i] = Turkey_hunter_kills[i];
+    multi_send_data(multibuf, 5 + MAX_PLAYERS, 1);
+}
+
+void multi_do_turkey_round(const ubyte *buf)
+{
+    if (multi_i_am_master())
+        return;
+
+    Turkey_round_kills = buf[1];
+    Turkey_round_secs_left = GET_INTEL_SHORT(buf + 2);
+    Turkey_round_goal = buf[4];
+    for (int i = 0; i < MAX_PLAYERS; i++)
+        Turkey_hunter_kills[i] = buf[5 + i];
+}
+
+// Scales with the number of hunters so a big lobby can't finish it in seconds.
+static int multi_turkey_kill_goal(void)
+{
+    int hunters = 0, i;
+
+    for (i = 0; i < N_players; i++)
+        if (Players[i].connected == CONNECT_PLAYING)
+            hunters++;
+    hunters--;
+    return max((int)Netgame.TurkeyMinKills, hunters * Netgame.TurkeyKillsPerHunter);
+}
+
+// The turkey with the longest total time, for the winner line.
+static int multi_turkey_best_survivor(void)
+{
+    int i, best = -1;
+
+    for (i = 0; i < N_players; i++)
+        if (Players[i].connected && (best < 0 || multi_turkey_get_current_time(i) > multi_turkey_get_current_time(best)))
+            best = i;
+    return best;
+}
+
+static void multi_turkey_announce_end(int winner, int kills)
+{
+    int best = multi_turkey_best_survivor();
+    int seconds = best >= 0 ? f2i(multi_turkey_get_current_time(best)) : 0;
+
+    Turkey_round_over = 1;
+    Turkey_round_kills = kills;
+
+    if (winner == TURKEY_WINNER_HUNTERS)
+        HUD_init_message(HM_MULTI, "HUNTERS WIN! %d turkeys brought down", kills);
+    else
+        HUD_init_message(HM_MULTI, "TURKEYS WIN! Hunters only got %d of %d", kills, Turkey_round_goal);
+
+    if (best >= 0)
+        HUD_init_message(HM_MULTI, "Longest turkey: %s, %d:%02d", Players[best].callsign, seconds / 60, seconds % 60);
+
+    multi_turkey_clear_cloak(Turkey_target);
+    HUD_init_message_literal(HM_MULTI, "The control center has been destroyed!");
+    net_destroy_controlcen(obj_find_first_of_type(OBJ_CNTRLCEN));
+    Countdown_timer = min(Countdown_timer, i2f(TURKEY_ROUND_END_COUNTDOWN));
+}
+
+static void multi_turkey_end_round(int winner)
+{
+    if (Turkey_round_over || !multi_i_am_master())
+        return;
+
+    multibuf[0] = MULTI_TURKEY_END;
+    multibuf[1] = winner;
+    multibuf[2] = Turkey_round_kills;
+    multi_send_data(multibuf, 3, 2);
+
+    multi_turkey_announce_end(winner, Turkey_round_kills);
+}
+
+void multi_do_turkey_end(const ubyte *buf)
+{
+    if (multi_i_am_master() || Turkey_round_over)
+        return;
+
+    multi_turkey_announce_end(buf[1], buf[2]);
+}
+
+// Host only, every frame.
+void multi_turkey_round_frame(void)
+{
+    fix64 elapsed = GameTime64 - Turkey_game_start_time;
+
+    if (Turkey_round_over)
+        return;
+
+    Turkey_round_secs_left = elapsed >= TURKEY_GAME_DURATION ? 0 : f2i(TURKEY_GAME_DURATION - elapsed);
+
+    Turkey_round_goal = multi_turkey_kill_goal();
+    if (Turkey_round_kills >= Turkey_round_goal)
+        multi_turkey_end_round(TURKEY_WINNER_HUNTERS);
+    else if (Turkey_round_secs_left <= 0)
+        multi_turkey_end_round(TURKEY_WINNER_TURKEYS);
 }
 
 // Get current turkey time for display
@@ -6332,6 +6485,10 @@ multi_process_data(const ubyte *buf, int len)
 			if (!Endlevel_sequence) multi_do_turkey_target(buf); break;
 		case MULTI_TURKEY_TIME_SYNC:
 			if (!Endlevel_sequence) multi_do_turkey_time_sync(buf); break;
+		case MULTI_TURKEY_ROUND:
+			if (!Endlevel_sequence) multi_do_turkey_round(buf); break;
+		case MULTI_TURKEY_END:
+			if (!Endlevel_sequence) multi_do_turkey_end(buf); break;
 		default:
 			Int3();
 	}

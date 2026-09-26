@@ -7,6 +7,7 @@
 #include <steam/isteamnetworkingutils.h>
 #include <steam/steamnetworkingcustomsignaling.h>
 
+#include <SDL.h>
 #include <cstring>
 #include <cstdio>
 
@@ -248,11 +249,38 @@ extern "C" void gns_bridge_set_callbacks(gns_bridge_send_signal_fn send_signal, 
 }
 
 static bool g_initialized = false;
+static SDL_Thread *g_kill_thread = nullptr;
+
+// GameNetworkingSockets_Kill can block for many seconds while ICE sessions
+// wind down; keep that off the frame thread so leaving a game is instant.
+static HSteamNetConnection g_kill_conns[GNS_BRIDGE_MAX_PLAYERS + 1];
+
+static int gns_kill_thread(void *)
+{
+	Uint32 start = SDL_GetTicks();
+
+	for (HSteamNetConnection conn : g_kill_conns)
+		if (conn != k_HSteamNetConnection_Invalid)
+			SteamNetworkingSockets()->CloseConnection(conn, 0, nullptr, false);
+	GameNetworkingSockets_Kill();
+	con_printf(GNS_CON_NORMAL, "GNS bridge: shutdown took %u ms\n", (unsigned)(SDL_GetTicks() - start));
+	return 0;
+}
+
+static void gns_wait_for_kill(void)
+{
+	if (!g_kill_thread)
+		return;
+	SDL_WaitThread(g_kill_thread, nullptr);
+	g_kill_thread = nullptr;
+}
 
 extern "C" int gns_bridge_init(void)
 {
 	if (g_initialized)
 		return 1; // net_udp_init() can run multiple times per process; keep existing state.
+
+	gns_wait_for_kill();
 
 	for (int i = 0; i < GNS_BRIDGE_MAX_PLAYERS; i++)
 	{
@@ -288,19 +316,17 @@ extern "C" void gns_bridge_shutdown(void)
 
 	for (int i = 0; i < GNS_BRIDGE_MAX_PLAYERS; i++)
 	{
-		if (g_conn[i] != k_HSteamNetConnection_Invalid)
-		{
-			SteamNetworkingSockets()->CloseConnection(g_conn[i], 0, nullptr, false);
-			g_conn[i] = k_HSteamNetConnection_Invalid;
-		}
+		g_kill_conns[i] = g_conn[i];
+		g_conn[i] = k_HSteamNetConnection_Invalid;
 	}
-	if (g_prejoin_conn != k_HSteamNetConnection_Invalid) {
-		SteamNetworkingSockets()->CloseConnection(g_prejoin_conn, 0, nullptr, false);
-		g_prejoin_conn = k_HSteamNetConnection_Invalid;
-		g_prejoin_ready = false;
-	}
-	GameNetworkingSockets_Kill();
+	g_kill_conns[GNS_BRIDGE_MAX_PLAYERS] = g_prejoin_conn;
+	g_prejoin_conn = k_HSteamNetConnection_Invalid;
+	g_prejoin_ready = false;
 	g_initialized = false;
+
+	g_kill_thread = SDL_CreateThread(gns_kill_thread, nullptr);
+	if (!g_kill_thread)
+		gns_kill_thread(nullptr);
 }
 
 extern "C" void gns_bridge_poll(void)

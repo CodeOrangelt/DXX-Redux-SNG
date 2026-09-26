@@ -1213,7 +1213,8 @@ void drop_player_eggs_remote(object *playerobj, ubyte remote)
 		if (Players[pnum].flags & PLAYER_FLAGS_QUAD_LASERS)
 			call_object_create_egg(playerobj, 1, OBJ_POWERUP, POW_QUAD_FIRE);
 
-		if (Players[pnum].flags & PLAYER_FLAGS_CLOAKED)
+		// The turkey's cloak is the mode's own, on a timer -- not a pickup to hand out.
+		if ((Players[pnum].flags & PLAYER_FLAGS_CLOAKED) && !((Game_mode & GM_TURKEY_SHOOT) && pnum == Turkey_target))
 			call_object_create_egg(playerobj, 1, OBJ_POWERUP, POW_CLOAK);
 
 		if (Netgame.CTF)
