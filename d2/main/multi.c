@@ -31,6 +31,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "laser.h"
 #include "fuelcen.h"
 #include "race.h"
+#include "survival.h"
 #include "scores.h"
 #include "gauges.h"
 #include "collide.h"
@@ -188,77 +189,6 @@ void multi_do_race_box(const ubyte *buf);
 // LOCALIZE ME!!
 
 #define vm_angvec_zero(v) (v)->p=(v)->b=(v)->h=0
-
-// Convert keycodes to ASCII for immediate text entry in EVENT_KEY_COMMAND handlers.
-static int multi_keycode_to_ascii(int key)
-{
-	int base_key = key & 0xFF;
-
-	if (base_key == KEY_1) return '1';
-	if (base_key == KEY_2) return '2';
-	if (base_key == KEY_3) return '3';
-	if (base_key == KEY_4) return '4';
-	if (base_key == KEY_5) return '5';
-	if (base_key == KEY_6) return '6';
-	if (base_key == KEY_7) return '7';
-	if (base_key == KEY_8) return '8';
-	if (base_key == KEY_9) return '9';
-	if (base_key == KEY_0) return '0';
-
-	if (base_key == KEY_A) return 'a';
-	if (base_key == KEY_B) return 'b';
-	if (base_key == KEY_C) return 'c';
-	if (base_key == KEY_D) return 'd';
-	if (base_key == KEY_E) return 'e';
-	if (base_key == KEY_F) return 'f';
-	if (base_key == KEY_G) return 'g';
-	if (base_key == KEY_H) return 'h';
-	if (base_key == KEY_I) return 'i';
-	if (base_key == KEY_J) return 'j';
-	if (base_key == KEY_K) return 'k';
-	if (base_key == KEY_L) return 'l';
-	if (base_key == KEY_M) return 'm';
-	if (base_key == KEY_N) return 'n';
-	if (base_key == KEY_O) return 'o';
-	if (base_key == KEY_P) return 'p';
-	if (base_key == KEY_Q) return 'q';
-	if (base_key == KEY_R) return 'r';
-	if (base_key == KEY_S) return 's';
-	if (base_key == KEY_T) return 't';
-	if (base_key == KEY_U) return 'u';
-	if (base_key == KEY_V) return 'v';
-	if (base_key == KEY_W) return 'w';
-	if (base_key == KEY_X) return 'x';
-	if (base_key == KEY_Y) return 'y';
-	if (base_key == KEY_Z) return 'z';
-
-	if (base_key == KEY_SPACEBAR) return ' ';
-	if (base_key == KEY_MINUS) return '-';
-	if (base_key == KEY_EQUAL) return '=';
-	if (base_key == KEY_LBRACKET) return '[';
-	if (base_key == KEY_RBRACKET) return ']';
-	if (base_key == KEY_SLASH) return '\\';
-	if (base_key == KEY_DIVIDE) return '/';
-	if (base_key == KEY_COMMA) return ',';
-	if (base_key == KEY_PERIOD) return '.';
-	if (base_key == KEY_SEMICOL) return ';';
-	if (base_key == KEY_RAPOSTRO) return '\'';
-	if (base_key == KEY_LAPOSTRO) return '`';
-
-	if (base_key == KEY_PAD0) return '0';
-	if (base_key == KEY_PAD1) return '1';
-	if (base_key == KEY_PAD2) return '2';
-	if (base_key == KEY_PAD3) return '3';
-	if (base_key == KEY_PAD4) return '4';
-	if (base_key == KEY_PAD5) return '5';
-	if (base_key == KEY_PAD6) return '6';
-	if (base_key == KEY_PAD7) return '7';
-	if (base_key == KEY_PAD8) return '8';
-	if (base_key == KEY_PAD9) return '9';
-	if (base_key == KEY_PADPERIOD) return '.';
-
-	return 255;
-}
 
 void drop_player_eggs(object *player); // from collide.c
 void drop_player_eggs_remote(object *playerobj, ubyte remote); // from collide.c
@@ -1640,6 +1570,9 @@ void multi_do_frame(void)
 	if (Game_mode & GM_RACE)
 		race_multi_frame();	// host's authoritative race state broadcast (self-rate-limited)
 
+	// Survival Mode handling - spawns robot waves and ammo drops (spawner only)
+	survival_do_frame();
+
 	multi_send_message(); // Send any waiting messages
 
 	if (Game_mode & GM_MULTI_ROBOTS)
@@ -2276,7 +2209,7 @@ int multi_message_input_sub(int key)
 			return 1;
 		default:
 		{
-			int ascii = multi_keycode_to_ascii(key);
+			int ascii = key_ascii();
 			if ( ascii < 255 )     {
 				if (multi_message_index < MAX_MESSAGE_LEN-2 )   {
 					Network_message[multi_message_index++] = ascii;
@@ -3006,8 +2939,24 @@ void multi_disconnect_player(int pnum)
 
 	if (pnum == multi_who_is_master()) // Host has left - Quit game!
 	{
-		if (Network_status==NETSTAT_PLAYING)
-			multi_leave_game();
+		// multi_disconnect_player() runs from deep inside the packet-dispatch
+		// stack (net_udp's receive loop -> multi_process_data() ->
+		// multi_do_quit()) whenever this fires for anyone but the local
+		// player -- which, since this branch only trips when the departing
+		// player *is* the host, is every machine except the host's own. This
+		// used to call multi_leave_game() right here, which sends this
+		// machine's own quit/position/explode packets and then tears the
+		// socket down via net_udp_leave_game() -- including a reentrant
+		// net_udp_do_frame(1,1) that pumps the very packet queue this call is
+		// already partway through processing. That reentrant pump plus the
+		// socket closing out from under the outer dispatch frame is what
+		// crashed every non-host client the instant the host quit.
+		//
+		// multi_quit_game is exactly the flag multi_do_frame() (multi.c, the
+		// per-frame tick, well outside any packet-dispatch stack) already
+		// polls to close the game window safely on the next frame -- so
+		// setting it below is enough; nothing here needs to touch the
+		// network itself.
 		if (Game_wind)
 			window_set_visible(Game_wind, 0);
 		nm_messagebox(NULL, 1, TXT_OK, "Host left the game!");
@@ -4617,6 +4566,13 @@ void multi_prep_level(void)
 
 	if (Game_mode & GM_RACE)
 		race_init_level();
+
+	// Survival: the mine starts stripped of every author-placed powerup and robot -- wave spawns
+	// are the only source of either, and that includes the level's own scripted end-of-level boss,
+	// which is otherwise still sitting wherever the mission placed it. Must happen before the object
+	// checksum below, and before anyone can reach or pick anything up.
+	survival_strip_level_powerups();
+	survival_strip_level_robots();
 
 	multi_consistency_error(1);
 
@@ -7302,6 +7258,16 @@ multi_process_data(const ubyte *buf, int len)
 			if (!Endlevel_sequence) multi_do_race_ready(buf); break;
 		case MULTI_RACE_POWER:
 			if (!Endlevel_sequence) multi_do_race_power(buf); break;
+		case MULTI_SURVIVAL_WAVE_STATE:
+			if (!Endlevel_sequence) multi_do_survival_wave_state(buf); break;
+		case MULTI_SURVIVAL_SPAWN_ROBOT:
+			if (!Endlevel_sequence) multi_do_survival_spawn_robot(buf); break;
+		case MULTI_SURVIVAL_ELIMINATED:
+			if (!Endlevel_sequence) multi_do_survival_eliminated(buf); break;
+		case MULTI_SURVIVAL_SHIELDS:
+			if (!Endlevel_sequence) multi_do_survival_shields(buf); break;
+		case MULTI_SURVIVAL_SHOP_READY:
+			if (!Endlevel_sequence) multi_do_survival_shop_ready(buf); break;
 		case MULTI_ORB_BONUS:
 			if (!Endlevel_sequence) multi_do_orb_bonus(buf); break;
 		case MULTI_GOT_FLAG:

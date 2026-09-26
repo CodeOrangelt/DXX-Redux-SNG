@@ -21,12 +21,26 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #ifndef _MULTIBOT_H
 #define _MULTIBOT_H
 
-#define MAX_ROBOTS_CONTROLLED 5
+// Capacity of the robot-control tables (robot_controlled[] and friends).
+// This is only the array size -- the number of slots a machine will actually
+// hand out is multi_max_robots_controlled() below, which stays at the stock
+// value of 5 for every mode except Survival.
+#define MAX_ROBOTS_CONTROLLED 32
+
+// Stock value, and still what every non-Survival mode uses. In multiplayer, a
+// robot is only simulated by whichever machine currently "controls" it (see
+// multi_can_move_robot()); an uncontrolled robot fails every
+// ai_multiplayer_awareness() check in do_ai_frame() and so does not move or
+// fire at all. With only 5 slots per machine, a Survival wave of up to
+// SURVIVAL_MAX_ACTIVE_ROBOTS (24, survival.c) would leave most of them
+// standing perfectly still until something evicted a slot for them.
+#define STOCK_ROBOTS_CONTROLLED 5
 
 extern int robot_controlled[MAX_ROBOTS_CONTROLLED];
 extern int robot_agitation[MAX_ROBOTS_CONTROLLED];
 extern int robot_fired[MAX_ROBOTS_CONTROLLED];
 
+int multi_max_robots_controlled(void);
 int multi_can_move_robot(int objnum, int agitation);
 void multi_send_robot_position(int objnum, int fired);
 void multi_send_robot_fire(int objnum, int gun_num, vms_vector *fire);
@@ -48,6 +62,7 @@ void multi_do_create_robot_powerups(const ubyte *buf);
 int multi_explode_robot_sub(int botnum, int killer,char);
 
 void multi_drop_robot_powerups(int objnum);
+void multi_send_create_robot_powerups(struct object *del_obj);
 void multi_dump_robots(void);
 
 void multi_strip_robots(int playernum);

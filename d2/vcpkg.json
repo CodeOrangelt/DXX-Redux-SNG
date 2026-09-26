@@ -1,13 +1,15 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
-  "name": "d2x-redux",
-  "version-semver": "1.1.0",
+  "name": "d2x-redux-sng",
+  "version-semver": "1.2.0",
   "dependencies": [
     "physfs",
     "sdl1",
     "sdl1-mixer",
     "libpng",
-    "glew"
+    "glew",
+    "protobuf",
+    "openssl"
   ],
   "vcpkg-configuration": {
     "default-registry": {

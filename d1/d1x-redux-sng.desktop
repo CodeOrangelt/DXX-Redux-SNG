@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=D1X-Redux-SNG
+Version=1.0
+Comment=D1X-Redux-SNG source port of Descent: First Strike from 1995...
+Exec=d1x-redux-sng
+Icon=d1x-redux-sng
+Terminal=false
+Type=Application
+Categories=Game;ActionGame;
+StartupNotify=false

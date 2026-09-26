@@ -16,12 +16,12 @@
 // not slices of one 0..100 range: a robot can drop a weapon, a sustain item,
 // both, or nothing. Keeping them separate means weapon luck and shield luck
 // never compete with each other.
-#define SURVIVAL_WEAPON_DROP_PCT 28   // primaries + secondaries (see Survival_weapon_types)
-#define SURVIVAL_SUPPLY_DROP_PCT 12   // shields / energy / vulcan ammo
+#define SURVIVAL_WEAPON_DROP_PCT 17   // primaries + secondaries (see Survival_weapon_types)
+#define SURVIVAL_SUPPLY_DROP_PCT 7    // shields / energy / vulcan ammo
 
 // Extra life drop, rolled in tenths of a percent rather than whole percent
 // because it needs to be genuinely rare -- it's a free revive, not a pickup.
-#define SURVIVAL_EXTRA_LIFE_DROP_PERMILLE 8   // 0.8% per robot killed
+#define SURVIVAL_EXTRA_LIFE_DROP_PERMILLE 6   // 0.6% per robot killed
 
 // Cloak/invulnerability drop off a killed robot. Split out of Survival_weapon_
 // types[] into its own rare independent roll (same treatment as extra life
@@ -31,16 +31,40 @@
 // This is the floor/robot-drop odds only; the shop's paid "Random Supply"
 // roll (Survival_shop_supply_types[], survival.c) is unaffected since that's
 // a player's own spending choice, not a random gift.
-#define SURVIVAL_SITUATIONAL_DROP_PERMILLE 10   // 1.0% per robot killed, split 50/50 cloak vs invuln
+#define SURVIVAL_SITUATIONAL_DROP_PERMILLE 7   // 0.7% per robot killed, split 50/50 cloak vs invuln
+
+// D2-exclusive "super" weapons (Gauss/Helix/Phoenix/Omega, and the newer
+// D2 secondaries) are split out of Survival_weapon_types[] into their own
+// rarer independent roll -- D1's original weapon set (SURVIVAL_WEAPON_DROP_PCT
+// above) is deliberately more common than these, both in aggregate (35
+// permille vs 170) and per-item (spread across ~11 entries vs ~15).
+#define SURVIVAL_SUPER_WEAPON_DROP_PERMILLE 35   // 3.5% per robot killed
+
+// The Earthshaker Missile is rarer still, and gets its own count roll rather
+// than always granting a fixed amount -- a match should see maybe one or two
+// of these over its whole run, not a steady trickle.
+#define SURVIVAL_EARTHSHAKER_DROP_PERMILLE 2   // 0.2% per robot killed
 
 // Picks one of Survival mode's sustain (shield/energy/ammo) powerup ids at
 // random. Also used for the periodic scheduled ammo drops.
 int survival_random_ammo_type(void);
 
-// Picks one of Survival mode's weapon powerup ids at random, spanning every
-// primary and secondary -- in Survival these drops are the only source of
-// weapons in the entire match.
+// Picks one of Survival mode's original (D1-parity) weapon powerup ids at
+// random, spanning every D1 primary and secondary -- in Survival these
+// drops are the primary source of weapons in the entire match. D2's extra
+// "super" weapons and the Earthshaker Missile are rolled separately and
+// more rarely -- see SURVIVAL_SUPER_WEAPON_DROP_PERMILLE / SURVIVAL_
+// EARTHSHAKER_DROP_PERMILLE above.
 int survival_random_weapon_type(void);
+
+// Rewrites a robot's about-to-fire weapon id for Survival's own balance
+// rules -- currently just FLASH_ID -> CONCUSSION_ID, since a HAM robot type
+// that fires flash missiles blinds a player who has nowhere to retreat to in
+// this mode. A no-op (returns weapon_type unchanged) outside Survival, and
+// for any weapon_type other than FLASH_ID. Every site that fires a robot's
+// weapon_type/weapon_type2 should route it through this rather than reading
+// Robot_info directly, since Robot_info itself is left unmodified.
+int survival_robot_weapon_type(int weapon_type);
 
 // Rolls every drop table for a just-killed robot and creates/syncs whatever
 // comes up. Called from multi_drop_robot_powerups() (multibot.c) in place of
@@ -51,6 +75,11 @@ void survival_robot_drops(object *del_obj);
 // exclusively through robot drops, so the map itself starts barren. Call
 // from multi_prep_level() after the level loads. No-op outside Survival.
 void survival_strip_level_powerups(void);
+
+// Deletes every robot the level author placed, including the mine's own scripted end-of-level
+// guardian(s) -- every Survival robot comes from a wave spawn instead. Call from multi_prep_level()
+// alongside survival_strip_level_powerups() above. No-op outside Survival.
+void survival_strip_level_robots(void);
 
 // Call once when a Survival match starts (net_udp_start_game path), on
 // every machine.
@@ -238,5 +267,9 @@ void survival_shop_draw(void);
 // apply_damage_to_player() (collide.c) for the call sites.
 fix survival_speed_multiplier(void);
 fix survival_damage_multiplier(void);
+
+// Scales a kamikaze robot's badass death-explosion damage/radius/force. F1_0 (no change) outside
+// Survival or for a non-kamikaze robot_id. See survival.c for why kamikazes specifically need this.
+fix survival_kamikaze_badass_scale(int robot_id);
 
 #endif /* _SURVIVAL_H */

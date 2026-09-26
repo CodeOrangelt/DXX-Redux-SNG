@@ -40,6 +40,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #ifdef NETWORK
 #include "multi.h"
 #include "race.h"
+#include "survival.h"
 #endif
 #include "vclip.h"
 #include "fireball.h"
@@ -126,6 +127,20 @@ void read_flying_controls( object * obj )
 	// so Controls.* would otherwise keep holding whatever they read the frame
 	// the race loaded and fly the ship off the grid on stale input.
 	if (race_lobby_blocks_input())
+	{
+		vm_vec_zero(&obj->mtype.phys_info.thrust);
+		vm_vec_zero(&obj->mtype.phys_info.rotthrust);
+		return;
+	}
+
+	// Menu takes priority: while the shop blocks input, kconfig_read_
+	// controls() never runs (see the should_read_controls gate in
+	// gamecntl.c's ReadControls()), so Controls.* below would otherwise
+	// just keep holding whatever value they had the instant the shop
+	// opened -- if the player was mid-thrust or mid-turn right then, the
+	// ship would keep drifting/spinning on that stale input for the whole
+	// time the menu is up. Zero and bail before any of it gets read.
+	if ((Game_mode & GM_MULTI) && survival_shop_blocks_input())
 	{
 		vm_vec_zero(&obj->mtype.phys_info.thrust);
 		vm_vec_zero(&obj->mtype.phys_info.rotthrust);
@@ -269,6 +284,10 @@ void read_flying_controls( object * obj )
 		}
 
 		vm_vec_scale( &obj->mtype.phys_info.thrust, fixdiv(Player_ship->max_thrust,ft) );
+
+		// Survival shop: a purchased speed tier scales thrust only, not
+		// rotation -- a faster ship, not a twitchier one.
+		vm_vec_scale( &obj->mtype.phys_info.thrust, survival_speed_multiplier() );
 
 		// Race class: thrust only, not rotation -- a heavier ship, not a
 		// less responsive one.

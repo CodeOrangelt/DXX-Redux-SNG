@@ -15,6 +15,9 @@
 #include "powerup.h"
 #include "fuelcen.h"
 #include "gameseg.h"
+#include "gameseq.h"
+#include "collide.h"
+#include "playsave.h"
 #include "multi.h"
 #include "hudmsg.h"
 #include "timer.h"
@@ -44,8 +47,8 @@ int Race_finish_marked = 0;			// level marks its line with repair centers
 static int Race_respawn_segnum = -1;	// segment of the last checkpoint the local player took
 int Race_num_boxes = 0;
 int Race_laps_to_win = RACE_DEFAULT_LAPS;
-int Race_powerup_chance = 100;
 int Race_allowed_items = RACE_ALLOWED_ITEMS_ALL;
+int Race_item_chance[RACE_NUM_ITEM_SLOTS] = { 100, 100, 100, 100, 100, 100, 100 };
 
 static fix Race_countdown_timer = 0;	// seconds remaining, fix; only meaningful while Race_counting_down
 static int Race_counting_down = 0;
@@ -88,6 +91,7 @@ static fix64 Race_splits[RACE_MAX_SPLITS];
 static fix64 Race_best_lap = 0;
 static int Race_num_splits = 0;
 static int Race_summary_pending = 0;
+static int Race_over_triggered = 0;	// PlayerFinishedLevel() already called for this level
 
 // Which checkpoints the local player has crossed on the current lap. Order
 // doesn't matter -- the lap closes when the set is complete and they cross the
@@ -533,13 +537,6 @@ static const race_item *race_pick_item_for(int pnum)
 	fix catchup = race_catchup_factor_for(pnum);
 	int total = 0, roll, i;
 
-	// The "powerup chance" advanced option: below 100%, a roll can come up
-	// empty entirely -- one gate here covers both race_box_roll() (the local
-	// player) and race_roll_box_item() (the bot field), since both route
-	// through this function.
-	if (Race_powerup_chance < 100 && (d_rand() % 100) >= (unsigned)Race_powerup_chance)
-		return NULL;
-
 	// Weighted over what this racer can actually carry, not over the whole
 	// table -- rolling and then rejecting would quietly bias the draw towards
 	// whatever came first.
@@ -623,7 +620,9 @@ static void race_init_items(void)
 
 	for (i = 0; i < (int)(sizeof(base)/sizeof(base[0])); i++)
 		if (Race_allowed_items & (1 << base[i].slot))
-			race_add_item(CLASS_SECONDARY, base[i].index, base[i].front, base[i].back);
+			race_add_item(CLASS_SECONDARY, base[i].index,
+				base[i].front * Race_item_chance[base[i].slot] / 100,
+				base[i].back  * Race_item_chance[base[i].slot] / 100);
 
 	// The two powers ride the same rubber band as the missiles: rare out
 	// front, more common at the back. The tractor is unavailable to front-
@@ -631,9 +630,13 @@ static void race_init_items(void)
 	// more of it -- a 3-lap race keeps it very rare, a 10-lap race hands it
 	// out more freely at the back.
 	if (Race_allowed_items & (1 << RACE_ITEM_EMP))
-		race_add_item(CLASS_POWER, RACE_POWER_EMP, 2, 6);
+		race_add_item(CLASS_POWER, RACE_POWER_EMP,
+			2 * Race_item_chance[RACE_ITEM_EMP] / 100,
+			6 * Race_item_chance[RACE_ITEM_EMP] / 100);
 	if (Race_allowed_items & (1 << RACE_ITEM_TRACTOR))
-		race_add_item(CLASS_POWER, RACE_POWER_TRACTOR, 0, max(1, Race_laps_to_win / 2));
+		race_add_item(CLASS_POWER, RACE_POWER_TRACTOR,
+			0,
+			max(1, Race_laps_to_win / 2) * Race_item_chance[RACE_ITEM_TRACTOR] / 100);
 }
 
 // Maps a powerup type to the weapon it stands for. Returns 0 if that powerup
@@ -1119,7 +1122,12 @@ void race_box_roll(void)
 		const race_class_info *ci = race_my_class();
 
 		if (ci)
+		{
 			rolls += ci->box_extra_rolls;
+
+			if (ci->box_bonus_pct && (int)(d_rand() % 100) < ci->box_bonus_pct)
+				rolls++;
+		}
 	}
 
 	for (i = 0; i < rolls; i++)
@@ -1333,15 +1341,6 @@ void race_cancel_boost(void)
 	}
 }
 
-// Local player's trichord state, refreshed once a frame by
-// race_note_trichord() (controls.c). Eased rather than snapped straight to
-// the input: a real diagonal push clips in and out of the floor for a frame
-// at a time even when it's genuinely being held, and the charge meter below
-// stays exactly that responsive on purpose (it's what pays the speed bonus)
-// -- it's the FOV chasing every one of those blips that read as a flicker
-// instead of a held effect.
-static fix Race_trichord_strength = 0;
-
 // Charge bar fill (0..F1_0) -- resets to 0 when it fires a burst.
 static fix Race_trichord_charge = 0;
 
@@ -1414,25 +1413,47 @@ fix race_trichord_scale_from_boost(fix64 boost_until)
 	return F1_0;
 }
 
+// Shields/sec regenerated while an active trichord burst is running -- a
+// small trickle, not a heal. Reaper is the class that actually needs this
+// (it's the payback for race_omega_drain_shields()'s cost), but it isn't
+// gated to Reaper: trichording is already a skill mechanic open to everyone,
+// so anyone who can hold a perfect diagonal long enough to fire the burst
+// gets the same trickle back.
+#define RACE_TRICHORD_SHIELD_REGEN_RATE  i2f(3)
+
+// Local player only, run once a frame from race_frame(). Capped at the
+// class's own shield target (StartingShields scaled by shield_pct, same as
+// race_grant_class_loadout() sets on spawn) so this tops a class back up to
+// its own ceiling rather than past it.
+static void race_trichord_shield_regen_frame(void)
+{
+	const race_class_info *ci;
+	extern fix StartingShields;
+	fix cap;
+
+	if (is_observer() || Player_is_dead || !ConsoleObject)
+		return;
+
+	if (GameTime64 >= Race_trichord_boost_until)
+		return;
+
+	ci = race_my_class();
+	cap = (ci && ci->shield_pct > 0) ? (fix)((fix64)StartingShields * ci->shield_pct / 100) : StartingShields;
+
+	if (Players[Player_num].shields >= cap)
+		return;
+
+	Players[Player_num].shields += fixmul(FrameTime, RACE_TRICHORD_SHIELD_REGEN_RATE);
+	if (Players[Player_num].shields > cap)
+		Players[Player_num].shields = cap;
+
+	ConsoleObject->shields = Players[Player_num].shields;	// mirror, same convention apply_damage_to_player() uses
+}
+
 void race_note_trichord(fix ratio)
 {
-	fix target = race_trichord_target(ratio);
-	fix step = fixmul(FrameTime, RACE_TRICHORD_FOV_EASE);
 	fix64 old_boost = Race_trichord_boost_until;
 	int lit;
-
-	if (target > Race_trichord_strength)
-	{
-		Race_trichord_strength += step;
-		if (Race_trichord_strength > target)
-			Race_trichord_strength = target;
-	}
-	else if (target < Race_trichord_strength)
-	{
-		Race_trichord_strength -= step;
-		if (Race_trichord_strength < target)
-			Race_trichord_strength = target;
-	}
 
 	Race_trichord_charge = race_trichord_advance_charge(Race_trichord_charge, ratio, &Race_trichord_boost_until);
 
@@ -1462,11 +1483,6 @@ void race_note_trichord(fix ratio)
 	Race_trichord_blobs_lit = lit;
 }
 
-fix race_trichord_strength(void)
-{
-	return Race_trichord_strength;
-}
-
 fix race_trichord_charge(void)
 {
 	if (GameTime64 < Race_trichord_boost_until)
@@ -1485,31 +1501,109 @@ fix race_trichord_charge_scale(void)
 	return race_trichord_scale_from_boost(Race_trichord_boost_until);
 }
 
-fix race_get_fov_bonus(void)
+// -------------------------------------------------------------------------
+// Speed-linked FOV
+// -------------------------------------------------------------------------
+//
+// Used to be a pile of separate, hand-triggered kicks -- a flat step for a
+// boost pad, a separate ramp for a sustained trichord, a second kick on top
+// of that when the trichord burst actually fired, a flat pull the other way
+// from the tractor beam. Every one of those had its own onset/decay shape,
+// and they didn't agree with each other, so stacking two of them (a boost
+// pad mid-trichord, say) snapped the FOV around rather than reading as "I am
+// now going faster."
+//
+// This replaces all of it with one continuous read of how fast the ship is
+// actually moving, on the theory that the FOV should mean exactly one thing
+// -- your current speed -- and every source of speed (afterburner, a boost
+// pad, a trichord burst, a class's own thrust multiplier) already funnels
+// into that number for free, because it's real velocity, not a flag this
+// code has to know to check. The tractor beam's slow-down (race_power_
+// speed_scale(), controls.c) falls out the same way: it cuts real thrust, so
+// real speed drops, so the FOV narrows on its own -- no separate term needed.
+//
+// The eased fraction is also what feeds the speedometer (race_get_speed_
+// percent(), for the HUD) and is skipped entirely, cheaply, when the player
+// has the effect turned off (PlayerCfg.RaceSpeedFOV).
+#define RACE_SPEED_FOV_EASE      (F1_0*3/2)	// full swings/sec the eased value chases at
+#define RACE_SPEED_FOV_MAX_OVER  (F1_0*3/2)	// caps out at 2.5x cruise speed
+#define RACE_SPEED_FOV_PER_UNIT  0x3800		// zoom bonus per 1.0 fraction over cruise
+
+// Cached the first time it's asked for -- Player_ship doesn't change mid-race
+// -- rather than recomputed every frame. Terminal velocity under constant
+// thrust against this engine's per-frame multiplicative drag settles out
+// to roughly (thrust/mass)/drag; not an exact derivation of the physics
+// integrator's sub-stepping, but it only has to be a stable, sane "what does
+// this ship normally cruise at" reference for a visual effect, not a value
+// anything gameplay-critical reads.
+static fix race_speed_fov_reference(void)
 {
-	fix bonus;
+	static fix cached = 0;
 
-	// Render_zoom is 0x9000 by default and 0x11000 at the "wide" end of the
-	// FOV slider, so 0x2000 is a noticeable but not disorienting widening.
-	bonus = fixmul(race_boost_strength(), 0x2000);
+	if (!cached && Player_ship && Player_ship->mass && Player_ship->drag)
+		cached = fixdiv(Player_ship->max_thrust, fixmul(Player_ship->mass, Player_ship->drag));
 
-	// Getting pulled narrows it instead -- the same shape as the widening,
-	// just the other way, so the screen closing in reads as a squeeze rather
-	// than a snap, and opens back up the moment the beam lets go.
-	bonus -= fixmul(race_tractor_strength(), 0x1800);
+	return cached ? cached : F1_0;		// never divide by zero downstream
+}
 
-	// A sustained trichord widens it; the active boost holds it fully wide
-	// and adds a second kick that counts down with the bar.
+// Eased 0..~2.5 fraction of cruise speed the local player is currently
+// moving at. Advanced once a frame from race_frame(); race_get_fov_bonus()
+// and the speedometer both just read it.
+static fix Race_speed_fov_frac = F1_0;
+
+static void race_speed_fov_frame(void)
+{
+	fix target, step;
+
+	if (is_observer() || !ConsoleObject)
+		target = Race_speed_fov_frac;		// hold, rather than snap to 0 while spectating
+	else
 	{
-		fix tf = Race_trichord_strength;
-		if (GameTime64 < Race_trichord_boost_until && tf < F1_0)
-			tf = F1_0;
-		bonus += fixmul(tf, RACE_TRICHORD_FOV);
-		if (GameTime64 < Race_trichord_boost_until)
-			bonus += fixmul(race_trichord_charge(), RACE_TRICHORD_FOV);
+		fix speed = vm_vec_mag(&ConsoleObject->mtype.phys_info.velocity);
+		target = fixdiv(speed, race_speed_fov_reference());
 	}
 
-	return bonus;
+	step = fixmul(FrameTime, RACE_SPEED_FOV_EASE);
+
+	if (target > Race_speed_fov_frac)
+	{
+		Race_speed_fov_frac += step;
+		if (Race_speed_fov_frac > target)
+			Race_speed_fov_frac = target;
+	}
+	else if (target < Race_speed_fov_frac)
+	{
+		Race_speed_fov_frac -= step;
+		if (Race_speed_fov_frac < target)
+			Race_speed_fov_frac = target;
+	}
+}
+
+// Percent of cruise speed, for the HUD speedometer (PlayerCfg.RaceSpeedometer,
+// independent of the FOV effect's own toggle -- a numeric readout doesn't
+// disturb the view the way a moving FOV can, so there's no reason it should
+// share an on/off switch with something people turn off because it's visually
+// distracting).
+int race_get_speed_percent(void)
+{
+	return f2i(fixmul(Race_speed_fov_frac, i2f(100)));
+}
+
+fix race_get_fov_bonus(void)
+{
+	fix over;
+
+	if (!PlayerCfg.RaceSpeedFOV)
+		return 0;
+
+	over = Race_speed_fov_frac - F1_0;		// 0 at cruise; below cruise widens nothing
+
+	if (over <= 0)
+		return 0;
+	if (over > RACE_SPEED_FOV_MAX_OVER)
+		over = RACE_SPEED_FOV_MAX_OVER;
+
+	return fixmul(over, RACE_SPEED_FOV_PER_UNIT);
 }
 
 //	-------------------------------------------------------------------------
@@ -1891,19 +1985,27 @@ int race_get_map_outline(const race_map_line **lines)
 // (collide.c), which runs on the machine taking the hit -- so the shooter's
 // class has to be known there too, which is why classes are synced rather
 // than kept local.
+// Rebalance rule: no class touches Speed, up or down -- it's the one stat
+// that's unconditionally good every second of the race, so any class that
+// had it was just "the better one," not a trade. Every class below pairs
+// exactly one upside with an equal-or-costlier downside instead, sized big
+// enough to actually change how you have to play (a token 5-8% swing reads
+// as noise, not a decision), and several stack two linked costs so the
+// build is genuinely bad outside the one thing it's good at rather than
+// just "slightly worse."
 static const race_class_info Race_class_table[RACE_NUM_CLASSES] = {
 	{
-		// The tank. Slow enough to feel heavy, but nowhere near slow enough
-		// to be unwinnable -- speed is the currency in a race, and the old
-		// -25% could not be bought back with any amount of armour.
-		.name = "HEAVY HITTER",
+		// The brick. Shrugs off hits nobody else would survive; corners like
+		// it's dragging an anchor. A bad line costs this class real time
+		// every single lap, not just a bruise.
+		.name = "JUGGERNAUT",
 		.weapon = "FUSION CANNON",
-		.perks = "+75% SHIELDS   -8% SPEED",
+		.perks = "+50% SHIELDS   -35% TURN",
 		.primary = FUSION_INDEX,
 		.powerup = POW_FUSION_WEAPON,
 		.secondary = {{ -1 }, { -1 }},
-		.shield_pct = 175,
-		.speed = F1_0 - (F1_0*8)/100,
+		.shield_pct = 150,
+		.turn = F1_0 - (F1_0*35)/100,
 		.damage_taken = F1_0,
 		.damage_dealt = F1_0,
 		.afterburner_drain = F1_0,
@@ -1912,136 +2014,149 @@ static const race_class_info Race_class_table[RACE_NUM_CLASSES] = {
 		.boost_power = F1_0,
 	},
 	{
-		// Genuinely glass now: the quickest ship and the hardest hitter, on
-		// three quarters of a shield bar and taking a quarter more from
-		// everything that lands.
+		// True glass: hits harder than anything else in the field and dies
+		// to almost anything. One clean shot and this class is done.
 		.name = "GLASS CANNON",
 		.weapon = "VULCAN CANNON",
-		.perks = "+15% DMG DEALT   +8% SPEED   -40% SHIELDS",
+		.perks = "+40% DMG DEALT   -50% SHIELDS",
 		.primary = VULCAN_INDEX,
 		.powerup = POW_VULCAN_WEAPON,
 		.secondary = {{ -1 }, { -1 }},
-		.shield_pct = 60,
-		.speed = F1_0 + (F1_0*8)/100,
+		.shield_pct = 50,
 		.damage_taken = F1_0,
-		.damage_dealt = F1_0 + (F1_0*15)/100,
+		.damage_dealt = F1_0 + (F1_0*40)/100,
 		.afterburner_drain = F1_0,
 		.box_item_time = F1_0,
 		.boost_time = F1_0,
 		.boost_power = F1_0,
 	},
 	{
-		// The all-rounder: stock numbers everywhere, and the only class whose
-		// edge is in the throttle rather than the guns.
-		.name = "HYBRID PYRO",
+		// A straight-line escape artist: the burner lasts half again as
+		// long as anyone else's, so this class can run from a fight it
+		// can't afford -- and it can't afford almost any fight, since
+		// anything that lands hits noticeably harder than it would on
+		// someone else.
+		.name = "OVERCHARGED",
 		.weapon = "QUAD LASERS LVL 4",
-		.perks = "+25% AFTERBURNER   +10% BOOST PADS",
+		.perks = "+50% AFTERBURNER   +40% DMG TAKEN",
 		.primary = LASER_INDEX,
 		.powerup = POW_QUAD_FIRE,
 		.secondary = {{ -1 }, { -1 }},
-		.speed = F1_0,
-		.damage_taken = F1_0,
+		.damage_taken = F1_0 + (F1_0*40)/100,
 		.damage_dealt = F1_0,
-		// Drain scales by the reciprocal of the bonus, so a tank that empties
-		// 20% slower lasts 25% longer.
-		.afterburner_drain = (F1_0*4)/5,
+		// Drain scales by the reciprocal of the bonus: 2/3 drain lasts 1.5x
+		// (50% longer).
+		.afterburner_drain = (F1_0*2)/3,
 		.box_item_time = F1_0,
-		.boost_time = F1_0 + F1_0/10,
+		.boost_time = F1_0,
 		.boost_power = F1_0,
 	},
 	{
-		// Mines are the point, so they are the icon, and the caps are low: a
-		// Trapper who could bank ten of them would be laying a minefield
-		// rather than picking their corner.
+		// Mines are the build now, not a flavor add-on: they restock faster
+		// and bank deeper than before, and the gun is genuinely weak --
+		// pull the trigger on the plasma cannon only because the mines
+		// haven't caught up yet.
 		.name = "TRAPPER",
 		.weapon = "PLASMA CANNON + MINES",
-		.perks = "MINES RESTOCK   -15% DMG DEALT   -5% SPEED",
+		.perks = "FASTER MINES, HIGHER CAP   -35% DMG DEALT",
 		.primary = PLASMA_INDEX,
 		.powerup = POW_PROXIMITY_WEAPON,
 		.secondary = {
 			{ PROXIMITY_INDEX,  RACE_TRAPPER_PROX_CAP,  RACE_TRAPPER_PROX_TIME },
 			{ SMART_MINE_INDEX, RACE_TRAPPER_SMART_CAP, RACE_TRAPPER_SMART_TIME },
 		},
-		.speed = F1_0 - F1_0/20,
 		.damage_taken = F1_0,
-		.damage_dealt = F1_0 - (F1_0*15)/100,
+		.damage_dealt = F1_0 - (F1_0*35)/100,
 		.afterburner_drain = F1_0,
 		.box_item_time = F1_0,
 		.boost_time = F1_0,
 		.boost_power = F1_0,
 	},
 	{
-		// Pays for the best box economy in the field with a thinner hull.
-		// Used to also carry a speed penalty on top of that, which stacked
-		// two costs against a payoff that is RNG rather than pace -- a race
-		// is a straight line to the finish, and being both fragile and slow
-		// while you wait for the dice to pay off never felt worth it. The
-		// hull cost alone is the class now; the throttle is stock.
+		// The gambler: two guaranteed items a box and a real shot at a
+		// third, on a hull thin enough that the loot has to pay off --
+		// there is no surviving a straight fight on this class's own
+		// shields alone.
 		.name = "SCAVENGER",
 		.weapon = "SPREADFIRE CANNON",
-		.perks = "2 ITEMS/BOX   +50% LOOT   -15% SHIELDS",
+		.perks = "2-3 ITEMS/BOX (25%)   -40% SHIELDS",
 		.primary = SPREADFIRE_INDEX,
 		.powerup = POW_SPREADFIRE_WEAPON,
 		.secondary = {{ -1 }, { -1 }},
-		.shield_pct = 85,
-		.speed = F1_0,
+		.shield_pct = 60,
 		.damage_taken = F1_0,
 		.damage_dealt = F1_0,
 		.afterburner_drain = F1_0,
 		.box_extra_rolls = 1,
+		.box_bonus_pct = 25,
 		.box_item_time = F1_0 + F1_0/2,
 		.boost_time = F1_0,
 		.boost_power = F1_0,
 	},
 	{
-		// The route specialist: pads are scenery to everyone else and the
-		// whole build to this one. Used to dock both speed AND turn to pay
-		// for that, which on a track with only a couple of pads left it
-		// strictly worse than the stock ship for the whole rest of the lap --
-		// there was no track on which the trade could win. The penalty is
-		// halved to fix that. First pass at the payoff (doubled duration plus
-		// a power bonus on top) overcorrected into the opposite problem --
-		// unbeatable on anything with a real pad chain -- so it's down to
-		// just a longer hold, no added push.
+		// The pad specialist, pushed further both ways: a real pad chain
+		// launches this class clear of the field, but it corners worse
+		// than Juggernaut and burns its afterburner faster too, so there
+		// is no backup plan when the track's pads don't favor it.
 		.name = "CHARGING BULL",
 		.weapon = "HELIX CANNON",
-		.perks = "+60% BOOST PADS   -5% SPEED   -8% TURN",
+		.perks = "+75% BOOST PADS   -30% TURN   +20% AB DRAIN",
 		.primary = HELIX_INDEX,
 		.powerup = POW_HELIX_WEAPON,
 		.secondary = {{ -1 }, { -1 }},
-		.speed = F1_0 - (F1_0*5)/100,
-		.turn = F1_0 - (F1_0*8)/100,
+		.turn = F1_0 - (F1_0*30)/100,
 		.damage_taken = F1_0,
 		.damage_dealt = F1_0,
-		.afterburner_drain = F1_0,
+		.afterburner_drain = F1_0 + (F1_0*20)/100,
 		.box_item_time = F1_0,
-		.boost_time = F1_0 + (F1_0*6)/10,
-		.boost_power = F1_0,
+		.boost_time = F1_0,
+		.boost_power = F1_0 + (F1_0*75)/100,
 	},
 	{
-		// The phoenix shell bounces, so this one does not need a clean line
-		// to hurt somebody -- it shoots corners. Built to live where that
-		// pays: the quickest thing on the track through the tight stuff. The
-		// shield cost used to run deeper than any other class's, which meant
-		// one bad hit -- a wall, a bot, a stray shot -- cost this class a
-		// respawn that the speed and turn on offer couldn't buy back. Eased
-		// off to line up with what Glass Cannon and Scavenger pay for a
-		// similar edge.
+		// Best handling in the field, full stop -- and the most fragile
+		// airframe outside Glass Cannon, doubly so: every wall clip or
+		// stray shot costs both a bigger shield bite and more of what's
+		// left underneath it.
 		.name = "FIREBIRD",
 		.weapon = "PHOENIX CANNON",
-		.perks = "+15% TURN   +5% SPEED   -20% SHIELDS",
+		.perks = "+35% TURN   -40% SHIELDS   +20% DMG TAKEN",
 		.primary = PHOENIX_INDEX,
 		.powerup = POW_PHOENIX_WEAPON,
 		.secondary = {{ -1 }, { -1 }},
-		.shield_pct = 80,
-		.speed = F1_0 + (F1_0*5)/100,
-		.turn = F1_0 + (F1_0*15)/100,
+		.shield_pct = 60,
+		.turn = F1_0 + (F1_0*35)/100,
+		.damage_taken = F1_0 + (F1_0*20)/100,
+		.damage_dealt = F1_0,
+		.afterburner_drain = F1_0,
+		.box_item_time = F1_0,
+		.boost_time = F1_0,
+		.boost_power = F1_0,
+	},
+	{
+		// The Omega never runs dry for this class -- energy is irrelevant to
+		// it, see race_omega_is_blood_cannon() -- it just keeps firing by
+		// drawing straight from shields instead (race_omega_drain_shields(),
+		// called from laser.c's own energy-deduction sites). No floor: hold
+		// the trigger through a whole fight and it can kill you the same as
+		// getting shot, through the same apply_damage_to_player() path
+		// everything else dies to. race_trichord_shield_regen_frame() gives
+		// a slow trickle back on a perfect trichord, so a Reaper who can
+		// also fly clean earns back what the cannon cost -- everyone else,
+		// nothing to earn back yet.
+		.name = "REAPER",
+		.weapon = "OMEGA CANNON",
+		.perks = "UNLIMITED OMEGA -- COSTS SHIELDS   -30% SHIELDS",
+		.primary = OMEGA_INDEX,
+		.powerup = POW_OMEGA_WEAPON,
+		.secondary = {{ -1 }, { -1 }},
+		.shield_pct = 70,
 		.damage_taken = F1_0,
 		.damage_dealt = F1_0,
 		.afterburner_drain = F1_0,
 		.box_item_time = F1_0,
 		.boost_time = F1_0,
 		.boost_power = F1_0,
+		.omega_blood_cannon = 1,
 	},
 };
 
@@ -2102,7 +2217,12 @@ fix race_class_speed_scale(void)
 {
 	const race_class_info *ci = race_my_class();
 
-	return ci ? ci->speed : F1_0;
+	// 0 means "leave it alone", same convention as turn below -- no class in
+	// the table sets this any more (see the rebalance-rule comment above
+	// Race_class_table: speed is off the table entirely, every trade goes
+	// through some other stat), but this keeps a class that omits it, now or
+	// in the future, at stock speed instead of dead in the water.
+	return (ci && ci->speed) ? ci->speed : F1_0;
 }
 
 fix race_class_turn_scale(void)
@@ -2119,6 +2239,29 @@ fix race_class_afterburner_drain_scale(void)
 	const race_class_info *ci = race_my_class();
 
 	return ci ? ci->afterburner_drain : F1_0;
+}
+
+int race_omega_is_blood_cannon(void)
+{
+	const race_class_info *ci = race_my_class();
+
+	return ci && ci->omega_blood_cannon;
+}
+
+void race_omega_drain_shields(fix energy_cost)
+{
+	if (!race_omega_is_blood_cannon() || energy_cost <= 0 || !ConsoleObject)
+		return;
+
+	// Goes through the same pipeline any other hit does -- shield flash,
+	// shield_warning_damage()/reset_shield_warning_damage(), and death via
+	// OF_SHOULD_BE_DEAD once shields go negative -- so holding the trigger
+	// dry kills a Reaper exactly the way an enemy's weapon would, no special
+	// case needed anywhere else. Self as the killer: apply_damage_to_player()
+	// only touches Players[Player_num] regardless of what's passed, but it
+	// wants an object to blame, and this is honest about where the damage
+	// actually came from.
+	apply_damage_to_player(ConsoleObject, ConsoleObject, energy_cost, 0);
 }
 
 fix race_scale_damage_for(int pnum, const object *killer, fix damage)
@@ -2362,6 +2505,14 @@ static int race_lobby_counts(int *ready_out, int *total_out)
 		if (Netgame.host_is_obs && i == 0)
 			continue;
 #endif
+		// A bot is locked in the moment it is dealt a class -- there is
+		// nobody at a keyboard to wait on. Counted in the roster it would
+		// never tick over to ready, so every netgame race with a bot field
+		// would start on the lobby timeout instead of when its people had
+		// finished picking.
+		if (race_player_is_bot(i))
+			continue;
+
 		total++;
 
 		if (Race_ready[i])
@@ -2379,6 +2530,17 @@ static int race_lobby_counts(int *ready_out, int *total_out)
 int race_lobby_ready_counts(int *ready_out, int *total_out)
 {
 	return race_lobby_counts(ready_out, total_out);
+}
+
+// Locks a bot in on the class it has just been dealt. Race_ready[] is this
+// file's to own and the lobby is the only thing that reads it, so the bot
+// code asks for this rather than reaching into it.
+void race_bot_lock_in(int pnum)
+{
+	if (pnum < 0 || pnum >= MAX_PLAYERS)
+		return;
+
+	Race_ready[pnum] = 1;
 }
 
 int race_player_is_ready(int pnum)
@@ -2744,13 +2906,16 @@ void race_init_level(void)
 		if (Netgame.LapsToWin > 0)
 			Race_laps_to_win = Netgame.LapsToWin;
 
-		Race_powerup_chance = Netgame.RacePowerupChance;
 		Race_allowed_items = Netgame.RaceAllowedItems;
+		for (i = 0; i < RACE_NUM_ITEM_SLOTS; i++)
+			Race_item_chance[i] = Netgame.RaceItemChance[i];
 	}
 
 	// race_init_items() reads Race_laps_to_win/Race_allowed_items, so rebuild
 	// the loot table for whatever this level's settings just became.
 	race_init_items();
+
+	race_shaker_reset();
 
 	for (i = 0; i < MAX_PLAYERS; i++)
 	{
@@ -2785,7 +2950,7 @@ void race_init_level(void)
 	Race_best_lap = 0;
 	Race_num_splits = 0;
 	Race_summary_pending = 0;
-	Race_trichord_strength = 0;
+	Race_over_triggered = 0;
 	Race_trichord_charge = 0;
 	Race_trichord_boost_until = 0;
 	Race_trichord_blobs_lit = 0;
@@ -2844,6 +3009,53 @@ static void race_update_emp_sound(void)
 		digi_stop_looping_sound();
 
 	playing = active;
+}
+
+// Once every racer still connected has crossed the line, kicks this machine
+// into the same "level finished" sequence a normal exit trigger runs --
+// PlayerFinishedLevel() -> multi_endlevel_score() -> multi_endlevel(), which
+// syncs every connected machine up and lands the whole netgame on the shared
+// end-of-level standings, same as coop and anarchy get when the level ends.
+//
+// Race never had an exit trigger of its own to do this: race_show_summary()
+// only ever put up a personal "you finished" popup, locally, on whichever
+// machine just crossed the line -- nothing ever told the game the *level*
+// was over, so nobody but that one player got kicked anywhere, and the rest
+// of the field just kept driving (or sat on the results popup) until the
+// host manually ended things some other way.
+//
+// Runs identically on every connected machine off the same networked
+// Race_player[].finished flags (race_send_update() broadcasts a finish the
+// moment it happens), so every machine reaches "everyone's done" at
+// essentially the same time and calls PlayerFinishedLevel() independently --
+// exactly the shape multi_endlevel()'s sync already expects, the same as
+// when every player reaches an exit trigger for themselves.
+static void race_check_race_over(void)
+{
+	int i, total = 0, finished = 0;
+
+	if (Race_over_triggered || !(Game_mode & GM_NETWORK))
+		return;
+
+	for (i = 0; i < N_players; i++)
+	{
+		if (Players[i].connected == CONNECT_DISCONNECTED)
+			continue;
+#ifdef NETWORK
+		if (Netgame.host_is_obs && i == 0)
+			continue;
+#endif
+		total++;
+
+		if (Race_player[i].finished)
+			finished++;
+	}
+
+	if (total < 1 || finished < total)
+		return;
+
+	Race_over_triggered = 1;
+	PlayerFinishedLevel(0);
 }
 
 void race_frame(void)
@@ -2937,6 +3149,9 @@ void race_frame(void)
 	race_harvest_level_weapons();
 	race_items_frame();
 	race_bots_frame();
+	race_trichord_shield_regen_frame();
+	race_speed_fov_frame();
+	race_check_race_over();
 }
 
 void race_format_time(char *buf, int bufsz, fix64 t)
@@ -3624,7 +3839,7 @@ int race_get_respawn(vms_vector *pos, vms_matrix *orient, int *segnum)
 	{
 		vms_vector fvec;
 
-		if (race_route_direction(&center, &fvec))
+		if (race_route_direction(&center, seg, &fvec))
 		{
 			vm_vector_2_matrix(orient, &fvec, NULL, NULL);
 			race_spread_respawn(pos, orient, Player_num, segnum);
@@ -3787,41 +4002,174 @@ int race_get_rank(int pnum)
 // A shaker is the heaviest thing in the loot table and it is weighted at the
 // back of the field, so in a race it is the catch-up weapon. Homing on the
 // nearest ship made it a weapon against whoever happened to be alongside --
-// usually another back-marker. Here it always flies at whoever is leading.
+// usually another back-marker. Here it goes after whoever is leading.
+//
+// The leader it picks is settled once, when the missile first asks, and then
+// kept for the rest of its life (see the lock table below). Re-reading the
+// standings every frame meant a missile changed its mind mid-flight every
+// time two racers swapped places, so nobody was ever actually being chased.
 //
 // If the leader is the one who fired it, it takes the next player down the
 // order instead: a missile that turned round on its own launcher would just
 // be a way to lose the race.
+
+// Per-missile state, keyed by object signature. One entry per shaker that can
+// be in the air at once, which is one per racer with a little room to spare.
+// Entries are reclaimed by age: a live missile touches its own entry every
+// homing frame, so anything that has gone quiet for RACE_SHAKER_LOCK_TIMEOUT
+// belongs to a missile that no longer exists.
+//
+// Every missile having its own entry is what stops two shakers in the air at
+// the same time from stealing each other's: the cache this replaced held a
+// fixed handful of slots and evicted whichever had gone longest without being
+// touched, so a pair of missiles passing each other traded slots every frame
+// and neither could hold a course.
+#define RACE_SHAKER_LOCKS         (MAX_PLAYERS * 2)
+#define RACE_SHAKER_LOCK_TIMEOUT  (F1_0 * 2)
+
+typedef struct {
+	int     signature;          // 0 == free
+	fix64   seen_at;
+	int     target_objnum;
+	int     target_signature;
+	int     route_idx;          // where along the lap route this missile is, -1 = not yet placed
+} race_shaker_lock;
+
+static race_shaker_lock Race_shaker_locks[RACE_SHAKER_LOCKS];
+
+void race_shaker_reset(void)
+{
+	memset(Race_shaker_locks, 0, sizeof(Race_shaker_locks));
+}
+
+// This missile's entry, claiming or reclaiming one if it has none yet.
+// Returns NULL only when every entry belongs to a missile that is still
+// alive, in which case the caller carries on without a lock rather than
+// taking one off somebody else.
+static race_shaker_lock *race_shaker_lock_for(const object *tracker, int *is_new)
+{
+	int i, free_idx = -1;
+
+	*is_new = 0;
+
+	for (i = 0; i < RACE_SHAKER_LOCKS; i++)
+	{
+		race_shaker_lock *l = &Race_shaker_locks[i];
+
+		if (l->signature == tracker->signature)
+		{
+			l->seen_at = GameTime64;
+			return l;
+		}
+
+		if (free_idx < 0 &&
+			(!l->signature || GameTime64 - l->seen_at > RACE_SHAKER_LOCK_TIMEOUT))
+			free_idx = i;
+	}
+
+	if (free_idx < 0)
+		return NULL;
+
+	{
+		race_shaker_lock *l = &Race_shaker_locks[free_idx];
+
+		memset(l, 0, sizeof(*l));
+		l->signature = tracker->signature;
+		l->seen_at = GameTime64;
+		l->target_objnum = -1;
+		l->route_idx = -1;
+		*is_new = 1;
+
+		return l;
+	}
+}
+
+// True if this player is somebody a shaker may chase right now.
+static int race_shaker_target_ok(int objnum, int launcher, const object *tracker)
+{
+	object *obj;
+
+	if (objnum < 0 || objnum > Highest_object_index)
+		return 0;
+
+	obj = &Objects[objnum];
+
+	if (obj->type != OBJ_PLAYER || (obj->flags & OF_SHOULD_BE_DEAD))
+		return 0;
+
+	if (objnum == launcher)
+		return 0;
+
+	if (laser_are_related(tracker - Objects, objnum))
+		return 0;
+
+	if (object_is_observer(obj))
+		return 0;
+
+	if (obj->id < 0 || obj->id >= MAX_PLAYERS)
+		return 0;
+
+	if ((Game_mode & GM_MULTI) && Players[obj->id].connected != CONNECT_PLAYING)
+		return 0;
+
+	// Racers who have crossed the line sort to the top of the standings, so
+	// without this every shaker fired after the first finish flies at
+	// somebody who is already done instead of at whoever is leading the race
+	// still being run.
+	if (Race_player[obj->id].finished)
+		return 0;
+
+	return 1;
+}
+
 int race_homing_target(const object *tracker)
 {
-	// One shaker bursts into a cloud of blobs and every one of them asks this
-	// question on every frame, so the standings are worked out once a frame
-	// and shared -- ranking walks every player's outstanding checkpoints.
+	// Ranking walks every player's outstanding checkpoints, so the standings
+	// are worked out once a frame and shared rather than per missile asking.
 	static fix64 ranked_at = 0;
 	static int sorted[MAX_PLAYERS];
 	static int ranked_n = 0;
-	int n, i, parent = -1;
+	race_shaker_lock *lock;
+	int n, i, launcher = -1, is_new = 0;
 
 	if (!(Game_mode & GM_RACE) || !tracker || tracker->type != OBJ_WEAPON)
 		return -1;
 
-	// The missile itself and the mega blobs it bursts into, so the whole
-	// spread converges on the leader rather than scattering to the nearest.
-	if (tracker->id != EARTHSHAKER_ID && tracker->id != EARTHSHAKER_MEGA_ID)
+	// A race shaker is one missile: create_smart_children() (laser.c) does not
+	// burst it into the homing blob cloud stock D2 gives it.
+	if (tracker->id != EARTHSHAKER_ID)
 		return -1;
 
-	if (tracker->ctype.laser_info.parent_type == OBJ_PLAYER)
-		parent = tracker->ctype.laser_info.parent_num;
-
-	// Whoever fired it is out of the running whatever the standings say, and
-	// so is anything else the engine considers related to it (create_smart_
-	// children hands the burst the missile's own parent, but a chain that has
-	// been through a recycled object slot can still come back wrong). A
+	// Whoever fired it is out of the running whatever the standings say: a
 	// missile that turns round on its own launcher is not a catch-up weapon,
 	// it is a way to lose the race.
-	if (parent >= 0 && parent <= Highest_object_index &&
-		Objects[parent].signature != tracker->ctype.laser_info.parent_signature)
-		parent = -1;
+	//
+	// Excluded on the object slot alone, with no signature test: a player who
+	// respawns keeps their slot but gets a fresh signature, and treating that
+	// as "launcher unknown" is what used to hand the shaker permission to
+	// come back and kill the player who fired it.
+	if (tracker->ctype.laser_info.parent_type == OBJ_PLAYER)
+		launcher = tracker->ctype.laser_info.parent_num;
+
+	lock = race_shaker_lock_for(tracker, &is_new);
+
+	// Already committed to somebody: keep flying at them. The check is by
+	// signature as well as slot, so a target who dies and respawns into the
+	// same slot counts as gone rather than as the same ship.
+	if (lock && lock->target_objnum >= 0)
+	{
+		if (lock->target_objnum <= Highest_object_index &&
+			Objects[lock->target_objnum].signature == lock->target_signature &&
+			race_shaker_target_ok(lock->target_objnum, launcher, tracker))
+			return lock->target_objnum;
+
+		// The racer it committed to is gone -- finished, disconnected, or
+		// dead. Rather than swinging round onto whoever is nearest, the
+		// missile gives up its lock and flies on: see race_force_homing().
+		lock->target_objnum = -1;
+		lock->target_signature = 0;
+		return -1;
+	}
 
 	if (!ranked_at || ranked_at != GameTime64)
 	{
@@ -3839,23 +4187,16 @@ int race_homing_target(const object *tracker)
 		if (pnum < 0 || pnum >= MAX_PLAYERS)
 			continue;
 
-		if ((Game_mode & GM_MULTI) && Players[pnum].connected != CONNECT_PLAYING)
-			continue;
-
 		objnum = Players[pnum].objnum;
 
-		if (objnum < 0 || objnum > Highest_object_index)
+		if (!race_shaker_target_ok(objnum, launcher, tracker))
 			continue;
-		if (objnum == parent)
-			continue;			// the leader fired it; take the next one down
-		if (laser_are_related(tracker - Objects, objnum))
-			continue;			// ...and never anything else it came out of
-		if (Objects[objnum].type != OBJ_PLAYER)
-			continue;
-		if (Objects[objnum].flags & OF_SHOULD_BE_DEAD)
-			continue;
-		if (object_is_observer(&Objects[objnum]))
-			continue;
+
+		if (lock)
+		{
+			lock->target_objnum = objnum;
+			lock->target_signature = Objects[objnum].signature;
+		}
 
 		return objnum;
 	}
@@ -3864,134 +4205,170 @@ int race_homing_target(const object *tracker)
 }
 
 // -------------------------------------------------------------------------
-// Earthshaker corridor steering
+// Earthshaker route steering
 // -------------------------------------------------------------------------
 //
 // race_homing_target() above picks *who* to aim at; this decides *where in
-// space* to point the missile so it actually gets there. Steering straight
-// at the leader's position made a shaker that turned a corner just fly into
-// the wall at the corner -- and detonate on whoever else was standing near
-// it, not on the leader it was chasing. Routed through the same BFS
-// segment-graph pathfinder the racebots steer their own laps with
-// (aipath.c's create_path_points -- see racebot.c's race_route_path() for
-// the pattern this follows).
+// space* to point the missile so it actually gets there. Steering straight at
+// the leader's position made a shaker that turned a corner fly into the wall
+// at the corner instead, and detonate on whoever was standing near it.
 //
-// Unlike racebot.c, which builds each leg's path once at level load and
-// keeps it for the whole race, a shaker's path has to be built live: the
-// leader it's chasing keeps moving, and there's no way to know in advance
-// which segment a missile will be fired from. create_path_points does an
-// O(segment count) BFS over a several-thousand-segment level and stack-
-// allocates megabyte-scale visited/queue arrays to do it, so it is not
-// something to call every frame for every blob in an earthshaker burst --
-// it's cached per missile here and only rebuilt when it goes stale.
-#define RACE_SHAKER_PATH_SLOTS   16
-#define RACE_SHAKER_PATH_REFRESH (F1_0 * 2)   // how long a cached path is trusted
-#define RACE_SHAKER_ARRIVE_DIST  (F1_0 * 20)  // close enough to a waypoint to advance past it
+// It follows the lap route the bot field drives (racebot.c's Bot_route, read
+// through race_route_*()): an ordered, one-way loop of points round the
+// track, which is the course the race is actually run on. That replaced a
+// per-missile BFS through the segment graph, which had three problems this
+// does not have -- it was blind to which way round the track it was going and
+// would happily route a missile backwards up the course, it cost a
+// whole-level search per missile that had to be cached in a handful of shared
+// slots (and two missiles in the air at once then spent every frame evicting
+// each other from them), and the cache was the thing that left an arriving
+// missile hovering.
+//
+// Steering only ever walks the route forwards. A shaker is chasing somebody
+// ahead of it, so forwards is where they are, and a missile that doubles back
+// down the course is exactly what this is here to stop.
 
-// create_path_points() can return max_depth + 1 points (the segment at the
-// depth cap plus the start segment) -- a buffer sized exactly
-// MAX_SEGMENTS_PER_PATH is one short. Learned the hard way: sized exactly
-// to MAX_SEGMENTS_PER_PATH with safety_flag set (see race_shaker_aim_point())
-// wrote past the end of this array and corrupted the stack.
-#define RACE_SHAKER_PATH_CAPACITY (MAX_SEGMENTS_PER_PATH + 1)
+// Within this far of the target there is nothing left for the course to tell
+// the missile: go straight at the ship.
+#define RACE_SHAKER_DIRECT_DIST     (F1_0 * 60)
+// How far down the route to aim. Far enough that the missile leads into the
+// corner rather than clipping its inside, close enough that it still follows
+// the track's shape.
+#define RACE_SHAKER_ROUTE_LOOKAHEAD 3
+// How far ahead to look when re-finding where a missile is on the route. It
+// only moves forwards, and never by much in one frame.
+#define RACE_SHAKER_ROUTE_WINDOW    24
 
-typedef struct {
-	int         signature;      // 0 == slot free
-	fix64       computed_at;
-	short       target_seg;
-	short       n;
-	short       idx;
-	point_seg   pts[RACE_SHAKER_PATH_CAPACITY];
-} race_shaker_path;
-
-static race_shaker_path Race_shaker_paths[RACE_SHAKER_PATH_SLOTS];
-
-// The slot for missile `signature` -- its own if it already has one, an
-// empty one, or (the burst is bigger than RACE_SHAKER_PATH_SLOTS) whichever
-// slot was computed longest ago. Never fails: worst case a fast-moving
-// burst thrashes slots and some blobs re-path more often than
-// RACE_SHAKER_PATH_REFRESH would otherwise call for.
-static race_shaker_path *race_shaker_path_slot(int signature)
+// Where the target is on the lap. Every blob in a burst is chasing the same
+// ship, so this is worked out once a frame and shared rather than rescanning
+// the route for each of them.
+static int race_shaker_target_route_idx(const object *target)
 {
-	int i, oldest = 0;
-	fix64 oldest_time = Race_shaker_paths[0].computed_at;
+	static fix64 cached_at = 0;
+	static int cached_objnum = -1;
+	static int cached_idx = -1;
 
-	for (i = 0; i < RACE_SHAKER_PATH_SLOTS; i++)
-	{
-		if (Race_shaker_paths[i].signature == signature || !Race_shaker_paths[i].signature)
-			return &Race_shaker_paths[i];
+	int objnum = target - Objects;
 
-		if (Race_shaker_paths[i].computed_at < oldest_time)
-		{
-			oldest_time = Race_shaker_paths[i].computed_at;
-			oldest = i;
-		}
-	}
+	if (cached_at == GameTime64 && cached_objnum == objnum)
+		return cached_idx;
 
-	return &Race_shaker_paths[oldest];
+	cached_idx = race_route_index_near(&target->pos, target->segnum);
+	cached_objnum = objnum;
+	cached_at = GameTime64;
+
+	return cached_idx;
 }
 
-// Fills *aim with the next waypoint the cached (or freshly built) path says
-// to steer at, advancing past any waypoint already reached. Returns 0 and
-// leaves *aim alone when no path exists -- an unreachable target, or the
-// pathfinder came back empty -- so the caller can fall back to aiming
-// straight at the target, same as before this existed.
+// Fills *aim with the point on the course to steer at. Returns 0 and leaves
+// *aim alone when there is no route to follow -- a level with no lap built --
+// so the caller falls back to aiming straight at the target.
 static int race_shaker_aim_point(object *tracker, int target_objnum, vms_vector *aim)
 {
-	race_shaker_path *p;
 	object *target = &Objects[target_objnum];
-	point_seg local_pts[RACE_SHAKER_PATH_CAPACITY];
-	short n;
+	race_shaker_lock *lock;
+	const vms_vector *lead;
+	int is_new = 0, my_idx, target_idx, gap;
 
-	if (tracker->segnum < 0 || target->segnum < 0)
+	if (race_route_len() < 2)
 		return 0;
 
-	p = race_shaker_path_slot(tracker->signature);
-
-	// Rebuild when this slot belongs to a different missile (evicted or
-	// never claimed), the cached path has gone stale, or the leader has
-	// moved into a different segment than the path was built for -- a path
-	// to where they used to be just walks the missile into the wall they
-	// turned behind.
-	if (p->signature != tracker->signature ||
-		!p->computed_at || GameTime64 - p->computed_at > RACE_SHAKER_PATH_REFRESH ||
-		p->target_seg != target->segnum)
+	// Close enough, or already sharing a segment: fly at the ship itself.
+	// This is also the case that has to aim at the target and not at any
+	// fixed point in space, or an arriving missile parks on the spot the
+	// racer has already left.
+	if (tracker->segnum == target->segnum ||
+		vm_vec_dist_quick(&tracker->pos, &target->pos) < RACE_SHAKER_DIRECT_DIST)
 	{
-		// safety_flag off: it tells create_path_points() to splice extra
-		// midpoints in after the fact (insert_center_points()), and that
-		// function's own overflow guard only checks room in the engine's
-		// shared Point_segs pool -- not a caller-supplied buffer like this
-		// one, which is what let it write past the end of a fixed-size
-		// array here. Not needed anyway: that's for a robot physically
-		// steering along the path, not for picking a waypoint to aim a
-		// missile at.
-		if (create_path_points(tracker, tracker->segnum, target->segnum,
-								local_pts, &n, MAX_SEGMENTS_PER_PATH, 0, 0, -1) == -1 ||
-			n < 1)
-		{
-			p->signature = 0;		// give the slot back; nothing to cache
-			return 0;
-		}
-
-		// Belt and suspenders against the buffer this actually filled: even
-		// with safety_flag off, don't trust n past what local_pts can hold.
-		if (n > RACE_SHAKER_PATH_CAPACITY)
-			n = RACE_SHAKER_PATH_CAPACITY;
-
-		p->signature = tracker->signature;
-		p->computed_at = GameTime64;
-		p->target_seg = target->segnum;
-		p->n = n;
-		p->idx = 0;
-		memcpy(p->pts, local_pts, n * sizeof(point_seg));
+		*aim = target->pos;
+		return 1;
 	}
 
-	while (p->idx < p->n - 1 &&
-		   vm_vec_dist_quick(&tracker->pos, &p->pts[p->idx].point) < RACE_SHAKER_ARRIVE_DIST)
-		p->idx++;
+	lock = race_shaker_lock_for(tracker, &is_new);
 
-	*aim = p->pts[p->idx].point;
+	// Re-find the missile on the route by looking forward from where it was
+	// last frame, so this costs a short window rather than a whole lap. Only
+	// a missile that has never been placed pays for the full search.
+	if (lock && lock->route_idx >= 0)
+		my_idx = race_route_index_advance(lock->route_idx, &tracker->pos,
+										  RACE_SHAKER_ROUTE_WINDOW);
+	else
+		my_idx = race_route_index_near(&tracker->pos, tracker->segnum);
+
+	target_idx = race_shaker_target_route_idx(target);
+
+	if (my_idx < 0 || target_idx < 0)
+		return 0;
+
+	if (lock)
+		lock->route_idx = my_idx;
+
+	// Measured the way the race runs, so a target who is barely behind reads
+	// as most of a lap ahead -- and the missile carries on round the course
+	// rather than turning back down it.
+	gap = race_route_gap(my_idx, target_idx);
+
+	if (gap < 0)
+		return 0;
+
+	// The target is within the lookahead: stop following the course and go
+	// straight for them.
+	if (gap <= RACE_SHAKER_ROUTE_LOOKAHEAD)
+	{
+		*aim = target->pos;
+		return 1;
+	}
+
+	lead = race_route_position(race_route_step(my_idx, RACE_SHAKER_ROUTE_LOOKAHEAD));
+
+	if (!lead)
+		return 0;
+
+	*aim = *lead;
 	return 1;
+}
+
+// laser.c steers a homing missile by normalising (its velocity + the direction
+// to its aim point). Those two cancel out when the aim point is dead astern:
+// the sum collapses to zero, vm_vec_normalize_quick() leaves a zero vector
+// alone rather than dividing by its magnitude, and scaling that by the
+// missile's speed hands the missile a zero velocity. It stops dead in mid-air
+// instead of turning round -- the other half of the hovering this used to do,
+// and reachable whenever a shaker overshoots and has to come back for its
+// target. Pushing the aim point square to the flight path gives the blend a
+// direction to turn through, so the missile carves round instead of stalling.
+#define RACE_SHAKER_REVERSE_DOT     (-F1_0 * 7 / 8)   // ~150 degrees astern or worse
+#define RACE_SHAKER_REVERSE_OFFSET  (F1_0 * 40)       // how far to one side to push the aim
+
+static void race_shaker_break_reversal(const object *tracker, vms_vector *aim)
+{
+	vms_vector to_aim, vel, side, axis;
+
+	vel = tracker->mtype.phys_info.velocity;
+	if (!vm_vec_normalize_quick(&vel))
+		return;						// not moving: nothing to reverse out of
+
+	vm_vec_sub(&to_aim, aim, &tracker->pos);
+	if (!vm_vec_normalize_quick(&to_aim))
+		return;						// sitting on the aim point already
+
+	if (vm_vec_dot(&to_aim, &vel) > RACE_SHAKER_REVERSE_DOT)
+		return;
+
+	// Any axis square to the flight path will do: cross with the world's up,
+	// or with its right instead when the missile is flying close enough to
+	// straight up or down that the first cross is degenerate itself.
+	vm_vec_zero(&axis);
+	if (abs(vel.y) < F1_0 * 7 / 8)
+		axis.y = F1_0;
+	else
+		axis.x = F1_0;
+
+	vm_vec_crossprod(&side, &vel, &axis);
+	if (!vm_vec_normalize_quick(&side))
+		return;
+
+	vm_vec_scale_add2(aim, &side, RACE_SHAKER_REVERSE_OFFSET);
 }
 
 void race_homing_aim_point(object *tracker, int target_objnum, vms_vector *aim)
@@ -4002,6 +4379,7 @@ void race_homing_aim_point(object *tracker, int target_objnum, vms_vector *aim)
 		return;
 
 	race_shaker_aim_point(tracker, target_objnum, aim);
+	race_shaker_break_reversal(tracker, aim);
 }
 
 // How fast a weapon is allowed to fly. Stock everywhere except a homing

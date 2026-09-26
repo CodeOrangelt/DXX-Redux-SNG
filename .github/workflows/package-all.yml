@@ -1,18 +1,30 @@
 name: Package - All
 
+# Builds every platform and uploads the artifacts. Run it from the Actions tab
+# (Run workflow), or let a pushed v* tag kick it off.
+#
+# The job references below are deliberately local paths ("./.github/..."). They
+# used to point at dxx-redux/dxx-redux@main, which meant "Package - All" built
+# and published *upstream's* code rather than this fork -- none of the SNG work
+# would have been in the artifacts it produced.
+
 on:
   workflow_dispatch:
 
+  push:
+    tags:
+      - 'v*'
+
 jobs:
   linux:
-    uses: dxx-redux/dxx-redux/.github/workflows/package-linux.yml@main
+    uses: ./.github/workflows/package-linux.yml
   windows:
-    uses: dxx-redux/dxx-redux/.github/workflows/package-windows.yml@main
+    uses: ./.github/workflows/package-windows.yml
   windows32:
-    uses: dxx-redux/dxx-redux/.github/workflows/package-windows32.yml@main
+    uses: ./.github/workflows/package-windows32.yml
   msvc:
-    uses: dxx-redux/dxx-redux/.github/workflows/package-msvc.yml@main
+    uses: ./.github/workflows/package-msvc.yml
   macos:
-    uses: dxx-redux/dxx-redux/.github/workflows/package-macos.yml@main
+    uses: ./.github/workflows/package-macos.yml
   macos-arm:
-    uses: dxx-redux/dxx-redux/.github/workflows/package-macos-arm.yml@main
+    uses: ./.github/workflows/package-macos-arm.yml

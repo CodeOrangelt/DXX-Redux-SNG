@@ -73,7 +73,19 @@ void udp_tracker_flush_events(void);
 #define UPID_GAME_INFO_REQ_SIZE			 13
 #define UPID_GAME_INFO_LITE_REQ_SIZE		 11
 #define UPID_GAME_INFO				  3 // Packet containing all info about a netgame.
-#define UPID_GAME_INFO_SIZE			(6 + 4*2 + 402 + (NETGAME_NAME_LEN+1) + (MISSION_NAME_LEN+1) + ((MAX_PLAYERS+4)*(CALLSIGN_LEN+1)) + 20*12)
+// The game info/sync send buffer. Sized at the transport's own maximum rather
+// than to a hand-totalled sum of the fields, because it was the latter and the
+// sum had drifted: a UPID_SYNC packet (the only one that also carries each
+// player's address, +sizeof(struct _sockaddr) x MAX_PLAYERS+4) came to exactly
+// the old figure on an IPv4 build -- no headroom at all, so the next field
+// added to netgame_info would have run off the end of a stack buffer in the
+// packet every joining player is sent -- and already ran well past it on an
+// IPv6 build, where each of those addresses is 12 bytes longer.
+//
+// Nothing validates a received game info packet against this, so it is free to
+// be generous; it is only ever a bound. If the packet ever genuinely needs
+// more than UPID_MAX_SIZE, the transport has to grow first.
+#define UPID_GAME_INFO_SIZE			UPID_MAX_SIZE
 #define UPID_GAME_INFO_LITE_REQ			  4 // Requesting lite info about a netgame. Used for discovering games.
 #define UPID_GAME_INFO_LITE			  5 // Packet containing lite netgame info.
 #define UPID_GAME_INFO_LITE_SIZE		 (31 + (NETGAME_NAME_LEN+1) + (MISSION_NAME_LEN+1))
@@ -219,8 +231,8 @@ extern int Observer_num;
 
 void netgame_set_defaults(void);
 
-// The advanced race options submenu (mystery box powerup chance + which
-// items the loot table may offer): edits *chance (0-100) and *allowed_items
-// (RACE_ITEM_* bitmask) in place. Shared by the netgame host menu and the
-// singleplayer race setup menu.
-void net_udp_race_advanced_options(int *chance, int *allowed_items);
+// The advanced race options submenu: which items the mystery box loot table
+// may offer (*allowed_items, a RACE_ITEM_* bitmask) and each one's individual
+// draw-frequency scale (item_chance[RACE_ITEM_*], 0-100%). Edits both in
+// place. Shared by the netgame host menu and the singleplayer race setup menu.
+void net_udp_race_advanced_options(int *allowed_items, int item_chance[RACE_NUM_ITEM_SLOTS]);

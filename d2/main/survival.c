@@ -74,6 +74,9 @@
 #include "cntrlcen.h"
 #include "morph.h"
 #include "gameseg.h"
+#include "ai.h"
+#include "laser.h"    // FLASH_ID, CONCUSSION_ID -- survival_robot_weapon_type()
+#include "polyobj.h"
 #include "vclip.h"
 #include "timer.h"
 #include "dxxerror.h"
@@ -133,8 +136,22 @@ static void survival_shop_set_mouse_released(int released);
 // and toughness instead. Each factor below is "per level above Trainee",
 // so Trainee (0) reproduces the original difficulty-blind numbers exactly.
 #define SURVIVAL_DIFFICULTY_ROBOTS_PER_LEVEL     1   // extra base/cap robots per wave, per level
-#define SURVIVAL_DIFFICULTY_POOL_PER_LEVEL       1   // extra candidate-pool width, per level
-#define SURVIVAL_DIFFICULTY_SHIELD_PCT_PER_LEVEL 5   // extra flat shield %, per level
+#define SURVIVAL_DIFFICULTY_POOL_PER_LEVEL       1   // extra candidate-pool width steps, per level (see
+                                                       // SURVIVAL_POOL_REFERENCE_SIZE for what a "step" is)
+#define SURVIVAL_DIFFICULTY_SHIELD_PCT_PER_LEVEL 4   // extra flat shield %, per level (was 5 -- trimmed
+                                                       // slightly, see SURVIVAL_ROBOT_SPEED_SCALE below)
+
+// D1's original tuning grew the boss-wave-worthy candidate pool by 1 type every 2 waves against a
+// ~30-type roster, so the whole set opened up by roughly wave 56. Applied unchanged to D2's ~85-type
+// stock roster (more still with an add-on like Vertigo loaded), the same "+1 every 2 waves" pace
+// doesn't fully open the roster until roughly wave 166 -- players spend the entire early-to-mid match
+// fighting only the weakest slice of the set, which read as D2 Survival being far easier than D1's,
+// wave-for-wave, even though every other difficulty constant here is identical between the two ports.
+// survival_pick_robot_type() below scales the per-step growth by however many candidates actually
+// loaded, divided by this reference count, so the pool reaches full width around the same *wave
+// number* regardless of how large the loaded robot set is -- including a bigger-than-stock set from
+// an add-on pak, which reaches full width at the same pace rather than being buried past wave 100.
+#define SURVIVAL_POOL_REFERENCE_SIZE  30
 #define SURVIVAL_SPAWN_TICK           (F1_0 * 3 / 2)   // 1.5s between individual robot spawns within a wave
 #define SURVIVAL_INTER_WAVE_DELAY     (F1_0 * 6)        // rest period once a wave's robots are all cleared
 #define SURVIVAL_FIRST_WAVE_DELAY     (F1_0 * 10)       // grace period before wave 1 (covers the countdown below)
@@ -153,8 +170,10 @@ static void survival_shop_set_mouse_released(int released);
 // Speed cap for hunting robots, as a fraction of the robot type's Insane-difficulty max_speed (see
 // survival_limit_robot_speeds()). This was 3/5 back when the design was "robots amble, players do
 // the seeking" -- that premise is gone now that the horde actually hunts you down, and at 3/5 they
-// simply took too long to arrive. F1_0 leaves them at the fastest the stock tables ever run a robot.
-#define SURVIVAL_ROBOT_SPEED_SCALE    (F1_0)
+// simply took too long to arrive. F1_0 (the fastest the stock tables ever run a robot) closed that
+// gap but then ran a hair too hot the other way; 9/10 backs off just enough to feel less frantic
+// without bringing back the "too slow to arrive" problem F1_0 was fixing.
+#define SURVIVAL_ROBOT_SPEED_SCALE    (F1_0 * 9 / 10)
 
 // Same idea, for Survival's tracked boss robots specifically: buffing shields alone (see
 // SURVIVAL_BOSS_SHIELD_MULT) made a boss take longer to kill, but a slow, stationary-feeling fight
@@ -181,9 +200,12 @@ static void survival_shop_set_mouse_released(int released);
 
 #define SURVIVAL_ELITE_CHANCE          (D_RAND_MAX / 7)   // ~1 in 7 of the non-boss spawns
 #define SURVIVAL_ELITE_BLAST_SIZE_MULT  3                 // visual radius, vs the robot's own size
-#define SURVIVAL_ELITE_BLAST_DAMAGE    (F1_0 * 30)
-#define SURVIVAL_ELITE_BLAST_RADIUS    (F1_0 * 45)
-#define SURVIVAL_ELITE_BLAST_FORCE     (F1_0 * 200)
+// Trimmed from the original pass (30/45/200) -- at 1-in-7 of every non-boss spawn, dense waves were
+// producing several of these blasts close together, and a full-radius hit plus normal combat damage in
+// the same second was chunking more health than a death explosion should.
+#define SURVIVAL_ELITE_BLAST_DAMAGE    (F1_0 * 20)
+#define SURVIVAL_ELITE_BLAST_RADIUS    (F1_0 * 32)
+#define SURVIVAL_ELITE_BLAST_FORCE     (F1_0 * 140)
 
 // Brute: same per-instance shields multiply survival_spawn_one_robot() already applies for wave and
 // difficulty, stacked with one more factor. +100% flat, applied after the normal scaling so it stays
@@ -487,14 +509,28 @@ static int Survival_candidates[MAX_ROBOT_TYPES];
 static int Survival_num_candidates = 0;
 static int Survival_tables_built = 0;
 
-// Subset of Survival_candidates whose Robot_names[] contains "hulk" --
-// preferred pool for boss waves, see survival_pick_robot_type(). Further
-// filtered to survival_robot_is_boss_worthy() below: a name match alone
-// isn't enough, since a "hulk" that can't actually hurt the player or
-// folds like the rest of the wave still gets randomly drawn from this list
+// Subset of Survival_candidates whose model is visibly larger than the boss-worthy pool's median --
+// the "hulk" pool, preferred for boss waves (see survival_pick_robot_type()). Size rather than a
+// Robot_names[] "hulk" substring match: that array only exists in EDITOR builds (bmread.c is only
+// added to the target under CMake's if(EDITOR), see d2/main/CMakeLists.txt) and is empty garbage in
+// every normal release build, which meant boss waves silently never got an actual hulk-type robot
+// outside of a debug build -- they fell straight through to the wider general boss-worthy pool below,
+// which has no size preference at all and can just as easily hand a boss wave something small and
+// fast as something large and slow. Physical model radius (Polygon_models[].rad) is loaded into every
+// build regardless of EDITOR, so this works the same everywhere. Further filtered to
+// survival_robot_is_boss_worthy() below: being large alone isn't enough, since a big robot that can't
+// actually hurt the player or folds like the rest of the wave still gets randomly drawn from this list
 // and shows up feeling like a non-event instead of a boss.
 static int Survival_hulk_candidates[MAX_ROBOT_TYPES];
 static int Survival_num_hulk_candidates = 0;
+
+// A robot type counts as "hulk"-sized once its model radius clears this multiple of the boss-worthy
+// pool's median radius. 5/4 (25% above median) rather than something more extreme: too high a bar and
+// small robot sets (a mission with few big models) end up with an empty hulk pool and fall back to the
+// general pool anyway; this stays generous enough to usually find a genuinely bigger-looking subset
+// while still meaningfully excluding the median-and-below half of the pool.
+#define SURVIVAL_HULK_RADIUS_NUM 5
+#define SURVIVAL_HULK_RADIUS_DEN 4
 
 // Every survival_robot_is_boss_worthy() candidate, hulk-named or not -- the fallback pool for boss
 // waves when the loaded robot set has no "hulk" match at all (see survival_pick_robot_type()).
@@ -556,11 +592,19 @@ static const int Survival_shop_supply_types[] = {
 };
 #define SURVIVAL_NUM_SHOP_SUPPLY_TYPES (sizeof(Survival_shop_supply_types) / sizeof(Survival_shop_supply_types[0]))
 
-// Everything a robot can arm you with. Since Survival strips the level of
-// its own powerups (see survival_strip_level_powerups()), this table is the
-// *only* way to obtain weapons all match -- so it has to span the full set,
-// primaries and secondaries alike. Weighted by repetition: the workhorse
-// pickups appear more than once, the match-winners appear once.
+// Everything a robot can arm you with, at D1-parity odds. Since Survival strips the level of its own
+// powerups (see survival_strip_level_powerups()), this table plus Survival_super_weapon_types[] below
+// are the *only* way to obtain weapons all match. Weighted by repetition: the workhorse pickups appear
+// more than once, the match-winners appear once.
+//
+// D2's extra weapons (Gauss/Helix/Phoenix/Omega, Flash/Guided/Mercury missiles, Smart Mine,
+// Earthshaker Missile) are deliberately NOT in this table -- they're rolled separately and more
+// rarely, see Survival_super_weapon_types[] and SURVIVAL_SUPER_WEAPON_DROP_PERMILLE below/in
+// survival.h, so D1's original weapon odds stay exactly as they were rather than being diluted by
+// twice as many entries. Also deliberately NOT added anywhere: POW_SUPER_LASER (same upgrade slot as
+// POW_LASER, would just be a second way to roll the same effect), and the utility pickups with no
+// combat role (Afterburner, Ammo Rack, Headlight, Converter, Full Map) -- these tables are "what can
+// arm you," matching D1's original scope rather than every powerup id D2 happens to define.
 static const int Survival_weapon_types[] = {
 	// Primaries
 	POW_LASER, POW_LASER,
@@ -581,6 +625,27 @@ static const int Survival_weapon_types[] = {
 	// see SURVIVAL_SITUATIONAL_DROP_PERMILLE, survival.h.
 };
 #define SURVIVAL_NUM_WEAPON_TYPES (sizeof(Survival_weapon_types) / sizeof(Survival_weapon_types[0]))
+
+// D2-exclusive "super" weapons -- rolled separately, and rarer, than the
+// D1-original table above. See SURVIVAL_SUPER_WEAPON_DROP_PERMILLE, survival.h.
+// POW_EARTHSHAKER_MISSILE is deliberately not here -- it's rarer still and
+// gets its own roll (SURVIVAL_EARTHSHAKER_DROP_PERMILLE) plus a 1-or-2 count.
+static const int Survival_super_weapon_types[] = {
+	// Primaries
+	POW_GAUSS_WEAPON,
+	POW_HELIX_WEAPON,
+	POW_PHOENIX_WEAPON,
+	POW_OMEGA_WEAPON,
+	// Secondaries
+	POW_SMISSILE1_1,
+	POW_SMISSILE1_4,
+	POW_GUIDED_MISSILE_1,
+	POW_GUIDED_MISSILE_4,
+	POW_SMART_MINE,
+	POW_MERCURY_MISSILE_1,
+	POW_MERCURY_MISSILE_4,
+};
+#define SURVIVAL_NUM_SUPER_WEAPON_TYPES (sizeof(Survival_super_weapon_types) / sizeof(Survival_super_weapon_types[0]))
 
 // Same election as multi_arcade_spawner_pnum() (multi.c): normally the
 // host, falling back to the lowest connected player if the host itself is
@@ -608,26 +673,6 @@ static int survival_count_active_robots(void)
 			count++;
 
 	return count;
-}
-
-// Case-insensitive substring test -- no strcasestr() dependency (not
-// portable to the Windows build).
-static int survival_name_contains_ci(const char *haystack, const char *needle)
-{
-	int hlen = (int)strlen(haystack);
-	int nlen = (int)strlen(needle);
-	int i, j;
-
-	for (i = 0; i + nlen <= hlen; i++)
-	{
-		for (j = 0; j < nlen; j++)
-			if (tolower((unsigned char)haystack[i + j]) != tolower((unsigned char)needle[j]))
-				break;
-		if (j == nlen)
-			return 1;
-	}
-
-	return 0;
 }
 
 static void survival_build_robot_tables(void)
@@ -680,10 +725,42 @@ static void survival_build_robot_tables(void)
 		if (survival_robot_is_boss_worthy(Survival_candidates[i]))
 			Survival_boss_worthy_candidates[Survival_num_boss_worthy_candidates++] = Survival_candidates[i];
 
+	// Size-based hulk pool -- see the comment on Survival_hulk_candidates above for why this isn't a
+	// Robot_names[] match. Median radius computed over the boss-worthy pool specifically (not all of
+	// Survival_candidates), same self-calibrating reasoning as the strength median in
+	// survival_robot_is_boss_worthy(): it should reflect "big compared to the other things a boss wave
+	// could have spawned instead," not "big compared to the weakest trash mob in the whole HAM."
 	Survival_num_hulk_candidates = 0;
-	for (i = 0; i < Survival_num_boss_worthy_candidates; i++)
-		if (survival_name_contains_ci(Robot_names[Survival_boss_worthy_candidates[i]], "hulk"))
-			Survival_hulk_candidates[Survival_num_hulk_candidates++] = Survival_boss_worthy_candidates[i];
+	if (Survival_num_boss_worthy_candidates > 0)
+	{
+		static int radius_sorted[MAX_ROBOT_TYPES];
+		fix median_radius, threshold;
+
+		for (i = 0; i < Survival_num_boss_worthy_candidates; i++)
+			radius_sorted[i] = Survival_boss_worthy_candidates[i];
+
+		// Insertion sort by model radius, ascending -- same small-N approach as the strength sort above.
+		for (i = 1; i < Survival_num_boss_worthy_candidates; i++)
+		{
+			fix key_radius;
+			key = radius_sorted[i];
+			key_radius = Polygon_models[Robot_info[key].model_num].rad;
+			j = i - 1;
+			while (j >= 0 && Polygon_models[Robot_info[radius_sorted[j]].model_num].rad > key_radius)
+			{
+				radius_sorted[j + 1] = radius_sorted[j];
+				j--;
+			}
+			radius_sorted[j + 1] = key;
+		}
+
+		median_radius = Polygon_models[Robot_info[radius_sorted[Survival_num_boss_worthy_candidates / 2]].model_num].rad;
+		threshold = fixmul(median_radius, (SURVIVAL_HULK_RADIUS_NUM * F1_0) / SURVIVAL_HULK_RADIUS_DEN);
+
+		for (i = 0; i < Survival_num_boss_worthy_candidates; i++)
+			if (Polygon_models[Robot_info[Survival_boss_worthy_candidates[i]].model_num].rad >= threshold)
+				Survival_hulk_candidates[Survival_num_hulk_candidates++] = Survival_boss_worthy_candidates[i];
+	}
 
 	Survival_tables_built = 1;
 }
@@ -738,7 +815,17 @@ static int survival_pick_robot_type(int wave, int is_boss)
 		return Survival_candidates[Survival_num_candidates - 1];
 	}
 
-	pool_size = 2 + wave / 2 + Difficulty_level * SURVIVAL_DIFFICULTY_POOL_PER_LEVEL;
+	{
+		// See SURVIVAL_POOL_REFERENCE_SIZE above: scale the per-wave growth step by however much
+		// bigger (or smaller) the loaded roster is than the ~30-type set this pacing was tuned
+		// against, so the pool reaches full width around the same wave number either way. At least
+		// 1 so a small custom robot set still ramps at all.
+		int pool_step = Survival_num_candidates / SURVIVAL_POOL_REFERENCE_SIZE;
+		if (pool_step < 1)
+			pool_step = 1;
+
+		pool_size = 2 + (wave / 2) * pool_step + Difficulty_level * SURVIVAL_DIFFICULTY_POOL_PER_LEVEL * pool_step;
+	}
 	if (pool_size > Survival_num_candidates)
 		pool_size = Survival_num_candidates;
 
@@ -1033,6 +1120,13 @@ void multi_do_survival_spawn_robot(const ubyte *buf)
 	if (!obj)
 		return;
 
+	// Same AIB_NORMAL normalization as survival_spawn_one_robot() -- see the comment there. Robot
+	// control (and therefore which machine's do_ai_frame() actually drives this object) can move
+	// between machines over the robot's lifetime, so every machine's local copy needs this, not just
+	// the spawner's.
+	obj->ctype.ai_info.behavior = AIB_NORMAL;
+	Ai_local_info[obj - Objects].mode = ai_behavior_to_mode(AIB_NORMAL);
+
 	// Also unvalidated wire data. Negative shields make the robot die to the first thing that touches
 	// it; absurdly large ones make it unkillable and, past `fix`'s 32767 ceiling, wrap negative anyway.
 	// Same clamp the spawner applies in survival_spawn_one_robot().
@@ -1151,6 +1245,15 @@ static int survival_choose_spawn_point(vms_vector *out_pos)
 		if (Segments[seg].special == SEGMENT_IS_CONTROLCEN)
 			continue;
 
+		// The walk above only checks IS_CHILD() -- a geometrically adjacent segment, not necessarily
+		// a passable one -- so it can wander through solid walls into a sealed pocket the level author
+		// never meant anyone to enter. survival_segment_is_reachable() (ai.c) is the same flow-field
+		// reachability test the horde pursuit itself uses, so this rejects exactly the segments no
+		// player (and therefore no robot, since they route the same way) could ever actually reach --
+		// a robot spawned there would sit unkillable forever, silently stalling wave-clear.
+		if (!survival_segment_is_reachable(seg))
+			continue;
+
 		pick_random_point_in_seg(&pos, seg);
 
 		if (survival_dist_to_players(&pos) < SURVIVAL_SPAWN_MIN_PLAYER_DIST)
@@ -1226,6 +1329,15 @@ static void survival_spawn_one_robot(int wave, int is_boss)
 	obj = create_morph_robot(&Segments[segnum], &pos, type);
 	if (!obj)
 		return;
+
+	// Force every Survival spawn onto AIB_NORMAL regardless of the robot type's stock default
+	// behavior. Some of the toughest non-boss_flag types the boss-worthy pool draws from default to
+	// AIB_STILL/AIB_STATION/AIB_RUN_FROM (stock guard/sentry placement) -- and survival_horde_hunts()'s
+	// flow-field pursuit (ai.c) explicitly skips AIB_STILL and AIB_RUN_FROM robots, so a "boss" spawned
+	// with one of those defaults would just stand there instead of hunting like every other Survival
+	// robot. Normalizing here means every spawn, hulk-tier or not, gets identical cross-map pathing.
+	obj->ctype.ai_info.behavior = AIB_NORMAL;
+	Ai_local_info[obj - Objects].mode = ai_behavior_to_mode(AIB_NORMAL);
 
 	//	Rolled here, on the spawner, and shipped -- never re-rolled per machine, or each client would
 	//	pick a different set of robots to outline. Bosses are never elite: start_boss_death_sequence()
@@ -1314,6 +1426,10 @@ static void survival_swarm_split(object *robot)
 		child = create_morph_robot(&Segments[segnum], &pos, type);
 		if (!child)
 			break;
+
+		// Same AIB_NORMAL normalization as survival_spawn_one_robot() -- see the comment there.
+		child->ctype.ai_info.behavior = AIB_NORMAL;
+		Ai_local_info[child - Objects].mode = ai_behavior_to_mode(AIB_NORMAL);
 
 		child->shields = child_shields;
 		morph_start(child);
@@ -1407,7 +1523,7 @@ static void survival_limit_robot_speeds(void)
 //
 // Robots only navigate this way while travelling. Inside SURVIVAL_HUNT_CLOSE_
 // DIST they are handed back to stock AIM_CHASE_OBJECT, which is what actually
-// fights -- circling, firing, flinching. Pursuit brings them to you; stock D1
+// fights -- circling, firing, flinching. Pursuit brings them to you; stock D2
 // robot behaviour is what happens once they arrive.
 
 static void survival_send_wave_state(void)
@@ -1486,6 +1602,32 @@ int survival_random_weapon_type(void)
 	return Survival_weapon_types[(d_rand() * SURVIVAL_NUM_WEAPON_TYPES) >> 15];
 }
 
+static int survival_random_super_weapon_type(void)
+{
+	return Survival_super_weapon_types[(d_rand() * SURVIVAL_NUM_SUPER_WEAPON_TYPES) >> 15];
+}
+
+// Flash missiles blind whoever they hit -- fine in a normal match where it's
+// one attacker among many threats, but Survival throws waves of robots at a
+// player who can't back off from the mine to recover, and a HAM robot type
+// that happens to carry FLASH_ID as its stock weapon (there's at least one
+// small, common type that does) turns "wave 1" into "can't see the fight for
+// most of it." Rather than pull that robot type out of the pool entirely --
+// it's otherwise unremarkable and losing it would just narrow the roster --
+// every shot it would have fired as a flash missile fires as a concussion
+// missile instead, in Survival only. Robot_info itself is left untouched
+// (it's shared, unscoped global data loaded once from the HAM) so this only
+// ever swaps the id at the moment a shot is actually created, which is also
+// why every robot-fire call site needs to route its weapon_type through
+// here rather than reading robptr->weapon_type/weapon_type2 directly.
+int survival_robot_weapon_type(int weapon_type)
+{
+	if (weapon_type == FLASH_ID && (Game_mode & GM_MULTI) && Netgame.gamemode == NETGAME_SURVIVAL)
+		return CONCUSSION_ID;
+
+	return weapon_type;
+}
+
 // Wipes every powerup the level author placed. Survival is meant to start
 // you with nothing and make the mine itself barren -- everything you get
 // comes off a robot (survival_robot_drops() below). Called from
@@ -1505,20 +1647,47 @@ void survival_strip_level_powerups(void)
 			obj_delete(i);
 }
 
+// Wipes every robot the level author placed, including the mine's own scripted end-of-level
+// guardian(s) -- boss_flag robots are excluded from survival_build_robot_tables()'s candidate pool
+// (they're never spawned by a wave), but that exclusion only ever stopped Survival from *choosing* one
+// as a wave spawn. It never removed the actual pre-placed instance already sitting in the level from
+// the moment it loaded, in whatever room the mission author put it -- so a match that reached that
+// room would run into the mine's real boss anyway: full multi-part model, self-destruct/exit-trigger
+// death sequence built for a scripted one-time fight, none of which is designed to coexist with an
+// endless wave loop that was never going to trigger its intended end-of-level behavior correctly. Same
+// call site and reasoning as survival_strip_level_powerups() above: every wave robot comes from a
+// spawn, so the mine itself should start with none at all, same as it starts with no powerups.
+void survival_strip_level_robots(void)
+{
+	int i;
+
+	if (Netgame.gamemode != NETGAME_SURVIVAL)
+		return;
+
+	for (i = 0; i <= Highest_object_index; i++)
+		if (Objects[i].type == OBJ_ROBOT)
+			obj_delete(i);
+}
+
 // Emits one powerup off a just-killed robot: its own object_create_egg() plus
 // its own network send, because the MULTI_CREATE_ROBOT_POWERUPS packet carries
 // a single contains_type/id for however many objnums it lists -- batching two
 // *different* powerup types into one packet would make every remote machine
 // spawn two of whichever type happened to be set last.
-static void survival_drop_one(object *del_obj, int powerup_id)
+static void survival_drop_one_count(object *del_obj, int powerup_id, int count)
 {
 	Net_create_loc = 0;
 	del_obj->contains_type = OBJ_POWERUP;
 	del_obj->contains_id = powerup_id;
-	del_obj->contains_count = 1;
+	del_obj->contains_count = count;
 	d_srand(1245L);
 	if (object_create_egg(del_obj) >= 0 && Net_create_loc > 0)
 		multi_send_create_robot_powerups(del_obj);
+}
+
+static void survival_drop_one(object *del_obj, int powerup_id)
+{
+	survival_drop_one_count(del_obj, powerup_id, 1);
 }
 
 // Robot death drops, called from multi_drop_robot_powerups() in place of the
@@ -1538,7 +1707,9 @@ static void survival_drop_one(object *del_obj, int powerup_id)
 void survival_robot_drops(object *del_obj)
 {
 	int drop_weapon, drop_supply, drop_situational, drop_extra_life;
+	int drop_super_weapon, drop_earthshaker;
 	int weapon_id = -1, supply_id = -1, situational_id = -1;
+	int super_weapon_id = -1, earthshaker_count = 1;
 
 	if (Netgame.gamemode != NETGAME_SURVIVAL)
 		return;
@@ -1547,6 +1718,8 @@ void survival_robot_drops(object *del_obj)
 	drop_supply = ((d_rand() * 100) >> 15) < SURVIVAL_SUPPLY_DROP_PCT;
 	drop_situational = ((d_rand() * 1000) >> 15) < SURVIVAL_SITUATIONAL_DROP_PERMILLE;
 	drop_extra_life = ((d_rand() * 1000) >> 15) < SURVIVAL_EXTRA_LIFE_DROP_PERMILLE;
+	drop_super_weapon = ((d_rand() * 1000) >> 15) < SURVIVAL_SUPER_WEAPON_DROP_PERMILLE;
+	drop_earthshaker = ((d_rand() * 1000) >> 15) < SURVIVAL_EARTHSHAKER_DROP_PERMILLE;
 
 	// A boss is the reward wave: killing one always pays out a life, on top
 	// of whatever the ordinary rolls above came up with.
@@ -1560,6 +1733,10 @@ void survival_robot_drops(object *del_obj)
 		supply_id = survival_random_ammo_type();
 	if (drop_situational)
 		situational_id = (d_rand() & 1) ? POW_CLOAK : POW_INVULNERABILITY;
+	if (drop_super_weapon)
+		super_weapon_id = survival_random_super_weapon_type();
+	if (drop_earthshaker)
+		earthshaker_count = 1 + (d_rand() & 1); // 1 or 2, depending on luck
 
 	if (drop_weapon)
 		survival_drop_one(del_obj, weapon_id);
@@ -1569,6 +1746,12 @@ void survival_robot_drops(object *del_obj)
 
 	if (drop_situational)
 		survival_drop_one(del_obj, situational_id);
+
+	if (drop_super_weapon)
+		survival_drop_one(del_obj, super_weapon_id);
+
+	if (drop_earthshaker)
+		survival_drop_one_count(del_obj, POW_EARTHSHAKER_MISSILE, earthshaker_count);
 
 	// By far the rarest: a free revive. It survives the engine's usual
 	// "extra lives are meaningless in multiplayer, turn them into
@@ -2005,6 +2188,24 @@ fix survival_damage_multiplier(void)
 	if (Netgame.gamemode != NETGAME_SURVIVAL)
 		return F1_0;
 	return F1_0 - Survival_armor_tier * (F1_0 * SURVIVAL_SHOP_ARMOR_PCT_PER_TIER / 100);
+}
+
+// Kamikaze robots (Robot_info[].kamikaze -- the charge-and-detonate type) carry a stock badass
+// explosion sized for normal play, where you rarely face more than one at a time and can back off.
+// Survival's dense horde waves put several of these in your face at once, and since they're also
+// typically among the weakest/most common candidates (see Survival_candidates' ascending-strength
+// sort), they show up constantly -- so their explosion reads as wildly disproportionate compared to
+// every other robot type, even though the underlying badass value was never touched. Halved here,
+// specifically for kamikazes and specifically in Survival, rather than editing Robot_info itself,
+// which would also weaken them in every other game mode. See do_explosion_sequence() (fireball.c),
+// the only place a robot's badass explosion is actually created.
+fix survival_kamikaze_badass_scale(int robot_id)
+{
+	if (Netgame.gamemode != NETGAME_SURVIVAL)
+		return F1_0;
+	if (!Robot_info[robot_id].kamikaze)
+		return F1_0;
+	return F1_0 / 2;
 }
 
 // Grants a powerup's effect straight to the local player, bypassing the
@@ -2836,8 +3037,8 @@ static void survival_shop_draw_qmark(int cx, int cy)
 	gr_set_curfont(GAME_FONT);
 }
 
-// The two physics upgrades have no powerup to borrow from (D1 has no speed
-// pickup -- POW_TURBO is in the enum but has no D1 bitmap -- and armor
+// The two physics upgrades have no powerup to borrow from (D2 has no speed
+// pickup -- POW_TURBO is in the enum but has no D2 bitmap -- and armor
 // isn't a pickup at all), and an invented glyph for either one only ever
 // said "some kind of upgrade". The per-tier number says exactly what the
 // purchase does, which is the thing worth knowing, so it takes the icon
@@ -2868,7 +3069,7 @@ static void survival_shop_draw_icon_text(int cx, int cy, const char *text, int c
 #define SURVIVAL_SHOP_ICON_WEAPON  1   // "?" flanked by the spreadfire + fusion pickups
 #define SURVIVAL_SHOP_ICON_SUPPLY  2   // "?" flanked by the shield + vulcan ammo pickups
 #define SURVIVAL_SHOP_ICON_SHIELD  3   // the shield pickup
-#define SURVIVAL_SHOP_ICON_SPEED   4   // chevrons (no D1 speed pickup to borrow)
+#define SURVIVAL_SHOP_ICON_SPEED   4   // chevrons (no D2 speed pickup to borrow)
 #define SURVIVAL_SHOP_ICON_ARMOR   5   // the shield pickup
 
 // One shop row: bracketed key, an icon, a label, and a right-aligned price
@@ -3217,13 +3418,13 @@ void survival_note_robot_kill(object *robot, int points)
 // money by itself. This is meant to read as "not wasted", not as "as good as buying it".
 #define SURVIVAL_SCRAP_AMMO             40   // POW_ENERGY, POW_VULCAN_AMMO
 #define SURVIVAL_SCRAP_SHIELD           60   // POW_SHIELD_BOOST
-#define SURVIVAL_SCRAP_SECONDARY_1      50   // POW_MISSILE_1, POW_HOMING_AMMO_1
-#define SURVIVAL_SCRAP_SECONDARY_4     150   // POW_MISSILE_4, POW_HOMING_AMMO_4
+#define SURVIVAL_SCRAP_SECONDARY_1      50   // POW_MISSILE_1, POW_HOMING_AMMO_1, POW_SMISSILE1_1, POW_GUIDED_MISSILE_1, POW_MERCURY_MISSILE_1
+#define SURVIVAL_SCRAP_SECONDARY_4     150   // POW_MISSILE_4, POW_HOMING_AMMO_4, POW_SMISSILE1_4, POW_GUIDED_MISSILE_4, POW_MERCURY_MISSILE_4
 #define SURVIVAL_SCRAP_SITUATIONAL     120   // POW_CLOAK, POW_INVULNERABILITY
-#define SURVIVAL_SCRAP_PRIMARY_COMMON  200   // LASER/VULCAN/SPREADFIRE/PLASMA/QUAD_FIRE
-#define SURVIVAL_SCRAP_PRIMARY_RARE    350   // FUSION
-#define SURVIVAL_SCRAP_SECONDARY_RARE  350   // PROXIMITY, SMARTBOMB
-#define SURVIVAL_SCRAP_MEGA            500   // MEGA_WEAPON
+#define SURVIVAL_SCRAP_PRIMARY_COMMON  200   // LASER/VULCAN/SPREADFIRE/PLASMA/QUAD_FIRE/GAUSS/HELIX/PHOENIX
+#define SURVIVAL_SCRAP_PRIMARY_RARE    350   // FUSION, OMEGA
+#define SURVIVAL_SCRAP_SECONDARY_RARE  350   // PROXIMITY, SMARTBOMB, SMART_MINE
+#define SURVIVAL_SCRAP_MEGA            500   // MEGA_WEAPON, EARTHSHAKER_MISSILE
 static int survival_pickup_scrap_value(int id)
 {
 	switch (id)
@@ -3235,9 +3436,15 @@ static int survival_pickup_scrap_value(int id)
 			return SURVIVAL_SCRAP_SHIELD;
 		case POW_MISSILE_1:
 		case POW_HOMING_AMMO_1:
+		case POW_SMISSILE1_1:
+		case POW_GUIDED_MISSILE_1:
+		case POW_MERCURY_MISSILE_1:
 			return SURVIVAL_SCRAP_SECONDARY_1;
 		case POW_MISSILE_4:
 		case POW_HOMING_AMMO_4:
+		case POW_SMISSILE1_4:
+		case POW_GUIDED_MISSILE_4:
+		case POW_MERCURY_MISSILE_4:
 			return SURVIVAL_SCRAP_SECONDARY_4;
 		case POW_CLOAK:
 		case POW_INVULNERABILITY:
@@ -3247,13 +3454,19 @@ static int survival_pickup_scrap_value(int id)
 		case POW_SPREADFIRE_WEAPON:
 		case POW_PLASMA_WEAPON:
 		case POW_QUAD_FIRE:
+		case POW_GAUSS_WEAPON:
+		case POW_HELIX_WEAPON:
+		case POW_PHOENIX_WEAPON:
 			return SURVIVAL_SCRAP_PRIMARY_COMMON;
 		case POW_FUSION_WEAPON:
+		case POW_OMEGA_WEAPON:
 			return SURVIVAL_SCRAP_PRIMARY_RARE;
 		case POW_PROXIMITY_WEAPON:
 		case POW_SMARTBOMB_WEAPON:
+		case POW_SMART_MINE:
 			return SURVIVAL_SCRAP_SECONDARY_RARE;
 		case POW_MEGA_WEAPON:
+		case POW_EARTHSHAKER_MISSILE:
 			return SURVIVAL_SCRAP_MEGA;
 		default:
 			return 0;
@@ -3342,7 +3555,16 @@ int survival_convert_wasted_pickup(object *powerup)
 	// frame of the popup's life. Kill popups work only because robots die at a distance. This is the
 	// same channel powerup.c itself uses to tell you a pickup was wasted ("MAXED OUT" etc), so it also
 	// reads consistently with the message it replaces.
+	//
+	// D2 port: Powerup_names[] is EDITOR-only here too (see the Robot_names[] comment in
+	// survival_build_robot_tables() above) -- a non-EDITOR build has no name to print, so it falls
+	// back to the same nameless phrasing survival_announce_scrap() already uses for the lobby
+	// broadcast, for the same reason (no per-id name table to draw on).
+#ifdef EDITOR
 	HUD_init_message(HM_DEFAULT, "%s SCRAPPED: +%d POINTS", Powerup_names[powerup->id], points);
+#else
+	HUD_init_message(HM_DEFAULT, "SPARES SCRAPPED: +%d POINTS", points);
+#endif
 
 	// hit_sound is genuinely -1 for some powerup types -- every other caller in powerup.c guards for
 	// it (see the `> -1` tests around powerup_basic()'s own playback), and passing -1 straight to

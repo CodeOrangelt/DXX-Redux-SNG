@@ -41,7 +41,28 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #define MAX_POINTS_PER_POLY 25
 
 short highest_texture_num;
+//	When set, polygon models are drawn with their facing polygons' edges traced in
+//	g3d_interp_outline_color. This flag has been declared (and documented in 3d.h as "outlined in
+//	white") since the original source drop, but nothing has actually consumed it in a very long time
+//	-- the implementation was lost somewhere along the way, leaving only the editor's current-object
+//	highlight setting a flag that did nothing. draw_model_outline() below restores it, with a
+//	settable colour so callers can mean something by it.
 int g3d_interp_outline;
+int g3d_interp_outline_color = -1;		//	-1: leave whatever colour the model was drawing in.
+
+//	Traces one polygon's edge loop. Called right after the polygon itself is drawn rather than in a
+//	second pass over the model, because the projected points for a polygon only exist while it is
+//	being drawn -- Interp_point_list is reused as the interpreter walks the model.
+static void draw_model_outline(int nv, const g3s_point **pointlist)
+{
+	int	i;
+
+	if (g3d_interp_outline_color >= 0)
+		gr_setcolor(g3d_interp_outline_color);
+
+	for (i = 0; i < nv; i++)
+		g3_draw_line(pointlist[i], pointlist[(i + 1) % nv]);
+}
 
 g3s_point *Interp_point_list = NULL;
 
@@ -426,10 +447,13 @@ bool g3_draw_polygon_model(ubyte *p,grs_bitmap **model_bitmaps,vms_angvec *anim_
 						point_list[i] = Interp_point_list + wp(p+30)[i];
 
 					g3_draw_poly(nv,point_list);
+
+					if (g3d_interp_outline)
+						draw_model_outline(nv,point_list);
 				}
 
 				p += 30 + ((nv&~1)+1)*2;
-					
+
 				break;
 			}
 
@@ -476,6 +500,9 @@ bool g3_draw_polygon_model(ubyte *p,grs_bitmap **model_bitmaps,vms_angvec *anim_
 
 					g3_draw_tmap(nv,point_list,uvl_list,lrgb_list,model_bitmaps[w(p+28)]);
 					d_free(lrgb_list);
+
+					if (g3d_interp_outline)
+						draw_model_outline(nv,point_list);
 				}
 
 				p += 30 + ((nv&~1)+1)*2 + nv*12;

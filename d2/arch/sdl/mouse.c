@@ -240,6 +240,93 @@ void mouse_toggle_cursor(int activate)
 		SDL_ShowCursor(SDL_DISABLE);
 }
 
+// Lets in-game UI (e.g. Survival's shop overlay, survival.c) borrow the
+// mouse away from flight control for a bit: while Grabinput is on, the
+// window stays grabbed and the mouse stays in SDL's relative-motion capture
+// mode (mouselook) continuously from focus to focus, the same mode
+// event_toggle_focus() below sets up on window focus -- there is no menu-
+// aware toggle of it anywhere else, and without one, mouse_get_pos() only
+// reports accumulating relative deltas with no OS cursor visible to aim
+// them with, so on-screen click targets are unusable. enable=0 ungrabs and
+// switches to absolute motion with a real visible cursor; enable=1 restores
+// whatever event_toggle_focus() would normally have set up (grabbed unless
+// the player has Grabinput off).
+int mouse_toggle_relative(int enable)
+{
+	int want_grab = enable && GameCfg.Grabinput;
+	int drop_x, drop_y;
+	int ok = 1;
+
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+	// The window to re-grab is remembered at release time rather than
+	// looked up again here. SDL_GetMouseFocus() reports the window the
+	// cursor is currently over, and once the cursor is free it can easily
+	// be somewhere else (or nowhere) by the time we want it back -- that
+	// returns NULL, the SDL_SetWindowGrab() call gets skipped, and the
+	// mouse is silently never recaptured.
+	static SDL_Window *released_from = NULL;
+	SDL_Window *window;
+
+	if (enable)
+	{
+		window = released_from;
+		if (!window)
+			window = SDL_GetKeyboardFocus();
+		if (!window)
+			window = SDL_GetMouseFocus();
+	}
+	else
+	{
+		window = SDL_GetMouseFocus();
+		if (!window)
+			window = SDL_GetKeyboardFocus();
+		released_from = window;
+	}
+
+	if (window)
+		SDL_SetWindowGrab(window, want_grab ? SDL_TRUE : SDL_FALSE);
+
+	// This genuinely fails when the window doesn't currently hold input
+	// focus, and it reports that in its return value. Swallowing it (which
+	// an earlier version did) meant a restore that lost the race left the
+	// cursor loose for the rest of the match, with nothing ever retrying --
+	// hence handing the result back so the caller can try again next frame.
+	if (SDL_SetRelativeMouseMode(want_grab ? SDL_TRUE : SDL_FALSE) != 0)
+		ok = 0;
+
+	if (enable && ok)
+		released_from = NULL;
+#else
+	SDL_WM_GrabInput(want_grab ? SDL_GRAB_ON : SDL_GRAB_OFF);
+#endif
+
+	// Cursor visibility tracks who owns the mouse -- NOT GameCfg.Grabinput.
+	// event_toggle_focus() (event.c) keys it off focus alone for exactly
+	// this reason: with "Keep Keyboard/Mouse focus" turned off the game
+	// still hides the cursor while you fly, it just doesn't confine it.
+	// Gating this on Grabinput (which an earlier version did) meant that
+	// for anyone with that option off, handing the mouse back re-enabled
+	// the cursor instead of hiding it, and it sat on screen until some
+	// other code path happened to call mouse_toggle_cursor() again.
+	mouse_toggle_cursor(!enable);
+
+	// Drain SDL's own relative-motion accumulator and drop the result.
+	// Everything the cursor did while it was free is sitting in there, and
+	// the first mouse_get_delta() after this would otherwise hand that
+	// whole pile to the flight controls in one frame -- the ship lurches
+	// or spins on its own the instant the menu closes. SDL_GetRelative-
+	// MouseState() is read-and-reset, so calling it here is what clears it.
+	SDL_GetRelativeMouseState(&drop_x, &drop_y);
+	(void)drop_x;
+	(void)drop_y;
+
+	// Clears our own delta/button state too, and resyncs Mouse.x/y to
+	// where the cursor actually is.
+	mouse_flush();
+
+	return ok;
+}
+
 // If we want to display/hide cursor, do so if not already and also hide it automatically after some time.
 void mouse_cursor_autohide()
 {

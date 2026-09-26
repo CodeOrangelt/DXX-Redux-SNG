@@ -46,5 +46,10 @@ extern void mouse_get_delta( int *dx, int *dy, int *dz );
 extern void event_mouse_get_delta(struct d_event *event, int *dx, int *dy, int *dz);
 extern int mouse_get_btns();
 extern void mouse_toggle_cursor(int activate);
+// Hands the mouse between flight control (enable=1) and on-screen UI
+// (enable=0). Returns 1 if the requested state was actually reached, 0 if
+// SDL refused (it needs input focus to enter relative mode) -- callers
+// should keep retrying on a 0 rather than assuming it took.
+extern int mouse_toggle_relative(int enable);
 
 #endif
