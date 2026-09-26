@@ -83,8 +83,8 @@ static void nk_ui_note(const char *text, float extra_rows);
 #include "newmenu.h"
 #include "gamefont.h"
 #include "nk_ui.h"
-#include "pngfile.h"
-#include "peerbook.h"
+#include "shotimg.h"
+#include "vers_id.h"
 #include "physfsx.h"
 
 // Declared in mouse.h. Without touching this, the cursor-autohide timer in
@@ -111,9 +111,6 @@ static int s_chrome_h = 70;
 #define NK_UI_MENU_CHROME_HEIGHT s_chrome_h
 #define NK_UI_MENU_MAX_HEIGHT_FRAC 0.9f
 #define NK_UI_MENU_WIDTH_FRAC 0.42f
-// Settings and navigation panels all open at this height so stepping through
-// the menus does not resize the panel under the pointer; content scrolls.
-#define NK_UI_MENU_STD_HEIGHT_FRAC 0.62f
 #define NK_UI_TABLE_WIDTH_FRAC 0.8f
 #define NK_UI_MENU_MIN_WIDTH_ROWS 14
 #define NK_UI_DIM_ALPHA 0.6f
@@ -382,6 +379,27 @@ static int s_escape_pressed = 0;
 static int s_enter_pressed = 0;
 static int s_wheel_steps = 0;
 static int s_arrow_steps = 0;
+
+// Claims this frame's arrow steps for a list, leaving none for the scroller.
+static int nk_ui_take_arrow_steps(void)
+{
+	int steps = s_arrow_steps;
+
+	s_arrow_steps = 0;
+	return steps;
+}
+
+// Moves `selected` by the arrow steps and keeps it inside [0, count).
+static void nk_ui_step_selection(int *selected, int count)
+{
+	if (count < 1)
+		return;
+	*selected += nk_ui_take_arrow_steps();
+	if (*selected < 0)
+		*selected = 0;
+	if (*selected >= count)
+		*selected = count - 1;
+}
 #define NK_UI_SCROLL_ROWS_PER_STEP 3
 
 // SDL1.2 input bridge: keyboard (with keysym.unicode for text entry, already
@@ -526,6 +544,7 @@ static void nk_ui_checkbox_short(struct nk_context *ctx, const char *label, shor
 
 #define NK_UI_FONT_ATLAS_WIDTH 1024
 #define NK_UI_FONT_GAP 1
+#define NK_UI_PALETTE_BYTES 768
 #define NK_UI_FONT_CHARS 256
 #define NK_UI_HEAD_PX_DIVISOR 36
 #define NK_UI_BODY_TO_HEAD 0.6f
@@ -541,8 +560,8 @@ static void nk_ui_checkbox_short(struct nk_context *ctx, const char *label, shor
 #define NK_UI_HEAD_LEAD_DIVISOR 4
 #define NK_UI_FALLBACK_GLYPH '?'
 #define NK_UI_PALETTE_TO_BYTE 4
-#define NK_UI_ROW_PAD_DIVISOR 4.5
-#define NK_UI_HEAD_ROW_PAD_DIVISOR 4.5
+#define NK_UI_ROW_PAD_DIVISOR 4.0
+#define NK_UI_HEAD_ROW_PAD_DIVISOR 4.0
 
 struct nk_ui_glyph
 {
@@ -632,8 +651,32 @@ static const ubyte *nk_ui_src_glyph_data(const grs_font *src, int index, int wid
 	return src->ft_data + index * ((width + 7) >> 3) * src->ft_h;
 }
 
+// The game's own palette, read once. Baking from gr_palette would tint the
+// menu font with whatever a custom menu background loaded there.
+static const ubyte *nk_ui_font_palette(void)
+{
+	static ubyte palette[NK_UI_PALETTE_BYTES];
+	static int loaded;
+
+	if (!loaded)
+	{
+		PHYSFS_file *fp = PHYSFSX_openReadBuffered("palette.256");
+
+		loaded = 1;
+		memcpy(palette, gr_palette, sizeof(palette));
+		if (fp)
+		{
+			PHYSFS_read(fp, palette, sizeof(palette), 1);
+			PHYSFS_close(fp);
+		}
+	}
+	return palette;
+}
+
 static void nk_ui_put_pixel(ubyte *rgba, int on, int palette_index, int colored)
 {
+	const ubyte *palette = nk_ui_font_palette();
+
 	if (!on || (colored && palette_index == TRANSPARENCY_COLOR))
 	{
 		memset(rgba, 0, 4);
@@ -644,7 +687,7 @@ static void nk_ui_put_pixel(ubyte *rgba, int on, int palette_index, int colored)
 		// Keep the font's light/dark shading but drop its yellow-orange tint:
 		// Nuklear multiplies text colour by this, so a neutral glyph lets the
 		// theme (and hover state) pick the colour.
-		int brightest = max(gr_palette[palette_index * 3], max(gr_palette[palette_index * 3 + 1], gr_palette[palette_index * 3 + 2]));
+		int brightest = max(palette[palette_index * 3], max(palette[palette_index * 3 + 1], palette[palette_index * 3 + 2]));
 		memset(rgba, min(255, brightest * NK_UI_PALETTE_TO_BYTE), 3);
 	}
 	else
@@ -886,7 +929,7 @@ static void nk_ui_apply_theme(struct nk_context *ctx)
 	ctx->style.window.border = 2.0f;
 	ctx->style.window.rounding = 0.0f;
 	ctx->style.window.padding = nk_vec2((float)pad, (float)pad);
-	ctx->style.window.spacing = nk_vec2((float)pad, (float)(pad / 4));
+	ctx->style.window.spacing = nk_vec2((float)pad, (float)(pad / 3));
 	ctx->style.window.header.padding = nk_vec2((float)pad, (float)(pad / 2));
 	ctx->style.window.header.label_padding = nk_vec2((float)pad, (float)(pad / 2));
 	ctx->style.window.header.label_normal = title;
@@ -895,7 +938,7 @@ static void nk_ui_apply_theme(struct nk_context *ctx)
 	ctx->style.button.rounding = 0.0f;
 	ctx->style.button.border = 1.0f;
 	ctx->style.button.border_color = nk_ui_shade(58);
-	ctx->style.button.padding = nk_vec2((float)pad, (float)(pad / 3));
+	ctx->style.button.padding = nk_vec2((float)pad, (float)(pad / 2));
 	ctx->style.button.text_hover = bright;
 	ctx->style.button.text_active = nk_rgba(255, 255, 255, 255);
 	ctx->style.slider.rounding = 0.0f;
@@ -977,6 +1020,23 @@ static int nk_ui_panel_chrome_height(void)
 // Re-bakes the Descent fonts when the game swapped them, when the screen
 // size changed, or when the GL context was thrown away underneath us, and
 // rederives every metric from the result. Call before building a frame.
+static void nk_ui_forget_textures(void);
+
+// The GL context is rebuilt by video mode changes, and the game then hands
+// our old texture ids to its own textures -- so glIsTexture() stays true
+// while the id draws someone else's picture. Compare generations instead,
+// and drop the ids without deleting them: they are no longer ours.
+static void nk_ui_sync_context(void)
+{
+	static int seen = -1;
+
+	if (seen == ogl_context_generation)
+		return;
+	if (seen >= 0)
+		nk_ui_forget_textures();
+	seen = ogl_context_generation;
+}
+
 static void nk_ui_sync_fonts(void)
 {
 	grs_font *body = GAME_FONT, *head = MEDIUM1_FONT, *title = HUGE_FONT;
@@ -991,6 +1051,7 @@ static void nk_ui_sync_fonts(void)
 	// silently invalidates every texture id we hold. Sampling one of those
 	// draws solid white, so the text becomes blocks; ask GL rather than try
 	// to guess which game events rebuild the context.
+	nk_ui_sync_context();
 	textures_lost = s_body_font.ready && !glIsTexture(s_body_font.tex);
 
 	if (s_body_font.ready && !textures_lost && body == s_baked_body_src && screen_h == s_baked_screen_h)
@@ -1607,11 +1668,11 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		if (nk_option_label(ctx, "Dropping Picked Up", Netgame.GaussAmmoStyle == GAUSS_STYLE_STEADY_RECHARGING)) Netgame.GaussAmmoStyle = GAUSS_STYLE_STEADY_RECHARGING;
 		if (nk_option_label(ctx, "Respawning", Netgame.GaussAmmoStyle == GAUSS_STYLE_STEADY_RESPAWNING)) Netgame.GaussAmmoStyle = GAUSS_STYLE_STEADY_RESPAWNING;
 
-		if (nk_button_label(ctx, "Set Objects Allowed..."))
+		if (nk_button_label(ctx, "Set Objects Allowed"))
 			nk_ui_defer(nk_ui_objects_allowed);
-		if (nk_button_label(ctx, "Start Mission With..."))
+		if (nk_button_label(ctx, "Start Mission With"))
 			nk_ui_defer(nk_ui_spawn_with_weapons);
-		if (nk_button_label(ctx, "Select Static Weapons..."))
+		if (nk_button_label(ctx, "Select Static Weapons"))
 			nk_ui_defer(nk_ui_static_weapons);
 
 		nk_tree_pop(ctx);
@@ -1802,6 +1863,7 @@ static void nk_ui_build_hosting(struct nk_context *ctx, void *userdata)
 	if (nk_option_label(ctx, "Bounty", Netgame.gamemode == NETGAME_BOUNTY)) { Netgame.gamemode = NETGAME_BOUNTY; }
 	if (nk_option_label(ctx, "Turkey Shoot", Netgame.gamemode == NETGAME_TURKEY_SHOOT)) { Netgame.gamemode = NETGAME_TURKEY_SHOOT; }
 	if (nk_option_label(ctx, "Arcade", Netgame.gamemode == NETGAME_ARCADE)) { Netgame.gamemode = NETGAME_ARCADE; Netgame.CTF = 0; }
+	if (nk_option_label(ctx, "Survival", Netgame.gamemode == NETGAME_SURVIVAL)) { Netgame.gamemode = NETGAME_SURVIVAL; Netgame.CTF = 0; }
 		nk_tree_pop(ctx);
 	}
 
@@ -1837,7 +1899,7 @@ static void nk_ui_build_hosting(struct nk_context *ctx, void *userdata)
 	}
 
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	if (nk_button_label(ctx, "Advanced options..."))
+	if (nk_button_label(ctx, "Advanced options"))
 		nk_ui_defer(nk_ui_advanced_options);
 }
 
@@ -2222,6 +2284,9 @@ static int nk_ui_table_row(struct nk_context *ctx, const char *text, int is_butt
 // One bit per section heading: set means that heading's items are hidden.
 // Owned by the menu the same way.
 static unsigned int *s_collapsed;
+// Panel and item the view was last scrolled to, so arrow steps stay followed.
+static const void *s_reveal_id;
+static int s_reveal_citem = -1;
 
 #define NK_UI_MAX_SECTIONS 32
 
@@ -2513,14 +2578,32 @@ static int nk_ui_menu_item_widget(struct nk_context *ctx, newmenu_item *items, i
 #define NK_UI_CURRENT_ITEM_THICKNESS 2.0f
 
 // Wraps the widget so the keyboard-selected item gets an outline.
-static void nk_ui_reveal_rect(struct nk_context *ctx, struct nk_rect item)
+// Extra space to pull into view above a row: the heading that labels it is
+// a row of its own, and stopping at the row itself leaves it clipped.
+static float nk_ui_reveal_lead(const newmenu_item *items, int nitems, int index)
+{
+	unsigned int collapsed = nk_ui_collapsed_mask();
+	int i;
+
+	for (i = index - 1; i >= 0; i--)
+	{
+		if (nk_ui_item_is_folded(items, nitems, i, collapsed))
+			continue;
+		if (!nk_ui_is_section_head(&items[i]))
+			return 0.0f;
+		return s_row_h + s_ctx->style.window.spacing.y + (float)(s_row_h / NK_UI_HEAD_LEAD_DIVISOR);
+	}
+	return 0.0f;
+}
+
+static void nk_ui_reveal_rect(struct nk_context *ctx, struct nk_rect item, float lead)
 {
 	struct nk_rect view = nk_window_get_content_region(ctx);
 	nk_uint scroll_x, scroll_y;
 	float shift = 0.0f;
 
-	if (item.y < view.y)
-		shift = item.y - view.y;
+	if (item.y - lead < view.y)
+		shift = item.y - lead - view.y;
 	else if (item.y + item.h > view.y + view.h)
 		shift = (item.y + item.h) - (view.y + view.h);
 	if (shift == 0.0f)
@@ -2537,7 +2620,7 @@ static int nk_ui_menu_item(struct nk_context *ctx, newmenu_item *items, int nite
 	int changed = nk_ui_menu_item_widget(ctx, items, nitems, index, selected, focus_input);
 
 	if (is_current && reveal)
-		nk_ui_reveal_rect(ctx, bounds);
+		nk_ui_reveal_rect(ctx, bounds, nk_ui_reveal_lead(items, nitems, index));
 
 	if (is_current && (items[index].type != NM_TYPE_TEXT || nk_ui_is_collapsible_head(items, nitems, index)))
 		nk_stroke_rect(nk_window_get_canvas(ctx), bounds, 0, NK_UI_CURRENT_ITEM_THICKNESS, NK_UI_ACCENT_BRIGHT);
@@ -2756,6 +2839,10 @@ static int nk_ui_plan_columns(const newmenu_item *items, int nitems, int rows_pe
 	ncols = (nrows + rows_per_col - 1) / rows_per_col;
 	if (ncols > NK_UI_MAX_PANEL_COLUMNS)
 		ncols = NK_UI_MAX_PANEL_COLUMNS;
+	// A split panel has no scrollbar, so only split when every row still
+	// fits; otherwise stay one column and let it scroll.
+	if (nrows > ncols * rows_per_col)
+		return 1;
 	target = (nrows + ncols - 1) / ncols;
 
 	for (i = 0; i < nitems && col < ncols; i++)
@@ -2810,6 +2897,7 @@ static float nk_ui_column_gap_px(const newmenu_item *items, int nitems, int firs
 
 struct nk_ui_menu_draw
 {
+	int reveal;	// scroll the view to the current item this frame
 	newmenu_item *items;
 	int nitems, citem, refocus, reorder, muted, focus_first_input, first_input;
 	int *changed, *selected;
@@ -2850,7 +2938,7 @@ static void nk_ui_draw_items(struct nk_context *ctx, struct nk_ui_menu_draw *d, 
 		// Claiming it every frame stole every keystroke for the first one.
 		if (nk_ui_menu_item(ctx, d->items, d->nitems, i, d->selected,
 				d->refocus && (i == d->citem || (d->focus_first_input && i == d->first_input)),
-				i == d->citem && !d->muted, d->refocus) && *d->changed < 0)
+				i == d->citem && !d->muted, d->reveal) && *d->changed < 0)
 			*d->changed = s_radio_pick >= 0 ? s_radio_pick : i;
 		if (*d->selected >= 0 && *d->selected == i)
 			return;
@@ -2904,6 +2992,7 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 	draw.changed = changed;
 	draw.selected = selected;
 	draw.first_input = -1;
+	draw.reveal = 0;
 	draw.focus_first_input = has_focus && !s_drawing_underneath;
 
 	for (i = 0; i < nitems; i++)
@@ -2972,11 +3061,8 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 			tall_gap_px = nk_ui_column_gap_px(items, nitems, col_start[c], col_start[c + 1]);
 		}
 	}
+	// Every panel is as tall as what it holds, capped at most of the screen.
 	panel_h = nk_ui_menu_height_px(head_rows + tall_rows, tall_gap_px, height);
-	// A message box or a table is as big as what it says; everything you
-	// navigate keeps one size, so the panel does not jump between screens.
-	if (!has_table && !body)
-		panel_h = min(height * NK_UI_MENU_STD_HEIGHT_FRAC, height * NK_UI_MENU_MAX_HEIGHT_FRAC);
 	column_h = panel_h - NK_UI_MENU_CHROME_HEIGHT - head_rows * row_stride;
 	if (column_h < row_stride)
 		column_h = row_stride;
@@ -2990,6 +3076,14 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 	snprintf(name, sizeof(name), "nm%p", id);
 	muted = !has_focus || s_drawing_underneath;
 	draw.muted = muted;
+	// Follow the selection only when it actually moves, so the wheel stays
+	// free to scroll away from it.
+	if (!muted)
+	{
+		draw.reveal = refocus || id != s_reveal_id || citem != s_reveal_citem;
+		s_reveal_id = id;
+		s_reveal_citem = citem;
+	}
 	if (muted)
 		saved_input = nk_ui_mute_input();
 	else
@@ -3083,10 +3177,13 @@ static int nk_ui_bind_slot(struct nk_context *ctx, const char *text, int is_curr
 	struct nk_rect bounds = nk_widget_bounds(ctx);
 	int clicked;
 
+	ctx->style.button.border_color = NK_UI_ACCENT_DIM;
+	ctx->style.button.normal = nk_style_item_color(nk_ui_mix(nk_ui_shade(20), NK_UI_ACCENT_DIM, 40));
+	ctx->style.button.hover = nk_style_item_color(nk_ui_mix(nk_ui_shade(20), NK_UI_ACCENT_DIM, 110));
+	ctx->style.button.text_normal = NK_UI_ACCENT_BRIGHT;
 	if (is_current && changing)
 	{
 		ctx->style.button.normal = nk_style_item_color(NK_UI_ACCENT_DIM);
-		ctx->style.button.text_normal = NK_UI_ACCENT_BRIGHT;
 		text = "?";
 	}
 	clicked = nk_button_label(ctx, text && text[0] ? text : "--");
@@ -3141,6 +3238,10 @@ static void nk_ui_bind_head(struct nk_context *ctx, const char *const *slot_name
 	nk_layout_row_end(ctx);
 }
 
+// grows only: the hint text changes while capturing, the panel must not
+static const void *s_bind_hint_id;
+static float s_bind_hint_w;
+
 int nk_ui_bind_frame(const void *id, const char *title, const char *hint,
 	const struct nk_ui_bind_row *rows, int nrows, const char *const *slot_names,
 	int current_row, int current_slot, int changing, int *picked_row, int *picked_slot)
@@ -3177,8 +3278,15 @@ int nk_ui_bind_frame(const void *id, const char *title, const char *hint,
 
 	panel_w = min(ncols * col_w + s_ctx->style.window.padding.x * 2 + s_ctx->style.window.spacing.x * (ncols - 1),
 		width * NK_UI_MAX_SCREEN_FRAC);
+	if (id != s_bind_hint_id)
+		s_bind_hint_w = 0.0f;
+	s_bind_hint_id = id;
+	s_bind_hint_w = max(s_bind_hint_w, nk_ui_text_width(&s_body_font, hint));
+	panel_w = max(panel_w, min(s_bind_hint_w + s_ctx->style.window.padding.x * 4,
+		width * NK_UI_MAX_SCREEN_FRAC));
 	panel_h = nk_ui_menu_height(NK_UI_BIND_HEAD_ROWS + per_col + (slot_names ? 1 : 0), height);
-	column_h = panel_h - NK_UI_MENU_CHROME_HEIGHT - NK_UI_BIND_HEAD_ROWS * row_stride;
+	column_h = panel_h - NK_UI_MENU_CHROME_HEIGHT - NK_UI_BIND_HEAD_ROWS * row_stride
+		+ s_ctx->style.window.padding.y * 2;
 	if (column_h < row_stride)
 		column_h = row_stride;
 
@@ -3399,12 +3507,17 @@ struct nk_ui_shots
 	GLuint tex;
 	int tex_w, tex_h;
 	int running;
+	int game_art;	// listing the PCX art inside the HOG instead of SCRNS_DIR
 };
 
-static int nk_ui_shot_is_image(const char *name)
+#define NK_UI_GAME_ART_PREFIX "pcx:"
+
+static int nk_ui_shot_is_image(const char *name, int game_art)
 {
 	const char *dot = strrchr(name, '.');
 
+	if (game_art)
+		return dot && !strcasecmp(dot, ".pcx");
 	return dot && (!strcasecmp(dot, ".png") || !strcasecmp(dot, ".tga"));
 }
 
@@ -3415,9 +3528,14 @@ static int nk_ui_shot_name_cmp(const void *a, const void *b)
 	return strcasecmp((const char *)b, (const char *)a);
 }
 
+static int nk_ui_art_name_cmp(const void *a, const void *b)
+{
+	return strcasecmp((const char *)a, (const char *)b);
+}
+
 static void nk_ui_shots_scan(struct nk_ui_shots *s)
 {
-	char **found = PHYSFS_enumerateFiles(SCRNS_DIR);
+	char **found = PHYSFS_enumerateFiles(s->game_art ? "" : SCRNS_DIR);
 	char **f;
 
 	s->count = 0;
@@ -3425,7 +3543,7 @@ static void nk_ui_shots_scan(struct nk_ui_shots *s)
 		return;
 	for (f = found; *f && s->count < NK_UI_SHOTS_MAX; f++)
 	{
-		if (!nk_ui_shot_is_image(*f))
+		if (!nk_ui_shot_is_image(*f, s->game_art))
 			continue;
 		strncpy(s->names[s->count], *f, NK_UI_SHOT_NAME_LEN - 1);
 		s->names[s->count][NK_UI_SHOT_NAME_LEN - 1] = '\0';
@@ -3433,7 +3551,7 @@ static void nk_ui_shots_scan(struct nk_ui_shots *s)
 	}
 	PHYSFS_freeList(found);
 	if (s->count > 1)
-		qsort(s->names, s->count, NK_UI_SHOT_NAME_LEN, nk_ui_shot_name_cmp);
+		qsort(s->names, s->count, NK_UI_SHOT_NAME_LEN, s->game_art ? nk_ui_art_name_cmp : nk_ui_shot_name_cmp);
 }
 
 static void nk_ui_shots_drop_texture(struct nk_ui_shots *s)
@@ -3444,13 +3562,14 @@ static void nk_ui_shots_drop_texture(struct nk_ui_shots *s)
 	s->shown = -1;
 }
 
-// Uploads `pixels` (w*h, RGB or RGBA, top row first) as this shot's texture.
-static void nk_ui_shots_upload(struct nk_ui_shots *s, const ubyte *pixels, int w, int h, int channels)
+// Uploads `pixels` (w*h, RGB or RGBA, top row first) as a new texture.
+static GLuint nk_ui_make_texture(const ubyte *pixels, int w, int h, int channels)
 {
 	GLenum format = channels == 4 ? GL_RGBA : GL_RGB;
+	GLuint tex;
 
-	glGenTextures(1, &s->tex);
-	glBindTexture(GL_TEXTURE_2D, s->tex);
+	glGenTextures(1, &tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -3458,110 +3577,38 @@ static void nk_ui_shots_upload(struct nk_ui_shots *s, const ubyte *pixels, int w
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glTexImage2D(GL_TEXTURE_2D, 0, (GLint)format, (GLsizei)w, (GLsizei)h, 0, format, GL_UNSIGNED_BYTE, pixels);
 	glBindTexture(GL_TEXTURE_2D, 0);
+	return tex;
+}
+
+static void nk_ui_shots_upload(struct nk_ui_shots *s, const ubyte *pixels, int w, int h, int channels)
+{
+	s->tex = nk_ui_make_texture(pixels, w, h, channels);
 	s->tex_w = w;
 	s->tex_h = h;
 }
 
-// read_png hands back malloc'd memory, so this frees with free(), not d_free.
-static int nk_ui_shot_load_png(struct nk_ui_shots *s, const char *path)
+static void nk_ui_shot_load(struct nk_ui_shots *s, const char *path)
 {
-	png_data pdata;
-	int ok = 0;
+	int w, h, channels;
+	ubyte *pixels = shotimg_decode(path, &w, &h, &channels);
 
-	memset(&pdata, 0, sizeof(pdata));
-	if (!read_png(path, &pdata))
-		return 0;
-	if (pdata.depth == 8 && (pdata.channels == 3 || pdata.channels == 4))
-	{
-		nk_ui_shots_upload(s, pdata.data, (int)pdata.width, (int)pdata.height, (int)pdata.channels);
-		ok = 1;
-	}
-	free(pdata.data);
-	free(pdata.palette);
-	return ok;
-}
-
-#define NK_UI_TGA_HEADER_LEN 18
-#define NK_UI_TGA_TYPE_TRUECOLOR 2
-// Bit 5 of the descriptor byte: set means the first row stored is the top one.
-#define NK_UI_TGA_TOP_ORIGIN 0x20
-// A shot is one screen; anything larger is not one of ours.
-#define NK_UI_TGA_MAX_PIXELS (8192 * 8192)
-
-// The uncompressed BGR(A) TGA that write_bmp() emits without libpng. Rows
-// come out bottom-up and the channels reversed, so both are undone here.
-static int nk_ui_shot_load_tga(struct nk_ui_shots *s, const char *path)
-{
-	PHYSFS_File *fp = PHYSFS_openRead(path);
-	ubyte header[NK_UI_TGA_HEADER_LEN];
-	ubyte *raw = NULL, *rgb = NULL;
-	int w, h, bpp, channels, x, y, ok = 0;
-
-	if (!fp)
-		return 0;
-	if (PHYSFS_read(fp, header, sizeof(header), 1) != 1 || header[2] != NK_UI_TGA_TYPE_TRUECOLOR)
-		goto done;
-
-	w = header[12] | (header[13] << 8);
-	h = header[14] | (header[15] << 8);
-	bpp = header[16];
-	channels = bpp / 8;
-	if (w < 1 || h < 1 || (bpp != 24 && bpp != 32) || (double)w * h > NK_UI_TGA_MAX_PIXELS)
-		goto done;
-	// header[0] is the length of an optional id field sitting before the pixels.
-	if (header[0] && !PHYSFS_seek(fp, PHYSFS_tell(fp) + header[0]))
-		goto done;
-
-	raw = d_malloc((size_t)w * h * channels);
-	rgb = d_malloc((size_t)w * h * channels);
-	if (!raw || !rgb)
-		goto done;
-	if (PHYSFS_read(fp, raw, (PHYSFS_uint32)((size_t)w * h * channels), 1) != 1)
-		goto done;
-
-	for (y = 0; y < h; y++)
-	{
-		int src_row = (header[17] & NK_UI_TGA_TOP_ORIGIN) ? y : h - 1 - y;
-		const ubyte *src = raw + (size_t)src_row * w * channels;
-		ubyte *dst = rgb + (size_t)y * w * channels;
-
-		for (x = 0; x < w; x++)
-		{
-			dst[x * channels + 0] = src[x * channels + 2];
-			dst[x * channels + 1] = src[x * channels + 1];
-			dst[x * channels + 2] = src[x * channels + 0];
-			if (channels == 4)
-				dst[x * channels + 3] = src[x * channels + 3];
-		}
-	}
-	nk_ui_shots_upload(s, rgb, w, h, channels);
-	ok = 1;
-
-done:
-	if (raw)
-		d_free(raw);
-	if (rgb)
-		d_free(rgb);
-	PHYSFS_close(fp);
-	return ok;
+	if (!pixels)
+		return;
+	nk_ui_shots_upload(s, pixels, w, h, channels);
+	d_free(pixels);
 }
 
 static void nk_ui_shots_load(struct nk_ui_shots *s, int index)
 {
 	char path[sizeof(SCRNS_DIR) + NK_UI_SHOT_NAME_LEN];
-	const char *dot;
 
 	nk_ui_shots_drop_texture(s);
 	s->shown = index;	// a shot that will not decode is not retried every frame
 	if (index < 0 || index >= s->count)
 		return;
 
-	snprintf(path, sizeof(path), "%s%s", SCRNS_DIR, s->names[index]);
-	dot = strrchr(s->names[index], '.');
-	if (dot && !strcasecmp(dot, ".tga"))
-		nk_ui_shot_load_tga(s, path);
-	else
-		nk_ui_shot_load_png(s, path);
+	snprintf(path, sizeof(path), "%s%s", s->game_art ? "" : SCRNS_DIR, s->names[index]);
+	nk_ui_shot_load(s, path);
 }
 
 // Centres the shot in `avail` at its own aspect, never upscaling past it.
@@ -3590,14 +3637,71 @@ static void nk_ui_shot_preview(struct nk_context *ctx, struct nk_ui_shots *s, st
 	nk_layout_row_end(ctx);
 }
 
+static void nk_ui_shot_config_value(const struct nk_ui_shots *s, char *out, size_t size)
+{
+	snprintf(out, size, "%s%s", s->game_art ? NK_UI_GAME_ART_PREFIX : "", s->names[s->selected]);
+}
+
+static int nk_ui_shot_is_background(const struct nk_ui_shots *s)
+{
+	char value[MENU_BACKGROUND_LEN];
+
+	if (!s->count)
+		return 0;
+	nk_ui_shot_config_value(s, value, sizeof(value));
+	return !strcmp(GameCfg.MenuBackground, value);
+}
+
+// Opens on the picture already in use, so it is easy to see which one that is.
+static void nk_ui_shots_select_current(struct nk_ui_shots *s)
+{
+	int i;
+
+	for (i = 0; i < s->count; i++)
+	{
+		s->selected = i;
+		if (nk_ui_shot_is_background(s))
+			return;
+	}
+	s->selected = 0;
+}
+
+static void nk_ui_shots_switch_source(struct nk_ui_shots *s)
+{
+	s->game_art = !s->game_art;
+	s->selected = 0;
+	nk_ui_shots_drop_texture(s);
+	nk_ui_shots_scan(s);
+}
+
+// Picking the current background again puts the stock one back.
+static void nk_ui_shots_background_button(struct nk_context *ctx, struct nk_ui_shots *s)
+{
+	int is_current = nk_ui_shot_is_background(s);
+
+	if (!s->count)
+	{
+		nk_spacing(ctx, 1);
+		return;
+	}
+	if (!nk_button_label(ctx, is_current ? "Use default background" : "Set as menu background"))
+		return;
+	if (is_current)
+		snprintf(GameCfg.MenuBackground, sizeof(GameCfg.MenuBackground), "%s", MENU_BACKGROUND_DEFAULT);
+	else
+		nk_ui_shot_config_value(s, GameCfg.MenuBackground, sizeof(GameCfg.MenuBackground));
+}
+
 static void nk_ui_build_shots(struct nk_context *ctx, void *userdata)
 {
 	struct nk_ui_shots *s = (struct nk_ui_shots *)userdata;
 	struct nk_rect region = nk_window_get_content_region(ctx);
+
 	float list_w = region.w * NK_UI_SHOTS_LIST_FRAC;
 	float body_h = region.h - NK_UI_ROW_HEIGHT * 2;
 	int i;
 
+	nk_ui_step_selection(&s->selected, s->count);
 	if (body_h < NK_UI_ROW_HEIGHT)
 		body_h = NK_UI_ROW_HEIGHT;
 
@@ -3629,7 +3733,7 @@ static void nk_ui_build_shots(struct nk_context *ctx, void *userdata)
 	}
 	nk_layout_row_end(ctx);
 
-	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 4);
 	if (s->count)
 	{
 		char detail[NK_UI_SHOT_NAME_LEN + 32];
@@ -3638,9 +3742,357 @@ static void nk_ui_build_shots(struct nk_context *ctx, void *userdata)
 		nk_label(ctx, detail, NK_TEXT_LEFT);
 	}
 	else
-		nk_label(ctx, SCRNS_DIR " is empty", NK_TEXT_LEFT);
+		nk_label(ctx, s->game_art ? "no game art found" : SCRNS_DIR " is empty", NK_TEXT_LEFT);
+	if (nk_button_label(ctx, s->game_art ? "Show screenshots" : "Show game art"))
+		nk_ui_shots_switch_source(s);
+	nk_ui_shots_background_button(ctx, s);
 	if (nk_button_label(ctx, "Close"))
 		s->running = 0;
+}
+
+// The main menu backdrop is drawn as an RGB texture rather than through the
+// 8-bit palette, so a picture never changes the colours the game's text uses.
+static struct
+{
+	GLuint tex;
+	char loaded[MENU_BACKGROUND_LEN];	// config value the texture was made from
+} s_backdrop;
+
+static void nk_ui_backdrop_load(void)
+{
+	char path[sizeof(SCRNS_DIR) + MENU_BACKGROUND_LEN];
+	const char *value = GameCfg.MenuBackground;
+	int w, h, channels;
+	ubyte *pixels;
+
+	if (s_backdrop.tex)
+		glDeleteTextures(1, &s_backdrop.tex);
+	s_backdrop.tex = 0;
+	snprintf(s_backdrop.loaded, sizeof(s_backdrop.loaded), "%s", value);
+	if (!value[0])
+		return;
+
+	if (!strncmp(value, NK_UI_GAME_ART_PREFIX, strlen(NK_UI_GAME_ART_PREFIX)))
+		snprintf(path, sizeof(path), "%s", value + strlen(NK_UI_GAME_ART_PREFIX));
+	else
+		snprintf(path, sizeof(path), "%s%s", SCRNS_DIR, value);
+	pixels = shotimg_decode(path, &w, &h, &channels);
+	if (!pixels)
+		return;
+	s_backdrop.tex = nk_ui_make_texture(pixels, w, h, channels);
+	d_free(pixels);
+}
+
+// Draws `tex` over a rectangle given as fractions of the screen (y down).
+static void nk_ui_draw_quad(GLuint tex, float x0, float y0, float x1, float y1, int blend)
+{
+	const GLfloat vertices[] = { x0, 1 - y0, x1, 1 - y0, x1, 1 - y1, x0, 1 - y1 };
+	static const GLfloat texcoords[] = { 0, 0, 1, 0, 1, 1, 0, 1 };
+	static const GLfloat colors[] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+
+	if (blend)
+	{
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	}
+	else
+		glDisable(GL_BLEND);
+	glEnable(GL_TEXTURE_2D);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glEnableClientState(GL_COLOR_ARRAY);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glVertexPointer(2, GL_FLOAT, 0, vertices);
+	glColorPointer(4, GL_FLOAT, 0, colors);
+	glTexCoordPointer(2, GL_FLOAT, 0, texcoords);
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+	glDisableClientState(GL_VERTEX_ARRAY);
+	glDisableClientState(GL_COLOR_ARRAY);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glEnable(GL_BLEND);
+}
+
+// Returns 1 when a picture was drawn, 0 to let the stock background show.
+int nk_ui_draw_backdrop(void)
+{
+	nk_ui_sync_context();
+	// A rebuilt GL context leaves the id valid-looking but unusable, and it
+	// samples solid white -- ask GL rather than guess when that happened.
+	if (strcmp(s_backdrop.loaded, GameCfg.MenuBackground)
+		|| (s_backdrop.tex && !glIsTexture(s_backdrop.tex)))
+		nk_ui_backdrop_load();
+	if (!s_backdrop.tex)
+		return 0;
+	nk_ui_draw_quad(s_backdrop.tex, 0, 0, 1, 1, 0);
+	return 1;
+}
+
+// The logo above the main menu. Its PNG is compiled in (menu_logo_data.c).
+extern const unsigned char menu_logo_png[];
+extern const unsigned int menu_logo_png_len;
+
+#define NK_UI_LOGO_WIDTH_FRAC 0.36f
+// Gap between the logo and the menu text below it.
+#define NK_UI_LOGO_GAP_FRAC 0.02f
+#define NK_UI_LOGO_MIN_TOP_FRAC 0.02f
+// Gap between the letters and the version line sitting under them.
+#define NK_UI_LOGO_VERSION_GAP_FRAC 0.008f
+// Where the letters end inside the logo picture, as a fraction of its
+// height; the rest is transparent padding the version line tucks into.
+#define NK_UI_LOGO_LETTERS_BOTTOM_FRAC 0.73f
+// Where the first letter starts, as a fraction of the picture's width, so
+// the version line can line up with the letters rather than the padding.
+#define NK_UI_LOGO_LETTERS_LEFT_FRAC 0.012f
+
+#define NK_UI_LAVA_FRAMES 4
+#define NK_UI_LAVA_TILE 64
+#define NK_UI_LAVA_SCALE 2	// logo pixels per lava pixel
+#define NK_UI_LAVA_FRAME_MS 150
+#define NK_UI_LAVA_SAT_FLOOR 50	// below this the pixel is shadow, not letter
+#define NK_UI_LAVA_SAT_RAMP 60
+#define NK_UI_SHADOW_TOP_RGB { 120, 10, 0 }
+#define NK_UI_SHADOW_BOTTOM_RGB { 255, 100, 10 }
+#define NK_UI_SHADOW_DARKEN 150	// of 256; keeps the bevel below the lava
+
+extern const unsigned char menu_lava_rgb[];
+
+static GLuint s_logo_tex[NK_UI_LAVA_FRAMES];
+static float s_logo_aspect;	// width / height
+static int s_logo_tried;
+
+static void nk_ui_logo_drop(void)
+{
+	int f;
+
+	for (f = 0; f < NK_UI_LAVA_FRAMES; f++)
+	{
+		if (s_logo_tex[f])
+			glDeleteTextures(1, &s_logo_tex[f]);
+		s_logo_tex[f] = 0;
+	}
+}
+
+// Letter bodies are saturated orange; the bevel shadow is grey.
+static int nk_ui_logo_body_weight(const ubyte *px)
+{
+	int hi = max(px[0], max(px[1], px[2]));
+	int lo = min(px[0], min(px[1], px[2]));
+	int sat = hi ? (hi - lo) * 255 / hi : 0;
+
+	return max(0, min(256, (sat - NK_UI_LAVA_SAT_FLOOR) * 256 / NK_UI_LAVA_SAT_RAMP));
+}
+
+// The bevel shadow, recoloured: red at the top of the logo to orange at the
+// bottom, still darkened by the original grey so its depth survives.
+static int nk_ui_logo_shadow_channel(int top, int bottom, int y, int h, int grey)
+{
+	int gradient = top + (bottom - top) * y / h;
+
+	return gradient * grey * NK_UI_SHADOW_DARKEN / (255 * 256) * 2;
+}
+
+// Replaces the letter bodies with one lava frame, keeping the logo's own
+// shading so the bevel still reads.
+static void nk_ui_logo_paint_lava(ubyte *out, const ubyte *logo, int w, int h, int frame)
+{
+	const ubyte *lava = menu_lava_rgb + frame * NK_UI_LAVA_TILE * NK_UI_LAVA_TILE * 3;
+	static const int shadow_top[3] = NK_UI_SHADOW_TOP_RGB;
+	static const int shadow_bottom[3] = NK_UI_SHADOW_BOTTOM_RGB;
+	int x, y, c;
+
+	for (y = 0; y < h; y++)
+	{
+		for (x = 0; x < w; x++)
+		{
+			const ubyte *src = logo + (y * w + x) * 4;
+			ubyte *dst = out + (y * w + x) * 4;
+			int weight = nk_ui_logo_body_weight(src);
+			int luma = (src[0] * 3 + src[1] * 6 + src[2]) / 10;
+			int shade = 180 + luma;
+			const ubyte *tex = lava + (((y / NK_UI_LAVA_SCALE) % NK_UI_LAVA_TILE) * NK_UI_LAVA_TILE
+				+ (x / NK_UI_LAVA_SCALE) % NK_UI_LAVA_TILE) * 3;
+
+			for (c = 0; c < 3; c++)
+			{
+				int lit = min(255, tex[c] * shade / 256);
+				int shadow = min(255, nk_ui_logo_shadow_channel(shadow_top[c], shadow_bottom[c], y, h, luma));
+
+				dst[c] = (ubyte)((shadow * (256 - weight) + lit * weight) / 256);
+			}
+			dst[3] = src[3];
+		}
+	}
+}
+
+static void nk_ui_logo_load(void)
+{
+	int w, h, channels, f;
+	ubyte *pixels = shotimg_decode_memory(menu_logo_png, menu_logo_png_len, &w, &h, &channels);
+	ubyte *frame_px;
+
+	s_logo_tried = 1;
+	nk_ui_logo_drop();
+	if (!pixels)
+		return;
+	frame_px = d_malloc((size_t)w * h * 4);
+	if (!frame_px || channels != 4)
+	{
+		d_free(frame_px);
+		d_free(pixels);
+		return;
+	}
+	for (f = 0; f < NK_UI_LAVA_FRAMES; f++)
+	{
+		nk_ui_logo_paint_lava(frame_px, pixels, w, h, f);
+		s_logo_tex[f] = nk_ui_make_texture(frame_px, w, h, 4);
+	}
+	s_logo_aspect = (float)w / h;
+	d_free(frame_px);
+	d_free(pixels);
+}
+
+// The build's own version line, centred under the logo in the plain game
+// font. Fixed red rather than a palette entry: the menu background is a
+// player-chosen image, and its palette would otherwise tint this.
+#define NK_UI_VERSION_RED { 1.0f, 0.12f, 0.1f, 1.0f }
+
+// What the version line needs under the logo: its own height plus the gap.
+static float nk_ui_logo_version_height(void)
+{
+	if (!s_body_font.ready)
+		return 0.0f;
+	return (float)s_body_font.src_h * s_body_font.scale + (float)SHEIGHT * NK_UI_LOGO_VERSION_GAP_FRAC;
+}
+
+// How much of that the logo picture's own padding already covers.
+static float nk_ui_logo_version_reserve(float logo_h)
+{
+	float uncovered = nk_ui_logo_version_height() - logo_h * (1.0f - NK_UI_LOGO_LETTERS_BOTTOM_FRAC);
+
+	return uncovered > 0.0f ? uncovered : 0.0f;
+}
+
+// One glyph of the baked menu font, tinted `color`, at pixel position (x, y).
+static void nk_ui_draw_glyph(const struct nk_ui_font *font, int index, float x, float y, const GLfloat *color)
+{
+	const struct nk_ui_glyph *g = &font->glyph[index];
+	float w = g->w * font->scale, h = font->src_h * font->scale;
+	float x0 = x / SWIDTH, x1 = (x + w) / SWIDTH;
+	float y0 = 1 - y / SHEIGHT, y1 = 1 - (y + h) / SHEIGHT;
+	float u0 = (float)g->x / font->atlas_w, u1 = (float)(g->x + g->w) / font->atlas_w;
+	float v0 = (float)g->y / font->atlas_h, v1 = (float)(g->y + font->src_h) / font->atlas_h;
+	const GLfloat vertices[] = { x0, y0, x1, y0, x1, y1, x0, y1 };
+	const GLfloat texcoords[] = { u0, v0, u1, v0, u1, v1, u0, v1 };
+	const GLfloat colors[] = { color[0], color[1], color[2], color[3], color[0], color[1], color[2], color[3],
+		color[0], color[1], color[2], color[3], color[0], color[1], color[2], color[3] };
+
+	glVertexPointer(2, GL_FLOAT, 0, vertices);
+	glColorPointer(4, GL_FLOAT, 0, colors);
+	glTexCoordPointer(2, GL_FLOAT, 0, texcoords);
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+}
+
+// Menu-font text in a fixed red, as textured quads: the game's palette-
+// indexed text would be tinted by whatever palette the chosen menu
+// background loaded. Left edge at `left_px`.
+static void nk_ui_draw_red_text(const char *text, float left_px, float top_px)
+{
+	static const GLfloat red[] = NK_UI_VERSION_RED;
+	const struct nk_ui_font *font = &s_body_font;
+	const char *c;
+	float x;
+
+	if (!font->ready)
+		return;
+	x = left_px;
+
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glEnable(GL_TEXTURE_2D);
+	glBindTexture(GL_TEXTURE_2D, font->tex);
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glEnableClientState(GL_COLOR_ARRAY);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	for (c = text; *c; c++)
+	{
+		int index = nk_ui_font_glyph_index(font, (nk_rune)(unsigned char)*c);
+
+		if (index < 0)
+			continue;
+		nk_ui_draw_glyph(font, index, x, top_px, red);
+		x += font->glyph[index].w * font->scale;
+	}
+	glDisableClientState(GL_VERTEX_ARRAY);
+	glDisableClientState(GL_COLOR_ARRAY);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+// Forgets every texture id without deleting it; see nk_ui_sync_context().
+static void nk_ui_forget_textures(void)
+{
+	int f;
+
+	s_body_font.tex = s_head_font.tex = s_title_font.tex = 0;
+	s_body_font.ready = s_head_font.ready = s_title_font.ready = 0;
+	s_white_tex = 0;
+	s_backdrop.tex = 0;
+	s_backdrop.loaded[0] = '\0';
+	for (f = 0; f < NK_UI_LAVA_FRAMES; f++)
+		s_logo_tex[f] = 0;
+	s_logo_tried = 0;
+}
+
+static void nk_ui_draw_logo_version(float left_px, float top_px)
+{
+	nk_ui_draw_red_text(DESCENT_VERSION, left_px, top_px);
+}
+
+// The copyright line, centred along the bottom edge of the menu screen.
+void nk_ui_draw_copyright(const char *text)
+{
+	nk_ui_init_once();
+	nk_ui_sync_context();
+	nk_ui_sync_fonts();
+	if (!s_body_font.ready)
+		return;
+	nk_ui_draw_red_text(text, ((float)SWIDTH - nk_ui_text_width(&s_body_font, text)) * 0.5f,
+		(float)SHEIGHT - s_body_font.src_h * s_body_font.scale * 2.0f);
+}
+
+// Draws the logo resting just above `menu_top_px`, left edge at `left_px`.
+void nk_ui_draw_menu_logo(float left_px, float menu_top_px)
+{
+	float screen_w = (float)SWIDTH, screen_h = (float)SHEIGHT;
+	float min_top = screen_h * NK_UI_LOGO_MIN_TOP_FRAC;
+	float w = screen_w * NK_UI_LOGO_WIDTH_FRAC;
+	float h, top, version_h;
+
+	nk_ui_init_once();
+	nk_ui_sync_context();
+	nk_ui_sync_fonts();
+	if (!s_logo_tried || (s_logo_tex[0] && !glIsTexture(s_logo_tex[0])))
+		nk_ui_logo_load();
+	if (!s_logo_tex[0])
+		return;
+
+	h = w / s_logo_aspect;
+	version_h = nk_ui_logo_version_reserve(h);
+	top = menu_top_px - screen_h * NK_UI_LOGO_GAP_FRAC - version_h - h;
+	// Shrink rather than run off the top when the menu sits high.
+	if (top < min_top)
+	{
+		h = menu_top_px - screen_h * NK_UI_LOGO_GAP_FRAC - version_h - min_top;
+		version_h = nk_ui_logo_version_reserve(h);
+		h = menu_top_px - screen_h * NK_UI_LOGO_GAP_FRAC - version_h - min_top;
+		if (h <= 0)
+			return;
+		w = h * s_logo_aspect;
+		top = min_top;
+	}
+	nk_ui_draw_logo_version(left_px + w * NK_UI_LOGO_LETTERS_LEFT_FRAC, top + h * NK_UI_LOGO_LETTERS_BOTTOM_FRAC + screen_h * NK_UI_LOGO_VERSION_GAP_FRAC);
+	nk_ui_draw_quad(s_logo_tex[(SDL_GetTicks() / NK_UI_LAVA_FRAME_MS) % NK_UI_LAVA_FRAMES], left_px / screen_w, top / screen_h, (left_px + w) / screen_w, (top + h) / screen_h, 1);
 }
 
 void nk_ui_screenshots(void)
@@ -3655,160 +4107,15 @@ void nk_ui_screenshots(void)
 	if (!s.names)
 		return;
 
+	s.game_art = !strncmp(GameCfg.MenuBackground, NK_UI_GAME_ART_PREFIX, strlen(NK_UI_GAME_ART_PREFIX));
 	nk_ui_shots_scan(&s);
+	nk_ui_shots_select_current(&s);
 	while (s.running)
 	{
-		// Arrow keys walk the list; the panel itself has nothing to focus.
-		if (s.count)
-		{
-			s.selected += s_arrow_steps;
-			s_arrow_steps = 0;
-			if (s.selected < 0)
-				s.selected = 0;
-			if (s.selected >= s.count)
-				s.selected = s.count - 1;
-		}
 		if (!nk_ui_frame("Screenshots", nk_vec2(0.8f, 0.8f), nk_ui_build_shots, &s))
 			break;
 	}
 
 	nk_ui_shots_drop_texture(&s);
 	d_free(s.names);
-}
-
-// ==============================
-// Peer book -- who you have played with, where they answered last, and how
-// often a P2P route came up with them. peerbook.c owns the records; this
-// only shows them and hands one back to the manual-join screen.
-// ==============================
-
-#define NK_UI_PEER_NAME_ROWS 7.0f
-#define NK_UI_PEER_ADDR_ROWS 9.0f
-#define NK_UI_PEER_STAT_ROWS 5.0f
-#define NK_UI_PEER_SECONDS_PER_DAY 86400
-
-struct nk_ui_peers
-{
-	int selected;
-	int running;
-	char dial[PEERBOOK_ADDR_LEN];	// address the player chose to join, if any
-};
-
-static void nk_ui_peer_last_seen(char *out, size_t size, int last_seen)
-{
-	int days;
-
-	if (!last_seen)
-	{
-		snprintf(out, size, "-");
-		return;
-	}
-	days = (int)((time(NULL) - last_seen) / NK_UI_PEER_SECONDS_PER_DAY);
-	if (days <= 0)
-		snprintf(out, size, "today");
-	else if (days == 1)
-		snprintf(out, size, "1 day");
-	else
-		snprintf(out, size, "%d days", days);
-}
-
-static void nk_ui_peer_row(struct nk_context *ctx, struct nk_ui_peers *state, int index, float name_w, float addr_w, float stat_w)
-{
-	const peer_entry *p = peerbook_get(index);
-	char stat[24], seen[16];
-	nk_bool chosen = index == state->selected;
-
-	if (!p)
-		return;
-
-	snprintf(stat, sizeof(stat), "%d/%d p2p", p->p2p, p->games);
-	nk_ui_peer_last_seen(seen, sizeof(seen), p->last_seen);
-
-	nk_layout_row_begin(ctx, NK_STATIC, (float)NK_UI_ROW_HEIGHT, 4);
-	nk_layout_row_push(ctx, name_w);
-	if (nk_selectable_label(ctx, p->name, NK_TEXT_LEFT, &chosen) && chosen)
-		state->selected = index;
-	nk_layout_row_push(ctx, addr_w);
-	nk_label(ctx, p->addr[0] ? p->addr : "unknown", NK_TEXT_LEFT);
-	nk_layout_row_push(ctx, stat_w);
-	nk_label(ctx, stat, NK_TEXT_LEFT);
-	nk_layout_row_push(ctx, stat_w);
-	nk_label(ctx, seen, NK_TEXT_LEFT);
-	nk_layout_row_end(ctx);
-}
-
-static void nk_ui_build_peers(struct nk_context *ctx, void *userdata)
-{
-	struct nk_ui_peers *state = (struct nk_ui_peers *)userdata;
-	struct nk_rect region = nk_window_get_content_region(ctx);
-	float name_w = s_row_h * NK_UI_PEER_NAME_ROWS;
-	float addr_w = s_row_h * NK_UI_PEER_ADDR_ROWS;
-	float stat_w = s_row_h * NK_UI_PEER_STAT_ROWS;
-	float list_h = region.h - NK_UI_ROW_HEIGHT * 3;
-	int count = peerbook_count();
-	int i;
-
-	if (list_h < NK_UI_ROW_HEIGHT)
-		list_h = NK_UI_ROW_HEIGHT;
-
-	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	nk_label(ctx, "PILOT            LAST ADDRESS         ROUTE        SEEN", NK_TEXT_LEFT);
-
-	nk_layout_row_dynamic(ctx, list_h, 1);
-	if (nk_group_begin(ctx, "peerlist", NK_WINDOW_BORDER))
-	{
-		for (i = 0; i < count; i++)
-			nk_ui_peer_row(ctx, state, i, name_w, addr_w, stat_w);
-		if (!count)
-		{
-			nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-			nk_label(ctx, "No peers recorded yet -- play a netgame first.", NK_TEXT_LEFT);
-		}
-		nk_group_end(ctx);
-	}
-
-	if (state->selected >= count)
-		state->selected = count - 1;
-	if (state->selected < 0)
-		state->selected = 0;
-
-	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 3);
-	if (nk_button_label(ctx, "Join This Peer"))
-	{
-		const peer_entry *p = peerbook_get(state->selected);
-
-		if (p && p->addr[0])
-		{
-			snprintf(state->dial, sizeof(state->dial), "%s", p->addr);
-			state->running = 0;
-		}
-	}
-	if (nk_button_label(ctx, "Forget"))
-		peerbook_forget(state->selected);
-	if (nk_button_label(ctx, "Close"))
-		state->running = 0;
-}
-
-int nk_ui_peerbook(char *dial, size_t dial_size)
-{
-	struct nk_ui_peers state;
-
-	nk_ui_init_once();
-	memset(&state, 0, sizeof(state));
-	state.running = 1;
-	peerbook_load();
-
-	while (state.running)
-	{
-		state.selected += s_arrow_steps;
-		s_arrow_steps = 0;
-		if (!nk_ui_frame("Peer Book", nk_vec2(0.7f, 0.7f), nk_ui_build_peers, &state))
-			break;
-	}
-
-	peerbook_save();
-	if (!state.dial[0] || !dial || !dial_size)
-		return 0;
-	snprintf(dial, dial_size, "%s", state.dial);
-	return 1;
 }

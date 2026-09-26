@@ -20,9 +20,16 @@ void nk_ui_weapon_autoselect(void);
 // Browses the screenshots in SCRNS_DIR, previewing the one selected.
 void nk_ui_screenshots(void);
 
-// Shows the peer book. Returns 1 and fills `dial` ("host:port") when the
-// player picked someone to join, 0 when they just closed it.
-int nk_ui_peerbook(char *dial, size_t dial_size);
+// Draws the player's chosen menu picture full screen as plain RGB. Returns 0
+// when none is set or it can't be read, so the caller draws the stock one.
+int nk_ui_draw_backdrop(void);
+
+// Draws `text` centred along the bottom edge in a fixed red, unaffected by the
+// menu background's palette.
+void nk_ui_draw_copyright(const char *text);
+
+// Draws the logo just above `menu_top_px`, its left edge `left_px` from the left.
+void nk_ui_draw_menu_logo(float left_px, float menu_top_px);
 
 // Runs the netgame hosting setup screen (game name, mode, player/observer
 // limits, etc). Returns 1 if the player started the game, 0 if they

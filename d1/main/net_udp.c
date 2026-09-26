@@ -31,7 +31,6 @@
 #include "gameseq.h"
 #include "fireball.h"
 #include "net_udp.h"
-#include "peerbook.h"
 #include "dxma.h"
 #include "game.h"
 #include "multi.h"
@@ -1992,16 +1991,6 @@ static int manual_join_game_handler(newmenu *menu, d_event *event, direct_join *
 	return 0;
 }
 
-// SNG: the peer book hands an address straight to the manual-join screen.
-static const char *Udp_prefill_addr = NULL;
-
-void net_udp_join_peer(const char *addr)
-{
-	Udp_prefill_addr = addr;
-	net_udp_manual_join_game();
-	Udp_prefill_addr = NULL;
-}
-
 void net_udp_manual_join_game()
 {
 	direct_join *dj;
@@ -2019,19 +2008,6 @@ void net_udp_manual_join_game()
 
 	memset(&dj->addrbuf,'\0', sizeof(char)*128);
 	snprintf(dj->addrbuf, sizeof(dj->addrbuf), "%s", GameArg.MplUdpHostAddr);
-	if (Udp_prefill_addr)
-	{
-		// The book stores "host:port"; the screen keeps the two apart.
-		const char *colon = strrchr(Udp_prefill_addr, ':');
-		size_t host_len = colon ? (size_t)(colon - Udp_prefill_addr) : strlen(Udp_prefill_addr);
-
-		if (host_len >= sizeof(dj->addrbuf))
-			host_len = sizeof(dj->addrbuf) - 1;
-		memcpy(dj->addrbuf, Udp_prefill_addr, host_len);
-		dj->addrbuf[host_len] = '\0';
-		if (colon && colon[1])
-			snprintf(dj->portbuf, sizeof(dj->portbuf), "%s", colon + 1);
-	}
 
 	if (GameArg.MplUdpHostPort != 0)
 		snprintf(dj->portbuf, sizeof(dj->portbuf), "%d", GameArg.MplUdpHostPort);
@@ -2046,7 +2022,7 @@ void net_udp_manual_join_game()
 	nitems = 0;
 	
 	m[nitems].type = NM_TYPE_TEXT;  m[nitems].text="GAME ADDRESS OR HOSTNAME:";     	nitems++;
-	m[nitems].type = NM_TYPE_INPUT; m[nitems].text=dj->addrbuf; m[nitems].text_len=128; 	nitems++;
+	m[nitems].type = NM_TYPE_INPUT; m[nitems].text=dj->addrbuf; m[nitems].text_len=sizeof(dj->addrbuf)-1; 	nitems++;
 	m[nitems].type = NM_TYPE_TEXT;  m[nitems].text="GAME PORT:";                    	nitems++;
 	m[nitems].type = NM_TYPE_INPUT; m[nitems].text=dj->portbuf; m[nitems].text_len=5;   	nitems++;
 	m[nitems].type = NM_TYPE_TEXT;  m[nitems].text="MY PORT:";	                    	nitems++;
@@ -2712,8 +2688,6 @@ net_udp_new_player(UDP_sequence_packet *their)
 	}
 	//memcpy(&Netgame.players[pnum].protocol.udp.addr, &their->player.protocol.udp.addr, sizeof(struct _sockaddr));
 	update_address_for_player(pnum, their->player.protocol.udp.addr);
-	peerbook_note_player(their->player.callsign, &Netgame.players[pnum].protocol.udp.addr,
-		gns_bridge_is_connected(pnum));
 
 #ifdef USE_GNS
 	/* Migrate any live pre-join ICE connection to this permanent player slot. */
@@ -4908,7 +4882,7 @@ void net_udp_staticpowerupsmenu(void)
 
 	m[opt].type = NM_TYPE_CHECK;  m[opt].text = "All Weapons"; m[opt].value = Netgame.StaticPowerups; opt++;
 	m[opt].type = NM_TYPE_TEXT; m[opt].text = ""; opt++;	
-	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Select Static Weapons..."; opt++;	
+	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Select Static Weapons"; opt++;	
 	m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Fusion";  m[opt].value = Netgame.StaticFusion; opt++;
 	m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Spreadfire"; m[opt].value = Netgame.StaticSpread; opt++;
 	m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Vulcan"; m[opt].value = Netgame.StaticVulcan; opt++;
@@ -4988,7 +4962,7 @@ void net_udp_arcade_menu(void)
 	opt_arcade_teams = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Team anarchy (off = FFA)"; m[opt].value = Netgame.ArcadeTeams; opt++;
 
-	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Powers that can drop..."; opt++;
+	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Powers that can drop"; opt++;
 
 	for (i = 0; i < NUM_ARCADE_SUPERPOWERS; i++)
 	{
@@ -4999,7 +4973,7 @@ void net_udp_arcade_menu(void)
 		opt++;
 	}
 
-	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Drop timing..."; opt++;
+	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Drop timing"; opt++;
 
 	opt_arcade_interval = opt;
 	m[opt].type = NM_TYPE_SLIDER; m[opt].text = interval_text; m[opt].min_value = 0; m[opt].max_value = ARCADE_INTERVAL_MAX;
@@ -5013,7 +4987,7 @@ void net_udp_arcade_menu(void)
 	m[opt].type = NM_TYPE_SLIDER; m[opt].text = countdown_text; m[opt].min_value = 0; m[opt].max_value = 9;
 	m[opt].value = Netgame.ArcadeCountdown; opt++;
 
-	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Amounts given..."; opt++;
+	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Amounts given"; opt++;
 
 	opt_arcade_homing = opt;
 	m[opt].type = NM_TYPE_SLIDER; m[opt].text = homing_text; m[opt].min_value = 0; m[opt].max_value = 11;
@@ -5113,7 +5087,7 @@ void net_udp_more_game_options ()
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Low Vulcan Ammo (333)"; m[opt].value = Netgame.LowVulcan; opt++;	
 
 	opt_setpower = opt;
-	m[opt].type = NM_TYPE_MENU;  m[opt].text = "Set Objects allowed..."; opt++;
+	m[opt].type = NM_TYPE_MENU;  m[opt].text = "Set Objects allowed"; opt++;
 
 	m[opt].type = NM_TYPE_TEXT; m[opt].text = ""; opt++;
 
@@ -5197,10 +5171,10 @@ void net_udp_more_game_options ()
 	m[opt].type = NM_TYPE_TEXT; m[opt].text = "SNG Toggles"; opt++;
 
 	opt_staticpowerupsmenu = opt;
-	m[opt].type = NM_TYPE_MENU;  m[opt].text = "Select Static Weapons..."; opt++;
+	m[opt].type = NM_TYPE_MENU;  m[opt].text = "Select Static Weapons"; opt++;
 
 	opt_spawnwithmenu = opt;
-	m[opt].type = NM_TYPE_MENU;  m[opt].text = "Start Mission With..."; opt++;
+	m[opt].type = NM_TYPE_MENU;  m[opt].text = "Start Mission With"; opt++;
 
 	opt_weaponstun = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "No Weapon Stun";  m[opt].value = Netgame.WeaponStun; opt++;
