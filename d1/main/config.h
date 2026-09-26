@@ -21,6 +21,10 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #ifndef _CONFIG_H
 #define _CONFIG_H
 
+#define MENU_BACKGROUND_LEN 64
+// SNG: the art shown until the player picks another (hi-res add-on art; stock menu if absent)
+#define MENU_BACKGROUND_DEFAULT "pcx:jup01h.pcx"
+
 #include "player.h"
 #include "mission.h"
 
@@ -53,6 +57,7 @@ typedef struct Cfg
 	int ClassicDepth;
 	int BorderlessWindow;
 	int MenuColor;	// SNG: accent colour family of the menus, see nk_ui.c
+	char MenuBackground[MENU_BACKGROUND_LEN];	// SNG: screenshot file in SCRNS_DIR, empty = stock
 } __pack__ Cfg;
 
 extern struct Cfg GameCfg;

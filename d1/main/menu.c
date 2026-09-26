@@ -73,7 +73,8 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "net_udp.h"
 #endif
 #include "nk_ui.h"	// SNG: menu accent colours (defines USE_NK_UI when available)
-#include "peerbook.h"
+#ifdef USE_NK_UI
+#endif
 #ifdef EDITOR
 #include "editor/editor.h"
 #include "editor/kdefs.h"
@@ -112,8 +113,8 @@ enum MENUS
     MENU_JOIN_MANUAL_UDP_NETGAME,
     MENU_JOIN_LIST_UDP_NETGAME,
     MENU_DXMA_MISSIONS,
-    MENU_PEERBOOK,
     #endif
+    MENU_PLAY,
     #ifndef RELEASE
     MENU_SANDBOX
     #endif
@@ -134,6 +135,7 @@ static window *menus[16] = { NULL };
 int do_option(int select);
 int do_new_game_menu(void);
 void do_multi_player_menu();
+static void do_play_menu(void);
 #ifndef RELEASE
 void do_sandbox_menu();
 #endif
@@ -425,11 +427,16 @@ int RegisterPlayer()
 void draw_copyright()
 {
 	gr_set_current_canvas(NULL);
+#ifdef USE_NK_UI
+	// Drawn outside the game palette: BM_XRGB colours drift with whatever
+	// palette the chosen menu background loaded. The version line lives
+	// under the logo -- see nk_ui_draw_logo_version().
+	nk_ui_draw_copyright(TXT_COPYRIGHT);
+#else
 	gr_set_curfont(GAME_FONT);
-	gr_set_fontcolor(BM_XRGB(6,6,6),-1);
+	gr_set_fontcolor(BM_XRGB(25,0,0),-1);
 	gr_string(0x8000,SHEIGHT-LINE_SPACING,TXT_COPYRIGHT);
-	gr_set_fontcolor( BM_XRGB(25,0,0), -1);
-	gr_string(0x8000,SHEIGHT-(LINE_SPACING*2),DESCENT_VERSION);
+#endif
 }
 
 int main_menu_handler(newmenu *menu, d_event *event, int *menu_choice )
@@ -495,17 +502,14 @@ void create_main_menu(newmenu_item *m, int *menu_choice, int *callers_num_option
 	#ifndef DEMO_ONLY
 	num_options = 0;
 
-	ADD_ITEM(TXT_NEW_GAME,MENU_NEW_GAME,KEY_N);
-
-	ADD_ITEM(TXT_LOAD_GAME,MENU_LOAD_GAME,KEY_L);
-#if defined(USE_UDP)
-	ADD_ITEM(TXT_MULTIPLAYER_,MENU_MULTIPLAYER,-1);
-#endif
-
+	ADD_ITEM("Play Descent",MENU_PLAY,KEY_P);
 	ADD_ITEM(TXT_OPTIONS_, MENU_CONFIG, -1 );
-	ADD_ITEM(TXT_VIEW_DEMO,MENU_DEMO_PLAY,0);
 #ifdef USE_NK_UI
 	ADD_ITEM("Screenshots", MENU_SCREENSHOTS, -1);
+#endif
+	ADD_ITEM("Demos",MENU_DEMO_PLAY,0);
+#ifdef USE_UDP
+	ADD_ITEM("Missions", MENU_DXMA_MISSIONS, -1);
 #endif
 	if (!PHYSFSX_exists("warning.pcx",1)) /* SHAREWARE */
 		ADD_ITEM(TXT_ORDERING_INFO,MENU_ORDER_INFO,-1);
@@ -549,7 +553,7 @@ int DoMenu()
 
 	create_main_menu(m, menu_choice, &num_options); // may have to change, eg, maybe selected pilot and no save games.
 
-	newmenu_do3( "", NULL, num_options, m, (int (*)(newmenu *, d_event *, void *))main_menu_handler, menu_choice, 0, Menu_pcx_name);
+	newmenu_do3( "", NULL, num_options, m, (int (*)(newmenu *, d_event *, void *))main_menu_handler, menu_choice, 0, NM_CUSTOM_BACKGROUND);
 
 	return 0;
 }
@@ -560,6 +564,9 @@ extern void show_order_form(void);	// John didn't want this in inferno.h so I ju
 int do_option ( int select)
 {
 	switch (select) {
+		case MENU_PLAY:
+			do_play_menu();
+			break;
 		case MENU_NEW_GAME:
 			select_mission(0, "New Game\n\nSelect mission", do_new_game_menu);
 			break;
@@ -592,14 +599,6 @@ int do_option ( int select)
 			break;
 #endif
 #ifdef USE_NK_UI
-		case MENU_PEERBOOK:
-		{
-			char dial[PEERBOOK_ADDR_LEN];
-
-			if (nk_ui_peerbook(dial, sizeof(dial)))
-				net_udp_join_peer(dial);
-			break;
-		}
 		case MENU_SCREENSHOTS:
 			nk_ui_screenshots();
 			break;
@@ -1225,15 +1224,15 @@ void input_config()
 
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "BINDINGS"; nitems++;
 	opt_ic_confkey = nitems;
-	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Keyboard..."; nitems++;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Keyboard"; nitems++;
 	opt_ic_confjoy = nitems;
-	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Joystick..."; nitems++;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Joystick"; nitems++;
 	opt_ic_confmouse = nitems;
-	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Mouse..."; nitems++;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Mouse"; nitems++;
 	opt_ic_confweap = nitems;
-	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Weapon keys..."; nitems++;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Weapon keys"; nitems++;
 	opt_ic_joymousesens = nitems;
-	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Sensitivity & deadzone..."; nitems++;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Sensitivity & deadzone"; nitems++;
 
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "MOUSE"; nitems++;
 	opt_ic_mouseflightsim = nitems;
@@ -1251,11 +1250,11 @@ void input_config()
 
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "KEY REFERENCE"; nitems++;
 	opt_ic_help0 = nitems;
-	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Game system keys..."; nitems++;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Game system keys"; nitems++;
 	opt_ic_help1 = nitems;
-	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Netgame system keys..."; nitems++;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Netgame system keys"; nitems++;
 	opt_ic_help2 = nitems;
-	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Demo system keys..."; nitems++;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Demo system keys"; nitems++;
 
 	newmenu_do1_nk(NULL, TXT_CONTROLS, nitems, m, input_config_menuset, NULL, 1);
 }
@@ -1453,6 +1452,8 @@ void graphics_config()
 	GameCfg.VSync = m[opt_gr_vsync].value;
 	GameCfg.Multisample = m[opt_gr_multisample].value;
 	GameCfg.ClassicDepth = m[opt_gr_classicdepth].value;
+#ifdef USE_NK_UI
+#endif
 #endif
 	GameCfg.GammaLevel = m[opt_gr_brightness].value;
 	GameCfg.FPSIndicator = m[opt_gr_fpsindi].value;
@@ -1968,6 +1969,17 @@ void do_sound_menu()
 #endif
 
 #ifdef USE_SDLMIXER
+	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "MAIN MENU MUSIC";
+
+	opt_sm_cm_mtype3_file1_b = nitems;
+	m[nitems].type = PATH_HEADER_TYPE; m[nitems++].text = "music file (any source but none)" BROWSE_TXT;
+
+	opt_sm_cm_mtype3_file1 = nitems;
+	m[nitems].type = NM_TYPE_INPUT; m[nitems].text = GameCfg.CMMiscMusic[SONG_TITLE]; m[nitems++].text_len = NM_MAX_TEXT_LEN-1;
+
+#endif
+
+#ifdef USE_SDLMIXER
 	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "CD MUSIC & JUKEBOX";
 #else
 	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "CD MUSIC";
@@ -1996,12 +2008,6 @@ void do_sound_menu()
 	m[nitems].type = NM_TYPE_RADIO; m[nitems].text = "random"; m[nitems].value = (GameCfg.CMLevelMusicPlayOrder == MUSIC_CM_PLAYORDER_RAND); m[nitems].group = 1; nitems++;
 
 	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "NON-LEVEL MUSIC";
-
-	opt_sm_cm_mtype3_file1_b = nitems;
-	m[nitems].type = PATH_HEADER_TYPE; m[nitems++].text = "main menu" BROWSE_TXT;
-
-	opt_sm_cm_mtype3_file1 = nitems;
-	m[nitems].type = NM_TYPE_INPUT; m[nitems].text = GameCfg.CMMiscMusic[SONG_TITLE]; m[nitems++].text_len = NM_MAX_TEXT_LEN-1;
 
 	opt_sm_cm_mtype3_file2_b = nitems;
 	m[nitems].type = PATH_HEADER_TYPE; m[nitems++].text = "briefing" BROWSE_TXT;
@@ -2636,15 +2642,58 @@ void do_multi_player_menu()
 	m[num_options].type=NM_TYPE_MENU; m[num_options].text="FIND LAN GAMES"; menu_choice[num_options]=MENU_JOIN_LIST_UDP_NETGAME; num_options++;
 #endif
 	m[num_options].type=NM_TYPE_MENU; m[num_options].text="JOIN GAME MANUALLY"; menu_choice[num_options]=MENU_JOIN_MANUAL_UDP_NETGAME; num_options++;
-	m[num_options].type=NM_TYPE_MENU; m[num_options].text="DXMA MISSIONS"; menu_choice[num_options]=MENU_DXMA_MISSIONS; num_options++;
-#ifdef USE_NK_UI
-	m[num_options].type=NM_TYPE_MENU; m[num_options].text="PEER BOOK"; menu_choice[num_options]=MENU_PEERBOOK; num_options++;
-#endif
 #endif
 
 	newmenu_do3_nk( NULL, TXT_MULTIPLAYER, num_options, m, (int (*)(newmenu *, d_event *, void *))multi_player_menu_handler, menu_choice, 0, NULL );
 }
 #endif
+
+static int play_menu_handler(newmenu *menu, d_event *event, int *menu_choice)
+{
+	newmenu_item *items = newmenu_get_items(menu);
+
+	switch (event->type)
+	{
+		case EVENT_NEWMENU_SELECTED:
+			return do_option(menu_choice[newmenu_get_citem(menu)]);
+
+		case EVENT_WINDOW_CLOSE:
+			d_free(menu_choice);
+			d_free(items);
+			break;
+
+		default:
+			break;
+	}
+
+	return 0;
+}
+
+static void do_play_menu(void)
+{
+	int *menu_choice;
+	newmenu_item *m;
+	int num_options = 0;
+
+	MALLOC(menu_choice, int, 3);
+	if (!menu_choice)
+		return;
+
+	MALLOC(m, newmenu_item, 3);
+	if (!m)
+	{
+		d_free(menu_choice);
+		return;
+	}
+
+	ADD_ITEM("New Game", MENU_NEW_GAME, KEY_N);
+	ADD_ITEM("Load Game", MENU_LOAD_GAME, KEY_L);
+#ifdef USE_UDP
+	ADD_ITEM("Multiplayer", MENU_MULTIPLAYER, -1);
+#endif
+
+	newmenu_do3_nk( NULL, "Play", num_options, m, (int (*)(newmenu *, d_event *, void *))play_menu_handler, menu_choice, 0, NULL );
+}
 
 void do_options_menu()
 {
@@ -2656,17 +2705,17 @@ void do_options_menu()
 		return;
 
 	m[opt_options_head_display ].type = NM_TYPE_TEXT; m[opt_options_head_display ].text = "DISPLAY";
-	m[opt_options_graphics     ].type = NM_TYPE_MENU; m[opt_options_graphics     ].text = "Graphics & Effects...";
-	m[opt_options_resolution   ].type = NM_TYPE_MENU; m[opt_options_resolution   ].text = "Screen Resolution...";
+	m[opt_options_graphics     ].type = NM_TYPE_MENU; m[opt_options_graphics     ].text = "Graphics & Effects";
+	m[opt_options_resolution   ].type = NM_TYPE_MENU; m[opt_options_resolution   ].text = "Screen Resolution";
 	m[opt_options_head_audio   ].type = NM_TYPE_TEXT; m[opt_options_head_audio   ].text = "AUDIO";
-	m[opt_options_sound        ].type = NM_TYPE_MENU; m[opt_options_sound        ].text = "Sound & Music...";
+	m[opt_options_sound        ].type = NM_TYPE_MENU; m[opt_options_sound        ].text = "Sound & Music";
 	m[opt_options_head_controls].type = NM_TYPE_TEXT; m[opt_options_head_controls].text = "CONTROLS & WEAPONS";
 	m[opt_options_controls     ].type = NM_TYPE_MENU; m[opt_options_controls     ].text = TXT_CONTROLS_;
-	m[opt_options_autoselect   ].type = NM_TYPE_MENU; m[opt_options_autoselect   ].text = "Weapon Autoselect...";
+	m[opt_options_autoselect   ].type = NM_TYPE_MENU; m[opt_options_autoselect   ].text = "Weapon Autoselect";
 	m[opt_options_head_game    ].type = NM_TYPE_TEXT; m[opt_options_head_game    ].text = "GAMEPLAY";
-	m[opt_options_misc         ].type = NM_TYPE_MENU; m[opt_options_misc         ].text = "Gameplay & HUD...";
-	m[opt_options_observer     ].type = NM_TYPE_MENU; m[opt_options_observer     ].text = "Observer Mode...";
-	m[opt_options_head_pilot   ].type = NM_TYPE_TEXT; m[opt_options_head_pilot   ].text = "PILOT & INFO";
+	m[opt_options_misc         ].type = NM_TYPE_MENU; m[opt_options_misc         ].text = "Gameplay & HUD";
+	m[opt_options_observer     ].type = NM_TYPE_MENU; m[opt_options_observer     ].text = "Observer Mode";
+	m[opt_options_head_pilot   ].type = NM_TYPE_TEXT; m[opt_options_head_pilot   ].text = "MISC";
 	m[opt_options_pilot        ].type = NM_TYPE_MENU; m[opt_options_pilot        ].text = TXT_CHANGE_PILOTS;
 	m[opt_options_scores       ].type = NM_TYPE_MENU; m[opt_options_scores       ].text = TXT_VIEW_SCORES;
 	m[opt_options_credits      ].type = NM_TYPE_MENU; m[opt_options_credits      ].text = TXT_CREDITS;

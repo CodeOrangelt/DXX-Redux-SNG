@@ -303,11 +303,30 @@ int songs_play_file(char *filename, int repeat, void (*hook_finished_track)())
 	return 0;
 }
 
+#ifdef USE_SDLMIXER
+// SNG: a main menu track the player picked wins over every music source but "no music".
+static int songs_play_menu_override(int songnum, int repeat)
+{
+	if (songnum != SONG_TITLE || GameCfg.MusicType == MUSIC_TYPE_NONE || !GameCfg.CMMiscMusic[SONG_TITLE][0])
+		return 0;
+	Song_playing = -1;
+	if (!songs_play_file(GameCfg.CMMiscMusic[SONG_TITLE], repeat, NULL))
+		return 0;
+	Song_playing = songnum;
+	return 1;
+}
+#endif
+
 int songs_play_song( int songnum, int repeat )
 {
 	songs_init();
 	if (!Songs_initialized)
 		return 0;
+
+#ifdef USE_SDLMIXER
+	if (songs_play_menu_override(songnum, repeat))
+		return Song_playing;
+#endif
 
 	switch (GameCfg.MusicType)
 	{

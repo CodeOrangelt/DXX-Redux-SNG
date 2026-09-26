@@ -164,6 +164,9 @@ newmenu *nm_messagebox_fixedfont(char *title, int nchoices, ...);
 //should be called whenever the palette changes
 extern void newmenu_free_background();
 
+// SNG: pass as a menu's pcx name to get the player's chosen screenshot, if any.
+#define NM_CUSTOM_BACKGROUND "*custom-background*"
+
 #define NEWMENU_MOUSE
 
 #define NORMAL_CHECK_BOX    "\201"
