@@ -1868,6 +1868,11 @@ int net_udp_game_connect(direct_join *dj)
 
 	if (timer_query() >= dj->last_time + F1_0)
 	{
+		struct sockaddr_in *host = (struct sockaddr_in *)&dj->host_addr;
+
+		con_printf(CON_NORMAL, "Join: %ds in, asking %s:%d, host answered: %s\n",
+			f2i(timer_query() - dj->start_time), inet_ntoa(host->sin_addr), SWAPSHORT(host->sin_port),
+			Netgame.protocol.udp.valid == 1 ? "yes" : "no");
 		net_udp_request_game_info(dj->host_addr, 0);
 		dj->last_time = timer_query();
 	}
@@ -4706,6 +4711,13 @@ int net_udp_start_poll( newmenu *menu, d_event *event, void *userdata )
 	userdata = userdata;
 	
 	Assert(Network_status == NETSTAT_STARTING);
+
+#ifdef USE_TRACKER
+	// The lobby is where clients join, and the tracker can only broker a
+	// punch to a host it has heard a keepalive from -- without this the
+	// host was silent until the game started, so every NAT'd join failed.
+	net_udp_punch_host_frame(timer_query());
+#endif
 
 	for (i=1; i<nitems; i++ ) {
 		if ( (i>= N_players) && (menus[i].value) ) {

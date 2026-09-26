@@ -4596,6 +4596,13 @@ int net_udp_start_poll( newmenu *menu, d_event *event, void *userdata )
 	
 	Assert(Network_status == NETSTAT_STARTING);
 
+#ifdef USE_TRACKER
+	// The lobby is where clients join, and the tracker can only broker a
+	// punch to a host it has heard a keepalive from -- without this the
+	// host was silent until the game started, so every NAT'd join failed.
+	net_udp_punch_host_frame(timer_query());
+#endif
+
 	for (i=1; i<nitems; i++ ) {
 		if ( (i>= N_players) && (menus[i].value) ) {
 			menus[i].value = 0;
