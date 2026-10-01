@@ -240,6 +240,17 @@ void mouse_toggle_cursor(int activate)
 		SDL_ShowCursor(SDL_DISABLE);
 }
 
+// Refreshes the cursor-autohide timestamp without going through the full
+// mouse_button_handler/mouse_motion_handler (which also call event_send()
+// to dispatch the input to whatever window is on top of the game's own
+// window stack). For UI that pumps SDL events itself outside that window
+// system (see d2/main/nk_ui.c) but still wants mouse_cursor_autohide() to
+// behave sanely once control returns to it.
+void mouse_touch_cursor_time(void)
+{
+	Mouse.cursor_time = timer_query();
+}
+
 // Lets in-game UI (e.g. Survival's shop overlay, survival.c) borrow the
 // mouse away from flight control for a bit: while Grabinput is on, the
 // window stays grabbed and the mouse stays in SDL's relative-motion capture

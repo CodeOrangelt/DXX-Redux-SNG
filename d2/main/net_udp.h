@@ -6,8 +6,27 @@
 
 #include "multi.h"
 
+// direct_join carries one in-progress join attempt through net_udp_game_
+// connect()'s NAT-punch/ICE/retry state machine. Shared with nk_ui.c so its
+// Nuklear game browser can drive a join without touching or reimplementing
+// any of that state machine -- it just owns one of these and calls the same
+// functions net_udp_list_join_poll() (the legacy browser) always has.
+typedef struct direct_join
+{
+	struct _sockaddr host_addr;
+	int connecting;
+	fix64 start_time, last_time;
+	char addrbuf[128];
+	char portbuf[6];
+	ubyte join_as_obs;
+} direct_join;
+
+int net_udp_game_connect(direct_join *dj);
+void net_udp_listen(void);
+
 // Exported functions
 int net_udp_setup_game(void);
+char *net_udp_get_my_port_buf(void); // for nk_ui.c: direct access to the (otherwise file-static) UDP_MyPort edit buffer
 void net_udp_manual_join_game();
 void net_udp_list_join_game();
 int net_udp_objnum_is_past(int objnum);
@@ -88,7 +107,8 @@ void udp_tracker_flush_events(void);
 #define UPID_GAME_INFO_SIZE			UPID_MAX_SIZE
 #define UPID_GAME_INFO_LITE_REQ			  4 // Requesting lite info about a netgame. Used for discovering games.
 #define UPID_GAME_INFO_LITE			  5 // Packet containing lite netgame info.
-#define UPID_GAME_INFO_LITE_SIZE		 (31 + (NETGAME_NAME_LEN+1) + (MISSION_NAME_LEN+1))
+#define UPID_GAME_INFO_LITE_SIZE		 (72 + (NETGAME_NAME_LEN+1) + (MISSION_NAME_LEN+1)) // +2: avg_ping, +39: game-rules summary (SNG)
+#define UPID_GAME_INFO_LITE_BASE_SIZE	 (31 + (NETGAME_NAME_LEN+1) + (MISSION_NAME_LEN+1))
 #define UPID_DUMP				  6 // Packet containing why player cannot join this game.
 #define UPID_DUMP_SIZE				  (2 + 4)
 #define UPID_ADDPLAYER				  7 // Packet from Host containing info about a new player.
@@ -136,6 +156,22 @@ void udp_tracker_flush_events(void);
 #endif
 
 // Structure keeping lite game infos (for netlist, etc.)
+// SNG netgame toggles, packed for the lite info packet. No KOTH/LMS bits --
+// unlike D1, D2 has no King of the Hill/Last Man Standing toggles.
+#define LITE_SNG_NO_STUN         (1 << 0)
+#define LITE_SNG_NO_FUSION_FLASH (1 << 1)
+#define LITE_SNG_VULCAN_HEAT     (1 << 2)
+#define LITE_SNG_NO_FUSION_SHAKE (1 << 3)
+#define LITE_SNG_FAST_DOORS      (1 << 4)
+#define LITE_SNG_DARK_BLOBS      (1 << 5)
+#define LITE_SNG_QUIET_FAN       (1 << 6)
+#define LITE_SNG_LOW_VULCAN      (1 << 7)
+#define LITE_SNG_SMALL_SPAWN     (1 << 8)
+#define LITE_SNG_STATIC_WEAPONS  (1 << 9)
+#define LITE_SNG_START_WITH      (1 << 10)
+#define LITE_SNG_ALL_BLUE        (1 << 11)
+#define LITE_SNG_ALT_COLORS      (1 << 12)
+
 typedef struct UDP_netgame_info_lite
 {
 	struct _sockaddr                game_addr;
@@ -152,7 +188,56 @@ typedef struct UDP_netgame_info_lite
 	ubyte                           numconnected;
 	ubyte                           max_numplayers;
 	ubyte                           game_flags;
+	ushort                          avg_ping;    // host's average ping (ms) to its connected players, on the wire
+	short                           host_ping;   // SNG: our own RTT (ms) to the host -- local only, like game_addr above, not sent on the wire
+	ubyte                           has_rules;   // SNG: local only -- packet carried the rules summary below
+	fix64                           ping_probe_sent; // SNG: local only -- when we unicast-probed this host directly for a real ping, 0 if none outstanding
+
+	// SNG: rest of the "Game Rules" summary (net_udp_show_game_rules(),
+	// shown after joining or from the in-game Pause screen) -- broadcast so
+	// the Nuklear browser's "i" info popup can show the same rules before
+	// joining, entirely from this safe broadcast, with no live connection
+	// state (Netgame.players[]/addresses/sync flags) ever touched by a
+	// browsing, not-yet-joined client.
+	int32_t                         AllowedItems;              // bitmask, covers the whole "Allowed Objects" grid
+	int32_t                         KillGoal;
+	fix                             PlayTimeAllowed;
+	int32_t                         control_invul_time;        // "Reactor Life"
+	short                           PacketsPerSec;
+	ubyte                           HomingUpdateRate;
+	ubyte                           SpawnStyle;
+	ubyte                           BrightPlayers;
+	ubyte                           ShowEnemyNames;
+	ubyte                           NoFriendlyFire;
+	ubyte                           RemoteHitSpark;
+	ubyte                           AllowCustomModelsTextures;
+	ubyte                           ReducedFlash;
+	ubyte                           GaussAmmoStyle;
+	ubyte                           RetroProtocol;
+	ubyte                           ShortPackets;
+	ubyte                           AllowColoredLighting;
+	ubyte                           RespawnConcs;
+	ubyte                           PrimaryDupFactor;
+	ubyte                           SecondaryDupFactor;
+	ubyte                           SecondaryCapFactor;
+	ubyte                           NewSpawnAlgorithm;
+	uint32_t                        SngToggles;  // LITE_SNG_* bits
 } __pack__ UDP_netgame_info_lite;
+
+// The discovered-games list itself -- see the browser glue declared above.
+extern UDP_netgame_info_lite Active_udp_games[UDP_MAX_NETGAMES];
+extern int num_active_udp_games;
+extern int num_active_udp_changed;
+
+// Nuklear game browser glue (net_udp.c) -- opens sockets and starts
+// discovery, re-sends discovery requests (LAN + tracker), cleans up on
+// leaving without joining, and starts a join against a list entry exactly
+// the way net_udp_list_join_poll()'s EVENT_NEWMENU_SELECTED does. None of
+// this touches net_udp_game_connect() itself.
+int net_udp_nk_browse_begin(void);
+void net_udp_nk_browse_refresh(void);
+void net_udp_nk_browse_end(void);
+void net_udp_nk_begin_join(direct_join *dj, int list_index);
 
 typedef struct UDP_sequence_packet
 {
