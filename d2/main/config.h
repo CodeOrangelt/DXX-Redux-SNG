@@ -25,7 +25,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 // SNG: the art shown until the player picks another. D1's default points at
 // its hi-res add-on's jup01h.pcx; D2 has no equivalent add-on, so this stays
 // empty and nk_ui_draw_backdrop() falls back to the stock menu background.
-#define MENU_BACKGROUND_DEFAULT ""
+#define MENU_BACKGROUND_DEFAULT "pcx:mars01h.pcx"
 
 #include "player.h"
 #include "mission.h"
