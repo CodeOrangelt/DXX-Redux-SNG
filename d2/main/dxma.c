@@ -925,7 +925,7 @@ static int dxma_try_extract_zip(const char *zip_path, const char *dest_dir)
 
 // -------------------------------------------------------------- download
 
-int dxma_download_mission(int index)
+int dxma_download_mission_ex(int index, int confirm)
 {
 	const dxma_mission *m = dxma_get(index);
 	if (!m) return 0;
@@ -956,7 +956,7 @@ int dxma_download_mission(int index)
 			return 0;
 		PHYSFS_delete(dest_path);
 	}
-	if (nm_messagebox(NULL, 2, "Download", "Cancel", "Download from DXMA:\n\n%s\nby %s\n", m->title, m->author) != 0)
+	if (confirm && nm_messagebox(NULL, 2, "Download", "Cancel", "Download from DXMA:\n\n%s\nby %s\n", m->title, m->author) != 0)
 		return 0;
 
 	char real_dest[PATH_MAX];
@@ -1003,6 +1003,11 @@ int dxma_download_mission(int index)
 
 	nm_messagebox(NULL, 1, "OK", "Mission downloaded!\n\n%s\n\nSaved to missions folder.", m->title);
 	return 1;
+}
+
+int dxma_download_mission(int index)
+{
+	return dxma_download_mission_ex(index, 1);
 }
 
 // -------------------------------------------------------------- refresh

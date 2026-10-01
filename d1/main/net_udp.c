@@ -7194,8 +7194,8 @@ int net_udp_do_join_game(ubyte join_as_obs)
 		// We don't have this mission locally. Before giving up, see whether
 		// the DXMA database has something that looks like a match for its
 		// filename -- this is a heuristic (the CSV has no filename column to
-		// key on exactly, see dxma.c), so we always show what it found and
-		// let the player confirm rather than downloading blind.
+		// key on exactly, see dxma.c), so unless the player opted into
+		// auto-download we show what it found and let them confirm.
 		int match = dxma_find_match_for_filename(Netgame.mission_name);
 		if (match < 0)
 		{
@@ -7204,7 +7204,7 @@ int net_udp_do_join_game(ubyte join_as_obs)
 		}
 
 		const dxma_mission *dm = dxma_get(match);
-		if (nm_messagebox(NULL, 2, "Download", "Cancel",
+		if (!GameCfg.AutoDownloadMissions && nm_messagebox(NULL, 2, "Download", "Cancel",
 			"You don't have \"%s\".\n\nFound a likely match on DXMA:\n%s\nby %s\n\nDownload it?",
 			Netgame.mission_name, dm->title, dm->author) != 0)
 		{
@@ -7212,7 +7212,7 @@ int net_udp_do_join_game(ubyte join_as_obs)
 			return 0;
 		}
 
-		if (!dxma_download_mission(match) || !load_mission_by_name(Netgame.mission_name))
+		if (!dxma_download_mission_ex(match, 0) || !load_mission_by_name(Netgame.mission_name))
 		{
 			nm_messagebox(NULL, 1, TXT_OK, TXT_MISSION_NOT_FOUND);
 			return 0;

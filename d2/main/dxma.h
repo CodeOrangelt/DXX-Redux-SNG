@@ -60,6 +60,10 @@ int dxma_find_match_for_filename(const char *mission_filename);
 // Returns 1 on success.
 int dxma_download_mission(int index);
 
+// As above; confirm == 0 skips the "Download from DXMA" prompt, for callers
+// that already asked (or the player opted into auto-download).
+int dxma_download_mission_ex(int index, int confirm);
+
 // Opens the mission browser menu (id/title/author, sorted, searchable).
 void dxma_missions_menu(void);
 

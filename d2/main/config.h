@@ -55,6 +55,7 @@ typedef struct Cfg
 	int VSync;
 	int Multisample;
 	int FPSIndicator;
+	int AutoDownloadMissions;
 	int MouseDebugIndicator;
 	int FOVZoom;
 	int Grabinput;

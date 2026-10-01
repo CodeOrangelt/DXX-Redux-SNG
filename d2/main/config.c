@@ -65,6 +65,7 @@ static const char VSyncStr[] ="VSync";
 static const char MultisampleStr[] ="Multisample";
 static const char ClassicDepthStr[] ="ClassicDepth";
 static const char FPSIndicatorStr[] ="FPSIndicator";
+static const char AutoDownloadMissionsStr[] ="AutoDownloadMissions";
 static const char GrabinputStr[] ="GrabInput";
 static const char BorderlessWindowStr[] ="BorderlessWindow";
 static const char MenuBackgroundStr[] ="MenuBackground";
@@ -118,6 +119,7 @@ int ReadConfigFile()
 	GameCfg.Multisample = 0;
 	GameCfg.ClassicDepth = 0;
 	GameCfg.FPSIndicator = 0;
+	GameCfg.AutoDownloadMissions = 1;
 	GameCfg.MouseDebugIndicator = 0;
 	GameCfg.FOVZoom = 0;
 	GameCfg.Grabinput = 1;
@@ -237,6 +239,8 @@ int ReadConfigFile()
 				GameCfg.ClassicDepth = strtol(value, NULL, 10);
 			else if (!strcmp(token, FPSIndicatorStr))
 				GameCfg.FPSIndicator = strtol(value, NULL, 10);
+			else if (!strcmp(token, AutoDownloadMissionsStr))
+				GameCfg.AutoDownloadMissions = strtol(value, NULL, 10);
 			else if (!strcmp(token, "MouseDebugIndicator"))
 				GameCfg.MouseDebugIndicator = strtol(value, NULL, 10);
 			else if (!strcmp(token, "FOVZoom"))
@@ -309,6 +313,7 @@ int WriteConfigFile()
 	PHYSFSX_printf(infile, "%s=%i\n", MultisampleStr, GameCfg.Multisample);
 	PHYSFSX_printf(infile, "%s=%i\n", ClassicDepthStr, GameCfg.ClassicDepth);
 	PHYSFSX_printf(infile, "%s=%i\n", FPSIndicatorStr, GameCfg.FPSIndicator);
+	PHYSFSX_printf(infile, "%s=%i\n", AutoDownloadMissionsStr, GameCfg.AutoDownloadMissions);
 	PHYSFSX_printf(infile, "MouseDebugIndicator=%i\n", GameCfg.MouseDebugIndicator);
 	PHYSFSX_printf(infile, "FOVZoom=%i\n", GameCfg.FOVZoom);
 	PHYSFSX_printf(infile, "%s=%i\n", GrabinputStr, GameCfg.Grabinput);
