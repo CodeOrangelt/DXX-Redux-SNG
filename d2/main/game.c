@@ -108,6 +108,8 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 int	Mark_count = 0;                 // number of debugging marks set
 #endif
 
+static int64_t last_timer_value_usec=0;
+static int last_timer_value_usec_rem=0;
 static fix64 last_timer_value=0;
 fix ThisLevelTime=0;
 
@@ -390,31 +392,18 @@ void calc_d_tick()
 void reset_time()
 {
 	timer_update();
+	last_timer_value_usec = timer_query_usec();
+	last_timer_value_usec_rem = 0;
 	last_timer_value = timer_query();
 }
 
-void calc_frame_time()
+static void update_frame_time(fix last_frametime)
 {
-	fix64 timer_value;
-	fix last_frametime = FrameTime;
-
-	timer_update();
-	timer_value = timer_query();
-	FrameTime = timer_value - last_timer_value;
-
-	while (FrameTime < f1_0 / (GameCfg.VSync?MAXIMUM_FPS:PlayerCfg.maxFps))
-	{
-		if (GameArg.SysUseNiceFPS && !GameCfg.VSync)
-			timer_delay(f1_0 / PlayerCfg.maxFps - FrameTime);
-		timer_update();
-		timer_value = timer_query();
-		FrameTime = timer_value - last_timer_value;
-	}
+	FrameTime = timer_query() - last_timer_value;
+	last_timer_value = timer_query();
 
 	if ( cheats.turbo )
 		FrameTime *= 2;
-
-	last_timer_value = timer_value;
 
 	if (FrameTime < 0)				//if bogus frametime...
 		FrameTime = (last_frametime==0?1:last_frametime);		//...then use time from last frame
@@ -423,6 +412,72 @@ void calc_frame_time()
 	// into an apparent hang instead of just a stutter.
 	if (FrameTime > MAX_FRAME_TIME)
 		FrameTime = MAX_FRAME_TIME;
+}
+
+void calc_frame_time()
+{
+	int64_t timer_value_usec, next_timer_value_usec;
+	int next_timer_value_usec_rem;
+	int64_t req_time_usec;
+	int req_time_usec_rem;
+	fix last_frametime = FrameTime;
+	int fps = GameCfg.VSync ? MAXIMUM_FPS : PlayerCfg.maxFps;
+
+	if (fps == FPS_UNLIMITED)
+	{
+		timer_update();
+		last_timer_value_usec = timer_query_usec();
+		last_timer_value_usec_rem = 0;
+		update_frame_time(last_frametime);
+		return;
+	}
+
+	req_time_usec = 1000000 / fps;
+	req_time_usec_rem = 1000000 % fps;
+
+	next_timer_value_usec = last_timer_value_usec + req_time_usec;
+	next_timer_value_usec_rem = last_timer_value_usec_rem + req_time_usec_rem;
+	if (next_timer_value_usec_rem >= fps) {
+		next_timer_value_usec_rem -= fps;
+		next_timer_value_usec++;
+	}
+
+	timer_update();
+	timer_value_usec = timer_query_usec();
+
+	if (timer_value_usec < next_timer_value_usec) {
+		// coarse sleep, then spin out the last half millisecond
+		if (GameArg.SysUseNiceFPS && next_timer_value_usec - timer_value_usec > 1000) {
+			timer_delay_usec(next_timer_value_usec - timer_value_usec - 500);
+			timer_update();
+			timer_value_usec = timer_query_usec();
+		}
+		while (timer_value_usec < next_timer_value_usec)
+		{
+			#ifdef __linux__
+			if (GameArg.SysUseNiceFPS && !GameCfg.VSync)
+				timer_delay_usec(next_timer_value_usec - timer_value_usec);
+			#else
+			#if defined(__GNUC__) && defined(__x86_64__)
+			asm("pause");
+			#endif
+			#endif
+			timer_update();
+			timer_value_usec = timer_query_usec();
+		}
+		if (timer_value_usec < next_timer_value_usec + req_time_usec / 2) { // allow taking half the frametime for extra delay
+			last_timer_value_usec = next_timer_value_usec;
+			last_timer_value_usec_rem = next_timer_value_usec_rem;
+		} else {
+			last_timer_value_usec = timer_value_usec;
+			last_timer_value_usec_rem = 0;
+		}
+	} else {
+		last_timer_value_usec = timer_value_usec;
+		last_timer_value_usec_rem = 0;
+	}
+
+	update_frame_time(last_frametime);
 }
 
 void calc_game_time()

@@ -465,6 +465,7 @@ int read_player_d1x(char *filename)
 				//	PlayerCfg.QuietPlasma = atoi(line);
                 if(!strcmp(word,"MAXFPS")) {
                     PlayerCfg.maxFps = atoi(line);
+                    if (PlayerCfg.maxFps < 0) { PlayerCfg.maxFps = DEFAULT_FPS; }
                 }
 				if(!strcmp(word,"NOCHATSOUND"))
 					PlayerCfg.NoChatSound = atoi(line);

@@ -126,9 +126,13 @@ void show_mouse_debug()
 	}
 }
 
+#define FPS_RIGHT_MARGIN 3
+
 void show_framerate()
 {
 	static int fps_count = 0, fps_rate = 0;
+	char fps_text[16];
+	int text_w, text_h, text_aw;
 	int y = GHEIGHT;
 	static fix64 fps_time = 0;
 
@@ -160,7 +164,9 @@ void show_framerate()
 		fps_time += F1_0;
 		if (timer_query() >= fps_time + F1_0) fps_time = timer_query();
 	}
-	gr_printf(SWIDTH-(GameArg.SysMaxFPS>999?FSPACX(43):FSPACX(37)),y,"FPS: %i",fps_rate);
+	snprintf(fps_text, sizeof(fps_text), "FPS: %i", fps_rate);
+	gr_get_string_size(fps_text, &text_w, &text_h, &text_aw);
+	gr_string(SWIDTH - text_w - FSPACX(FPS_RIGHT_MARGIN), y, fps_text);
 }
 
 void set_font_present() { gr_set_fontcolor(BM_XRGB(25,25,25),-1); }
