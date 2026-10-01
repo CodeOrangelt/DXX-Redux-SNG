@@ -79,6 +79,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #endif
 #ifdef OGL
 #include "ogl_init.h"
+#include "nk_ui.h"	// SNG: menu accent colours (defines USE_NK_UI when available)
 #endif
 
 
@@ -112,6 +113,10 @@ enum MENUS
     MENU_DXMA_MISSIONS,
     #endif
     MENU_RACE_GAME,
+    MENU_PLAY,
+    #ifdef USE_NK_UI
+    MENU_SCREENSHOTS,
+    #endif
     #ifndef RELEASE
     MENU_SANDBOX
     #endif
@@ -129,6 +134,7 @@ int do_option(int select);
 int do_new_game_menu(void);
 int do_race_game_menu(void);
 void do_multi_player_menu();
+static void do_play_menu(void);
 #ifndef RELEASE
 void do_sandbox_menu();
 #endif
@@ -408,11 +414,16 @@ int RegisterPlayer()
 void draw_copyright()
 {
 	gr_set_current_canvas(NULL);
+#ifdef USE_NK_UI
+	// Drawn outside the game palette: BM_XRGB colours drift with whatever
+	// palette the chosen menu background loaded. The version line lives
+	// under the logo -- see nk_ui_draw_logo_version().
+	nk_ui_draw_copyright(TXT_COPYRIGHT);
+#else
 	gr_set_curfont(GAME_FONT);
-	gr_set_fontcolor(BM_XRGB(6,6,6),-1);
+	gr_set_fontcolor(BM_XRGB(25,0,0),-1);
 	gr_string(0x8000,SHEIGHT-LINE_SPACING,TXT_COPYRIGHT);
-	gr_set_fontcolor( BM_XRGB(25,0,0), -1);
-	gr_string(0x8000,SHEIGHT-(LINE_SPACING*2),DESCENT_VERSION);
+#endif
 }
 
 //returns the number of demo files on the disk
@@ -503,16 +514,11 @@ void create_main_menu(newmenu_item *m, int *menu_choice, int *callers_num_option
 	#ifndef DEMO_ONLY
 	num_options = 0;
 
-	ADD_ITEM(TXT_NEW_GAME,MENU_NEW_GAME,KEY_N);
-
-	ADD_ITEM("Race vs bots",MENU_RACE_GAME,KEY_R);
-
-	ADD_ITEM(TXT_LOAD_GAME,MENU_LOAD_GAME,KEY_L);
-#if defined(USE_UDP)
-	ADD_ITEM(TXT_MULTIPLAYER_,MENU_MULTIPLAYER,-1);
-#endif
-
+	ADD_ITEM("Play Descent",MENU_PLAY,KEY_P);
 	ADD_ITEM(TXT_OPTIONS_, MENU_CONFIG, -1 );
+#ifdef USE_NK_UI
+	ADD_ITEM("Screenshots", MENU_SCREENSHOTS, -1);
+#endif
 	ADD_ITEM(TXT_CHANGE_PILOTS,MENU_NEW_PLAYER,unused);
 	ADD_ITEM(TXT_VIEW_DEMO,MENU_DEMO_PLAY,0);
 	ADD_ITEM(TXT_VIEW_SCORES,MENU_VIEW_SCORES,KEY_V);
@@ -556,7 +562,7 @@ int DoMenu()
 
 	create_main_menu(m, menu_choice, &num_options); // may have to change, eg, maybe selected pilot and no save games.
 
-	newmenu_do3( "", NULL, num_options, m, (int (*)(newmenu *, d_event *, void *))main_menu_handler, menu_choice, 0, Menu_pcx_name);
+	newmenu_do3( "", NULL, num_options, m, (int (*)(newmenu *, d_event *, void *))main_menu_handler, menu_choice, 0, NM_CUSTOM_BACKGROUND);
 
 	return 0;
 }
@@ -567,6 +573,9 @@ extern void show_order_form(void);	// John didn't want this in inferno.h so I ju
 int do_option ( int select)
 {
 	switch (select) {
+		case MENU_PLAY:
+			do_play_menu();
+			break;
 		case MENU_NEW_GAME:
 			Race_sp_pending = 0;
 			select_mission(0, "New Game\n\nSelect mission", do_new_game_menu);
@@ -632,6 +641,11 @@ int do_option ( int select)
 #if defined(USE_UDP)
 		case MENU_MULTIPLAYER:
 			do_multi_player_menu();
+			break;
+#endif
+#ifdef USE_NK_UI
+		case MENU_SCREENSHOTS:
+			nk_ui_screenshots();
 			break;
 #endif
 		case MENU_CONFIG:
@@ -2720,6 +2734,54 @@ void do_multi_player_menu()
 	newmenu_do3( NULL, TXT_MULTIPLAYER, num_options, m, (int (*)(newmenu *, d_event *, void *))multi_player_menu_handler, menu_choice, 0, NULL );
 }
 #endif
+
+static int play_menu_handler(newmenu *menu, d_event *event, int *menu_choice)
+{
+	newmenu_item *items = newmenu_get_items(menu);
+
+	switch (event->type)
+	{
+		case EVENT_NEWMENU_SELECTED:
+			return do_option(menu_choice[newmenu_get_citem(menu)]);
+
+		case EVENT_WINDOW_CLOSE:
+			d_free(menu_choice);
+			d_free(items);
+			break;
+
+		default:
+			break;
+	}
+
+	return 0;
+}
+
+static void do_play_menu(void)
+{
+	int *menu_choice;
+	newmenu_item *m;
+	int num_options = 0;
+
+	MALLOC(menu_choice, int, 4);
+	if (!menu_choice)
+		return;
+
+	MALLOC(m, newmenu_item, 4);
+	if (!m)
+	{
+		d_free(menu_choice);
+		return;
+	}
+
+	ADD_ITEM("New Game", MENU_NEW_GAME, KEY_N);
+	ADD_ITEM("Race vs bots", MENU_RACE_GAME, KEY_R);
+	ADD_ITEM("Load Game", MENU_LOAD_GAME, KEY_L);
+#ifdef USE_UDP
+	ADD_ITEM("Multiplayer", MENU_MULTIPLAYER, -1);
+#endif
+
+	newmenu_do3( NULL, "Play", num_options, m, (int (*)(newmenu *, d_event *, void *))play_menu_handler, menu_choice, 0, NULL );
+}
 
 void do_options_menu()
 {

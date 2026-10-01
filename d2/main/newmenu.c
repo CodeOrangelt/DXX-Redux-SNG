@@ -63,11 +63,13 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #ifdef OGL
 #include "ogl_init.h"
+#include "nk_ui.h"	// SNG: menu accent colours (defines USE_NK_UI when available)
 #endif
 
 
 #define MAXDISPLAYABLEITEMS 14
 #define MAXDISPLAYABLEITEMSTINY 21
+#define NM_MAIN_MENU_LEFT_PERCENT 8
 #define MESSAGEBOX_TEXT_SIZE 2176  // How many characters in messagebox
 #define MAX_TEXT_WIDTH FSPACX(120) // How many pixels wide a input box can be
 
@@ -121,9 +123,15 @@ void nm_draw_background1(char * filename)
 
 	if (filename != NULL)
 	{
+#ifdef USE_NK_UI
+		if (!strcmp(filename, NM_CUSTOM_BACKGROUND) && nk_ui_draw_backdrop())
+			return;
+#endif
 		if (nm_background1.bm_data == NULL)
 		{
 			gr_init_bitmap_data (&nm_background1);
+			if (!strcmp(filename, NM_CUSTOM_BACKGROUND))
+				filename = Menu_pcx_name;
 			pcx_error = pcx_read_bitmap( filename, &nm_background1, BM_LINEAR, gr_palette );
 			Assert(pcx_error == PCX_ERROR_NONE);
 			(void)pcx_error;
@@ -1437,6 +1445,8 @@ void newmenu_create_structure( newmenu *menu )
 	menu->h += BORDERY*2;
 
 	menu->x = (GWIDTH-menu->w)/2;
+	if (menu->filename && !strcmp(menu->filename, NM_CUSTOM_BACKGROUND))
+		menu->x = GWIDTH * NM_MAIN_MENU_LEFT_PERCENT / 100;
 	menu->y = (GHEIGHT-menu->h)/2;
 
 	if ( menu->x < 0 ) menu->x = 0;
@@ -1514,6 +1524,14 @@ int newmenu_draw(window *wind, newmenu *menu)
 
 	gr_set_current_canvas( NULL );
 	nm_draw_background1(menu->filename);
+#ifdef USE_NK_UI
+	if (menu->filename && !strcmp(menu->filename, NM_CUSTOM_BACKGROUND))
+	{
+		const newmenu_item *first = &menu->items[menu->scroll_offset];
+
+		nk_ui_draw_menu_logo((float)(menu->x + first->x), (float)(menu->y + first->y));
+	}
+#endif
 	if (menu->filename == NULL)
 		nm_draw_background(menu->x-(menu->is_scroll_box?FSPACX(5):0),menu->y,menu->x+menu->w,menu->y+menu->h);
 

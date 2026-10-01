@@ -158,18 +158,18 @@ extern void newmenu_free_background();
 
 #define NEWMENU_MOUSE
 
-// #define NORMAL_CHECK_BOX    "Å"
-// #define CHECKED_CHECK_BOX   "Ç"
+// #define NORMAL_CHECK_BOX    "ÔøΩ"
+// #define CHECKED_CHECK_BOX   "ÔøΩ"
 // 
 // #define NORMAL_RADIO_BOX    ""
-// #define CHECKED_RADIO_BOX   "Ä"
+// #define CHECKED_RADIO_BOX   "ÔøΩ"
 // #define CURSOR_STRING       "_"
-// #define SLIDER_LEFT         "É"  // 131
-// #define SLIDER_RIGHT        "Ñ"  // 132
-// #define SLIDER_MIDDLE       "Ö"  // 133
-// #define SLIDER_MARKER       "Ü"  // 134
-// #define UP_ARROW_MARKER     "á"  // 135
-// #define DOWN_ARROW_MARKER   "à"  // 136
+// #define SLIDER_LEFT         "ÔøΩ"  // 131
+// #define SLIDER_RIGHT        "ÔøΩ"  // 132
+// #define SLIDER_MIDDLE       "ÔøΩ"  // 133
+// #define SLIDER_MARKER       "ÔøΩ"  // 134
+// #define UP_ARROW_MARKER     "ÔøΩ"  // 135
+// #define DOWN_ARROW_MARKER   "ÔøΩ"  // 136
 #define NORMAL_CHECK_BOX    "\201"
 #define CHECKED_CHECK_BOX   "\202"
 
@@ -185,6 +185,9 @@ extern void newmenu_free_background();
 
 #define BORDERX (15*(SWIDTH/320))
 #define BORDERY (15*(SHEIGHT/200))
+
+// SNG: pass as a menu's pcx name to get the player's chosen screenshot, if any.
+#define NM_CUSTOM_BACKGROUND "*custom-background*"
 
 #endif /* _NEWMENU_H */
 
