@@ -583,6 +583,10 @@ void auto_select_weapon(int weapon_type)
 
 		if(next_weapon == 255) { continue; } // Breakpoint in list
 		if(next_weapon == PROXIMITY_INDEX && weapon_type == 1) { continue; } // Don't autoselect proxies.  Ever.
+		// A weak laser is often worse than the next weapon down, so the
+		// player sets the level worth taking.
+		if(weapon_type == 0 && next_weapon == LASER_INDEX
+			&& Players[Player_num].laser_level + 1 < PlayerCfg.LaserAutoselectMinLevel) { continue; }
 		if(player_has_weapon(Player_num, next_weapon, weapon_type) != HAS_ALL) { continue; } // Missing weapon or ammo
 
 		select_weapon(next_weapon, weapon_type, 0, 1); 

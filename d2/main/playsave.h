@@ -131,6 +131,7 @@ typedef struct player_config
 	ubyte ObsHideEnergyWeaponMuzzle[NUM_OBS_MODES];
 	ubyte NoChatSound;
 	ubyte ClassicAutoselectWeapon;
+	ubyte LaserAutoselectMinLevel;	// autoselect skips lasers below this level (1-4)
 	ubyte RaceTrackLabels;
 	ubyte RaceMinimap;
 	ubyte RaceSpeedFOV;

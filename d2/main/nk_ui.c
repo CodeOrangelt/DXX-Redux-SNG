@@ -1450,12 +1450,162 @@ static void nk_ui_static_weapons(void)
 	}
 }
 
-// Weapon autoselect (d1/main/nk_ui.c) is not ported here: it edits
-// PlayerCfg.PrimaryOrder/SecondaryOrder/LaserAutoselectMinLevel and friends,
-// none of which exist on D2's player_config -- D2 has never had a
-// configurable autoselect priority system, so there is nothing for this
-// screen to edit. Porting it means adding that whole subsystem to the core
-// engine first, which is out of scope for this UI port.
+// ==============================
+// Weapon autoselect -- both priority lists side by side. Each order array
+// holds weapon indices plus one 255 sentinel; weapons below the sentinel are
+// never picked automatically. Moving the sentinel is how you draw that line.
+// ==============================
+
+#define NK_UI_AUTOSELECT_NEVER 255
+#define NK_UI_AUTOSELECT_ARROW_ROWS 1.2f
+#define NK_UI_AUTOSELECT_RANK_ROWS 1.4f
+
+extern void InitWeaponOrdering(void);
+
+static void nk_ui_swap_bytes(ubyte *a, ubyte *b)
+{
+	ubyte t = *a;
+
+	*a = *b;
+	*b = t;
+}
+
+static const char *nk_ui_autoselect_name(ubyte weapon, int secondary)
+{
+	if (weapon == NK_UI_AUTOSELECT_NEVER)
+		return NULL;
+	if (secondary)
+		return SECONDARY_WEAPON_NAMES(weapon);
+	return PRIMARY_WEAPON_NAMES(weapon);
+}
+
+static void nk_ui_autoselect_list(struct nk_context *ctx, const char *title, ubyte *order, int nentries, int secondary)
+{
+	float arrow_w = (float)s_row_h * NK_UI_AUTOSELECT_ARROW_ROWS;
+	float rank_w = (float)s_row_h * NK_UI_AUTOSELECT_RANK_ROWS;
+	float name_w = nk_window_get_content_region(ctx).w - arrow_w * 2 - rank_w - ctx->style.window.spacing.x * 4;
+	int rank = 0;
+	int i;
+
+	if (name_w < rank_w)
+		name_w = rank_w;
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT_BRIGHT);
+	nk_label(ctx, title, NK_TEXT_CENTERED);
+	nk_style_pop_color(ctx);
+
+	for (i = 0; i < nentries; i++)
+	{
+		const char *name = nk_ui_autoselect_name(order[i], secondary);
+		char cell[NM_MAX_TEXT_LEN + 1];
+
+		nk_layout_row_begin(ctx, NK_STATIC, (float)s_row_h, 4);
+		nk_layout_row_push(ctx, arrow_w);
+		if (i > 0)
+		{
+			if (nk_button_symbol(ctx, NK_SYMBOL_TRIANGLE_UP))
+				nk_ui_swap_bytes(&order[i], &order[i - 1]);
+		}
+		else
+			nk_spacing(ctx, 1);
+		nk_layout_row_push(ctx, arrow_w);
+		if (i + 1 < nentries)
+		{
+			if (nk_button_symbol(ctx, NK_SYMBOL_TRIANGLE_DOWN))
+				nk_ui_swap_bytes(&order[i], &order[i + 1]);
+		}
+		else
+			nk_spacing(ctx, 1);
+
+		nk_layout_row_push(ctx, rank_w);
+		if (!name || rank < 0)
+			nk_spacing(ctx, 1);
+		else
+		{
+			snprintf(cell, sizeof(cell), "%d.", ++rank);
+			nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT_BRIGHT);
+			nk_label(ctx, cell, NK_TEXT_RIGHT);
+			nk_style_pop_color(ctx);
+		}
+
+		nk_layout_row_push(ctx, name_w);
+		if (!name)
+		{
+			nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT_DIM);
+			nk_label(ctx, "-- never autoselect below --", NK_TEXT_LEFT);
+			nk_style_pop_color(ctx);
+			rank = -1;
+		}
+		else
+			nk_label(ctx, name, NK_TEXT_LEFT);
+		nk_layout_row_end(ctx);
+	}
+}
+
+static void nk_ui_build_weapon_autoselect(struct nk_context *ctx, void *userdata)
+{
+	int *running = (int *)userdata;
+	int min_level;
+	float half;
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
+	if (nk_button_label(ctx, "Back") || nk_ui_take_enter())
+		*running = 0;
+	if (nk_button_label(ctx, "Restore Defaults"))
+	{
+		InitWeaponOrdering();
+		PlayerCfg.LaserAutoselectMinLevel = 1;
+	}
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
+	nk_ui_checkbox_ubyte(ctx, "No autoselect while firing", &PlayerCfg.NoFireAutoselect);
+	nk_ui_checkbox_ubyte(ctx, "Only cycle autoselect weapons", &PlayerCfg.CycleAutoselectOnly);
+	nk_ui_checkbox_ubyte(ctx, "Autoselect after firing", &PlayerCfg.SelectAfterFire);
+	nk_ui_checkbox_ubyte(ctx, "Classic no-ammo autoselect", &PlayerCfg.ClassicAutoselectWeapon);
+	// Selecting after a burst is meaningless unless firing suppresses it.
+	if (PlayerCfg.SelectAfterFire)
+		PlayerCfg.NoFireAutoselect = 1;
+
+	// The property draws its name inside the widget, so it has to be short
+	// enough for half a panel; the sentence above carries the meaning.
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_label(ctx, "Top of a list is picked first. Lasers weaker than this are skipped:", NK_TEXT_LEFT);
+
+	min_level = PlayerCfg.LaserAutoselectMinLevel < 1 ? 1 : PlayerCfg.LaserAutoselectMinLevel;
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
+	nk_property_int(ctx, "Laser level", 1, &min_level, MAX_LASER_LEVEL + 1, 1, 1);
+	nk_spacing(ctx, 1);
+	PlayerCfg.LaserAutoselectMinLevel = (ubyte)min_level;
+
+	half = (nk_window_get_content_region(ctx).w - ctx->style.window.spacing.x) * 0.5f;
+	nk_layout_row_begin(ctx, NK_STATIC, (s_row_h + ctx->style.window.spacing.y) * (MAX_PRIMARY_WEAPONS + 2), 2);
+	nk_layout_row_push(ctx, half);
+	if (nk_group_begin(ctx, "primary", NK_WINDOW_NO_SCROLLBAR))
+	{
+		nk_ui_autoselect_list(ctx, "PRIMARY", PlayerCfg.PrimaryOrder, MAX_PRIMARY_WEAPONS + 1, 0);
+		nk_group_end(ctx);
+	}
+	nk_layout_row_push(ctx, half);
+	if (nk_group_begin(ctx, "secondary", NK_WINDOW_NO_SCROLLBAR))
+	{
+		nk_ui_autoselect_list(ctx, "SECONDARY", PlayerCfg.SecondaryOrder, MAX_SECONDARY_WEAPONS + 1, 1);
+		nk_group_end(ctx);
+	}
+	nk_layout_row_end(ctx);
+}
+
+void nk_ui_weapon_autoselect(void)
+{
+	int running = 1;
+
+	nk_ui_init_once();
+
+	while (running)
+	{
+		if (!nk_ui_frame("Weapon Autoselect", nk_vec2(0.62f, 0.66f), nk_ui_build_weapon_autoselect, &running))
+			break;
+	}
+}
 
 // ==============================
 // Advanced options
