@@ -79,6 +79,7 @@ static void nk_ui_note(const char *text, float extra_rows);
 #include "laser.h"
 #include "config.h"
 #include "gr.h"
+#include "gamepal.h"
 #include "ogl_init.h"
 #include "mouse.h"
 #include "event.h"
@@ -602,6 +603,7 @@ struct nk_ui_font
 static struct nk_ui_font s_body_font, s_head_font, s_title_font;
 static grs_font *s_baked_body_src = NULL;
 static int s_baked_screen_h = 0;
+static char s_baked_palette[FILENAME_LEN];
 static int s_title_scale_max = 1;
 static float nk_ui_text_width(const struct nk_ui_font *font, const char *text);
 static void nk_ui_message_lines(struct nk_context *ctx, const char *text);
@@ -668,26 +670,11 @@ static const ubyte *nk_ui_src_glyph_data(const grs_font *src, int index, int wid
 	return src->ft_data + index * ((width + 7) >> 3) * src->ft_h;
 }
 
-// The game's own palette, read once. Baking from gr_palette would tint the
-// menu font with whatever a custom menu background loaded there.
+// D2 re-reads its colour fonts into whatever palette just loaded
+// (gr_remap_color_fonts), so glyph indices only decode against gr_palette.
 static const ubyte *nk_ui_font_palette(void)
 {
-	static ubyte palette[NK_UI_PALETTE_BYTES];
-	static int loaded;
-
-	if (!loaded)
-	{
-		PHYSFS_file *fp = PHYSFSX_openReadBuffered("palette.256");
-
-		loaded = 1;
-		memcpy(palette, gr_palette, sizeof(palette));
-		if (fp)
-		{
-			PHYSFS_read(fp, palette, sizeof(palette), 1);
-			PHYSFS_close(fp);
-		}
-	}
-	return palette;
+	return gr_palette;
 }
 
 static void nk_ui_put_pixel(ubyte *rgba, int on, int palette_index, int colored)
@@ -1071,7 +1058,8 @@ static void nk_ui_sync_fonts(void)
 	nk_ui_sync_context();
 	textures_lost = s_body_font.ready && !glIsTexture(s_body_font.tex);
 
-	if (s_body_font.ready && !textures_lost && body == s_baked_body_src && screen_h == s_baked_screen_h)
+	if (s_body_font.ready && !textures_lost && body == s_baked_body_src && screen_h == s_baked_screen_h
+		&& !strcmp(s_baked_palette, last_palette_loaded))
 		return;
 
 	// Re-baking frees the font textures, and a panel already built into the
@@ -1117,6 +1105,7 @@ static void nk_ui_sync_fonts(void)
 
 	s_baked_body_src = body;
 	s_baked_screen_h = screen_h;
+	snprintf(s_baked_palette, sizeof(s_baked_palette), "%s", last_palette_loaded);
 	// Rows must clear the heading font too: headings and navigation menus
 	// are drawn in it, at the same row height as everything else.
 	s_row_h = body_h + body_h / NK_UI_ROW_PAD_DIVISOR;
