@@ -384,6 +384,18 @@ void reset_time()
 	last_timer_value = timer_query();
 }
 
+static void update_frame_time(fix last_frametime)
+{
+	FrameTime = timer_query() - last_timer_value;
+	last_timer_value = timer_query();
+
+	if ( cheats.turbo )
+		FrameTime *= 2;
+
+	if (FrameTime < 0)				//if bogus frametime...
+		FrameTime = (last_frametime==0?1:last_frametime);		//...then use time from last frame
+}
+
 void calc_frame_time()
 {
 #if 1
@@ -394,6 +406,15 @@ void calc_frame_time()
 	int req_time_usec_rem;
 	fix last_frametime = FrameTime;
 	int fps = GameCfg.VSync ? MAXIMUM_FPS : PlayerCfg.maxFps;
+
+	if (fps == FPS_UNLIMITED)
+	{
+		timer_update();
+		last_timer_value_usec = timer_query_usec();
+		last_timer_value_usec_rem = 0;
+		update_frame_time(last_frametime);
+		return;
+	}
 
 	req_time_usec = 1000000 / fps;
 	req_time_usec_rem = 1000000 % fps;
@@ -446,19 +467,12 @@ void calc_frame_time()
 		last_timer_value_usec_rem = 0;
 	}
 
-	FrameTime = timer_query() - last_timer_value;
-	last_timer_value = timer_query();
-
 	//con_printf(CON_DEBUG,"ft %x=%f, cur %lld (next %lld abs %lld tries %d) pre %lld\n", FrameTime,
 	//	f2fl(FrameTime), (long long)(timer_value_usec - last_usec),
 	//	(long long)(next_timer_value_usec - last_usec), (long long)(next_timer_value_usec - start_usec), tries,
 	//	(long long)(pre_timer - last_usec));
 
-	if ( cheats.turbo )
-		FrameTime *= 2;
-
-	if (FrameTime < 0)				//if bogus frametime...
-		FrameTime = (last_frametime==0?1:last_frametime);		//...then use time from last frame
+	update_frame_time(last_frametime);
 }
 #else
 void calc_frame_time()

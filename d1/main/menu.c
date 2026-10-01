@@ -1454,6 +1454,31 @@ void reticle_config()
 
 int opt_gr_texfilt, opt_gr_brightness, opt_gr_reticlemenu, opt_gr_alphafx, opt_gr_dynlightcolor, opt_gr_vsync, opt_gr_multisample, opt_gr_fpsindi, opt_gr_mousedbg, opt_gr_disablecockpit, opt_gr_framerate, opt_gr_framerate_text, opt_gr_fov;
 int opt_gr_classicdepth;
+
+#define FPS_SLIDER_STEP 25
+#define FPS_SLIDER_LAST_CAPPED ((MAXIMUM_FPS - FPS_SLIDER_STEP) / FPS_SLIDER_STEP)
+
+static int fps_to_slider(int fps)
+{
+	if (fps == FPS_UNLIMITED)
+		return FPS_SLIDER_LAST_CAPPED + 1;
+	return (fps - FPS_SLIDER_STEP) / FPS_SLIDER_STEP;
+}
+
+static int slider_to_fps(int position)
+{
+	if (position > FPS_SLIDER_LAST_CAPPED)
+		return FPS_UNLIMITED;
+	return FPS_SLIDER_STEP + position * FPS_SLIDER_STEP;
+}
+
+static void fps_label(char *buf, size_t size, int fps)
+{
+	if (fps == FPS_UNLIMITED)
+		snprintf(buf, size, "(Unlimited)");
+	else
+		snprintf(buf, size, "(%d FPS)", fps);
+}
 int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 {
 	newmenu_item *items = newmenu_get_items(menu);
@@ -1478,7 +1503,7 @@ int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 				gr_palette_set_gamma(items[citem].value);
 			if ( citem == opt_gr_framerate) {
 				static char fps_text[16];
-				snprintf(fps_text, sizeof(fps_text), "(%d FPS)", 25 + items[opt_gr_framerate].value * 25);
+				fps_label(fps_text, sizeof(fps_text), slider_to_fps(items[opt_gr_framerate].value));
 				items[opt_gr_framerate_text].text = fps_text;
 			}
 			if ( citem == opt_gr_fov) {
@@ -1556,10 +1581,10 @@ void graphics_config()
 #endif
 
 	opt_gr_framerate = nitems;
-	m[nitems].type = NM_TYPE_SLIDER; m[nitems].text = "Max FPS"; m[nitems].value = (PlayerCfg.maxFps - 25) / 25; m[nitems].min_value = 0; m[nitems].max_value = (MAXIMUM_FPS - 25) / 25; nitems++;
+	m[nitems].type = NM_TYPE_SLIDER; m[nitems].text = "Max FPS"; m[nitems].value = fps_to_slider(PlayerCfg.maxFps); m[nitems].min_value = 0; m[nitems].max_value = FPS_SLIDER_LAST_CAPPED + 1; nitems++;
 	opt_gr_framerate_text = nitems;
 	static char fps_display[16];
-	snprintf(fps_display, sizeof(fps_display), "(%d FPS)", PlayerCfg.maxFps);
+	fps_label(fps_display, sizeof(fps_display), PlayerCfg.maxFps);
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = fps_display; nitems++;
 
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "VIEW"; nitems++;
@@ -1602,7 +1627,7 @@ void graphics_config()
 		GameCfg.FOVZoom = m[opt_gr_fov].value;
 	PlayerCfg.DisableCockpit = m[opt_gr_disablecockpit].value; 
 
-	PlayerCfg.maxFps = 25 + m[opt_gr_framerate].value * 25;
+	PlayerCfg.maxFps = slider_to_fps(m[opt_gr_framerate].value);
 
 #ifdef OGL
 	gr_set_attributes();

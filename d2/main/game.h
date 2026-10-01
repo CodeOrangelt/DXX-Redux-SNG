@@ -25,8 +25,10 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "window.h"
 #include "vecmat.h"
 
+#define DEFAULT_FPS 200
+#define FPS_UNLIMITED 0	// PlayerCfg.maxFps value: no frame cap
 #ifdef NDEBUG
-#define MAXIMUM_FPS 200
+#define MAXIMUM_FPS 400
 #else
 #define MAXIMUM_FPS 1000
 #endif

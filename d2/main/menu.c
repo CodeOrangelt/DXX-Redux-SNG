@@ -1587,7 +1587,7 @@ void graphics_config()
 #endif
 
 
-	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "Framerate"; nitems++; 
+	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "Framerate (0 = unlimited)"; nitems++; 
 
 	char framerate_string[5];
 	snprintf(framerate_string,sizeof(char)*4,"%d",PlayerCfg.maxFps);
@@ -1620,10 +1620,11 @@ void graphics_config()
 
 	PlayerCfg.maxFps=atoi(framerate_string);
 
-	if(PlayerCfg.maxFps < 25) {
-		PlayerCfg.maxFps = 25;
-	} else if (PlayerCfg.maxFps > 200) {
-		PlayerCfg.maxFps = 200; 
+	if (PlayerCfg.maxFps != FPS_UNLIMITED) {
+		if (PlayerCfg.maxFps < 25)
+			PlayerCfg.maxFps = 25;
+		else if (PlayerCfg.maxFps > MAXIMUM_FPS)
+			PlayerCfg.maxFps = MAXIMUM_FPS;
 	}
 
 #ifdef OGL
