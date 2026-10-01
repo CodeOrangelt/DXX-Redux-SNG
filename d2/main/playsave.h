@@ -57,6 +57,7 @@ typedef struct player_config
 	int JoystickUndercalibrate[6];
 	ubyte MouseControlStyle; /* Old School Mouse -- ubyte MouseFlightSim; */ 
 	int MouseImpulse; /* Old School Mouse */ 
+	int MouseInertia; // SNG mouse glide, 0 = off
 	int MouseSens[6];
     int MouseOverrun[6];
 	int MouseFSDead;

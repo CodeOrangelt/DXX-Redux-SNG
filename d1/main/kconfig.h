@@ -42,6 +42,10 @@ typedef struct _control_info {
 	fix joy_axis[JOY_MAX_AXES], raw_joy_axis[JOY_MAX_AXES], mouse_axis[3], raw_mouse_axis[3];
 } control_info;
 
+struct object;
+void sngmouse_add_motion(int dx, int dy);
+void sngmouse_apply(struct object *obj);
+
 #define CONTROL_USING_JOYSTICK	1
 #define CONTROL_USING_MOUSE		2
 #define MOUSEFS_DELTA_RANGE 512

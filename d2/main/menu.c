@@ -1239,7 +1239,7 @@ void change_res()
 void input_config_sensitivity()
 {
     newmenu_item m[36+8+8];
-    int i = 0, nitems = 0, keysens = 0, joysens = 0, joydead = 0, joyunder = 0, mousesens = 0, mouseoverrun = 0, mousefsdead, mouseimpulse; /* Old school mouse */ 
+    int i = 0, nitems = 0, keysens = 0, joysens = 0, joydead = 0, joyunder = 0, mousesens = 0, mouseoverrun = 0, mousefsdead, mouseimpulse, mouseinertia; /* Old school mouse */ 
 
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "KEYBOARD SENSITIVITY"; nitems++;
 	keysens = nitems;
@@ -1294,6 +1294,9 @@ void input_config_sensitivity()
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "MOUSE FLIGHTSIM DEADZONE"; nitems++;
 	mousefsdead = nitems;
 	m[nitems].type = NM_TYPE_SLIDER; m[nitems].text = "X/Y"; m[nitems].value = PlayerCfg.MouseFSDead; m[nitems].min_value = 0; m[nitems].max_value = 16; nitems++;
+	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "SNG MOUSE"; nitems++;
+	mouseinertia = nitems;
+	m[nitems].type = NM_TYPE_SLIDER; m[nitems].text = "Inertia (0 = off)"; m[nitems].value = PlayerCfg.MouseInertia; m[nitems].min_value = 0; m[nitems].max_value = 10; nitems++;
 
 	newmenu_do1_nk(NULL, "SENSITIVITY", nitems, m, NULL, NULL, 1);
 
@@ -1309,6 +1312,7 @@ void input_config_sensitivity()
 	}
 	PlayerCfg.MouseFSDead = m[mousefsdead].value;
 	PlayerCfg.MouseImpulse = m[mouseimpulse].value; /* Old School Mouse */ 
+	PlayerCfg.MouseInertia = m[mouseinertia].value;
 }
 
 static int opt_ic_usejoy = 0, opt_ic_usemouse = 0, opt_ic_confkey = 0, opt_ic_confjoy = 0, opt_ic_confmouse = 0, opt_ic_confweap = 0, opt_ic_mouseflightsim = 0, opt_ic_joymousesens = 0, opt_ic_grabinput = 0, opt_ic_mousefsgauge = 0, opt_ic_stickyrear = 0, opt_ic_help0 = 0, opt_ic_help1 = 0, opt_ic_help2 = 0;

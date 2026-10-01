@@ -100,6 +100,7 @@ int new_player_config()
 	PlayerCfg.JoystickUndercalibrate[0] = PlayerCfg.JoystickUndercalibrate[1] = PlayerCfg.JoystickUndercalibrate[2] = PlayerCfg.JoystickUndercalibrate[3] = PlayerCfg.JoystickUndercalibrate[4] = PlayerCfg.JoystickUndercalibrate[5] = 0;
 	PlayerCfg.MouseControlStyle = MOUSE_CONTROL_SNG; /* SNG Mouse - enhanced with smoothing */
 	PlayerCfg.MouseImpulse = 8;
+	PlayerCfg.MouseInertia = 5;
 	PlayerCfg.MouseSens[0] = PlayerCfg.MouseSens[1] = PlayerCfg.MouseSens[2] = PlayerCfg.MouseSens[3] = PlayerCfg.MouseSens[4] = PlayerCfg.MouseSens[5] = 8;
     PlayerCfg.MouseOverrun[0] = PlayerCfg.MouseOverrun[1] = PlayerCfg.MouseOverrun[2] = PlayerCfg.MouseOverrun[3] = PlayerCfg.MouseOverrun[4] = PlayerCfg.MouseOverrun[5] = 0;
 	PlayerCfg.MouseFSDead = 0;
@@ -297,6 +298,8 @@ int read_player_d2x(char *filename)
 					PlayerCfg.MouseControlStyle = atoi(line);  /* Old School Mouse */
 				if(!strcmp(word,"MOUSEIMPULSE"))
 					PlayerCfg.MouseImpulse = atoi(line);  /* Old School Mouse */
+				if(!strcmp(word,"MOUSEINERTIA"))
+					PlayerCfg.MouseInertia = atoi(line);
 				if(!strcmp(word,"SENSITIVITY0"))
 					PlayerCfg.MouseSens[0] = atoi(line);
 				if(!strcmp(word,"SENSITIVITY1"))
@@ -669,6 +672,7 @@ int write_player_d2x(char *filename)
 		PHYSFSX_printf(fout,"[mouse]\n");
 		PHYSFSX_printf(fout,"flightsim=%d\n",PlayerCfg.MouseControlStyle);  /* Old School Mouse */
 		PHYSFSX_printf(fout,"mouseimpulse=%d\n",PlayerCfg.MouseImpulse);  /* Old School Mouse */
+		PHYSFSX_printf(fout,"mouseinertia=%d\n",PlayerCfg.MouseInertia);
 		PHYSFSX_printf(fout,"sensitivity0=%d\n",PlayerCfg.MouseSens[0]);
 		PHYSFSX_printf(fout,"sensitivity1=%d\n",PlayerCfg.MouseSens[1]);
 		PHYSFSX_printf(fout,"sensitivity2=%d\n",PlayerCfg.MouseSens[2]);

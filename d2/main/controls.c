@@ -100,6 +100,7 @@ void read_flying_controls( object * obj )
 
 	}
 	else {
+		sngmouse_apply(obj);
 		obj->mtype.phys_info.rotthrust.x = Controls.pitch_time;
 		obj->mtype.phys_info.rotthrust.y = Controls.heading_time;
 		obj->mtype.phys_info.rotthrust.z = Controls.bank_time;
