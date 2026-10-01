@@ -663,7 +663,7 @@ fix fuelcen_give_fuel(segment* segp, fix MaxAmountCanTake)
 //		}
 
 		// SNG toggle: PointCapture - King of the Hill mode
-		if (!Netgame.PointCapture & MaxAmountCanTake <= 0) {
+		if (!Netgame.PointCapture && MaxAmountCanTake <= 0) {
 //			//gauge_message( "Fueled up!");
 			return 0;
 		}
@@ -676,15 +676,15 @@ fix fuelcen_give_fuel(segment* segp, fix MaxAmountCanTake)
 		if (amount > MaxAmountCanTake)
 			amount = MaxAmountCanTake;
 
-// PointCapture: add points while standing on energy center (250 points per second)
+// PointCapture: add points while standing on energy center, at Netgame.PointCaptureRate points/sec
 	if (Netgame.PointCapture)
 	{
 		static fix64 last_point_time = 0;
-		// Award 250 points per second (25 points every 0.1 seconds)
+		// Award Netgame.PointCaptureRate points per second, in 0.1-second ticks
 		if (GameTime64 - last_point_time >= F1_0/10)
 		{
 			last_point_time = GameTime64;
-			Players[Player_num].score += 25;
+			Players[Player_num].score += Netgame.PointCaptureRate / 10;
 				
 				// Sync score over network
 				#ifdef NETWORK

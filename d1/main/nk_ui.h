@@ -36,6 +36,12 @@ void nk_ui_draw_menu_logo(float left_px, float menu_top_px);
 // cancelled out. Mirrors the contract of the legacy net_udp_setup_game().
 int nk_ui_hosting_setup(void);
 
+// Runs the "join a game" browser: discovers LAN/tracker games, shows each
+// with a Host|Avg ping column, and hands a selected row to the existing
+// net_udp_game_connect() state machine untouched. Mirrors the contract of
+// the legacy net_udp_list_join_game().
+void nk_ui_join_game(void);
+
 // Generic newmenu renderer: any newmenu can draw as a Nuklear panel. The
 // window system owns the frame; these only supply input and drawing.
 #include <SDL.h>
