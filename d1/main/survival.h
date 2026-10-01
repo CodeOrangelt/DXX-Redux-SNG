@@ -88,6 +88,23 @@ void survival_maybe_grant_revive_invulnerability(int pnum);
 // True if pnum is currently down (spectating, awaiting revive at wave clear).
 int survival_is_eliminated(int pnum);
 
+// Moves the local downed player's spectate target to the next (forward != 0)
+// or previous eligible living teammate, wrapping around. No-op unless the
+// local player is currently eliminated. Call from HandleGameKey() (gamecntl.c).
+void survival_spectate_cycle(int forward);
+
+// Points the local downed player's own (frozen, see survival_player_died())
+// ship object at whichever living teammate they're currently spectating,
+// with a small third-person pullback, picking a default target if none is
+// set yet. No-op unless the local player is currently eliminated. Call once
+// per frame from ReadControls() (gamecntl.c), in the same spot the real
+// observer camera updates ConsoleObject.
+void survival_spectate_update_camera(void);
+
+// Name of the local player's current spectate target, or NULL if none (not
+// eliminated, or no living teammate left to watch). For the HUD line.
+const char *survival_spectate_target_name(void);
+
 // Banked self-revives the local player is holding. 0 outside Survival mode.
 // Drawn alongside the score readout as "EL: n" -- see hud_show_score().
 int survival_extra_lives(void);

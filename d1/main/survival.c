@@ -45,6 +45,16 @@
  * around and watch, unable to fight, be hurt, or be seen -- the same
  * experience as spectating, built out of existing, safe primitives rather
  * than the incompatible built-in Observer system.
+ *
+ * That ship object is now frozen in place (movement_type MT_NONE, same as
+ * the remote ghost) rather than left drifting under physics, and the local
+ * player's view is pointed at a living teammate instead: survival_player_
+ * died()/survival_revive_all() below toggle the freeze, and survival_
+ * spectate_update_camera() (called from ReadControls(), gamecntl.c) copies
+ * that teammate's pos/orient onto the frozen ship every frame, the same
+ * trick the real Observer camera uses on ConsoleObject -- copied out as
+ * plain code rather than invoked through set_obs()/reset_obs(), since those
+ * assert on GM_OBSERVER being set, which it deliberately never is here.
  */
 
 #include <string.h>
@@ -429,6 +439,12 @@ static survival_kill_popup Survival_popups[SURVIVAL_MAX_POPUPS];
 static int Survival_popup_idx = 0;
 
 static ubyte Survival_eliminated[MAX_PLAYERS];
+
+// Local-only: which living teammate the local player's frozen ship is
+// currently aimed at while eliminated. -1 = none picked (yet, or nobody
+// left alive to watch). Never synced -- every machine's own view of who
+// they're spectating is purely their own business.
+static int Survival_spectate_target = -1;
 
 // Tracks currently-alive boss robots for the HP bar gauges.c draws under
 // them (survival_get_active_bosses() below). Populated on every machine --
@@ -1764,6 +1780,8 @@ static void survival_revive_all(void)
 			// stats_new_ship() below clears PLAYER_FLAGS_INVULNERABLE as
 			// part of its normal reset, so the revive grace grant has to
 			// come after it, not before.
+			Objects[Players[i].objnum].movement_type = MT_PHYSICS;
+			Survival_spectate_target = -1;
 			init_player_stats_new_ship(i);
 			survival_grant_revive_invulnerability(i);
 			survival_banner("BACK IN THE FIGHT!", SURVIVAL_BANNER_DURATION, SURVIVAL_SND_REVIVE);
@@ -1853,6 +1871,15 @@ int survival_player_died(int pnum)
 		Survival_eliminated[pnum] = 1;
 		survival_send_eliminated(pnum);
 		survival_check_game_over();
+
+		if (pnum == Player_num)
+		{
+			// Stop physics from dragging the ship around a spectator can no
+			// longer steer (see survival_spectate_update_camera(), which
+			// takes over this object's pos/orient every frame instead).
+			Objects[Players[pnum].objnum].movement_type = MT_NONE;
+			Survival_spectate_target = -1;
+		}
 	}
 
 	return Survival_game_over;
@@ -1863,6 +1890,90 @@ int survival_is_eliminated(int pnum)
 	if (pnum < 0 || pnum >= MAX_PLAYERS)
 		return 0;
 	return Survival_eliminated[pnum];
+}
+
+// A living teammate the local player could point their spectate camera at:
+// connected, actually playing, not us, and not also down.
+static int survival_spectate_is_eligible(int pnum)
+{
+	return pnum >= 0 && pnum < MAX_PLAYERS
+		&& pnum != Player_num
+		&& Players[pnum].connected == CONNECT_PLAYING
+		&& !Survival_eliminated[pnum];
+}
+
+// Picks any eligible teammate if the current target has gone stale (died
+// since, disconnected, or was never set). Cheap no-op once a valid target
+// is already held.
+static void survival_spectate_pick_default(void)
+{
+	int i;
+
+	if (survival_spectate_is_eligible(Survival_spectate_target))
+		return;
+
+	Survival_spectate_target = -1;
+	for (i = 0; i < MAX_PLAYERS; i++)
+		if (survival_spectate_is_eligible(i))
+		{
+			Survival_spectate_target = i;
+			return;
+		}
+}
+
+void survival_spectate_cycle(int forward)
+{
+	int start, i;
+
+	if (!survival_is_eliminated(Player_num))
+		return;
+
+	start = (Survival_spectate_target >= 0) ? Survival_spectate_target : 0;
+	i = start;
+	do
+	{
+		i = forward ? (i + 1) % MAX_PLAYERS : (MAX_PLAYERS + i - 1) % MAX_PLAYERS;
+		if (survival_spectate_is_eligible(i))
+		{
+			Survival_spectate_target = i;
+			return;
+		}
+	} while (i != start);
+}
+
+void survival_spectate_update_camera(void)
+{
+	object *cam, *target;
+	vms_vector pullback = ZERO_VECTOR;
+
+	if (!survival_is_eliminated(Player_num))
+	{
+		Survival_spectate_target = -1;
+		return;
+	}
+
+	survival_spectate_pick_default();
+	if (Survival_spectate_target < 0)
+		return; // nobody left alive to watch -- leave the camera where it was
+
+	cam = &Objects[Players[Player_num].objnum];
+	target = &Objects[Players[Survival_spectate_target].objnum];
+
+	cam->orient = target->orient;
+	cam->pos = target->pos;
+
+	// Same third-person pullback the real observer camera uses (gamecntl.c,
+	// ReadControls()) when Obs_at_distance is set -- always on here, since
+	// sitting exactly inside a teammate's cockpit gives nothing to look at.
+	vm_vec_copy_scale(&pullback, &cam->orient.fvec, F1_0 * -20);
+	vm_vec_add2(&cam->pos, &pullback);
+}
+
+const char *survival_spectate_target_name(void)
+{
+	if (!survival_is_eliminated(Player_num) || Survival_spectate_target < 0)
+		return NULL;
+	return Players[Survival_spectate_target].callsign;
 }
 
 // Single entry point for every centered splash this mode shows, so each one
@@ -2441,10 +2552,10 @@ static void survival_hold_spectator_cloak(void)
 	Players[Player_num].cloak_time = GameTime64;
 }
 
-// The body of survival_do_frame(); wrapped below so the shop's falling-edge
-// input flush runs no matter which of the many early-outs in here we left
-// through, and still lands in the same frame as the phase change that caused
-// it. See survival_shop_release_stale_input().
+// The body of survival_do_frame(); wrapped below so the falling-edge input
+// flush runs no matter which of the many early-outs in here we left through,
+// and still lands in the same frame as the phase change that caused it. See
+// survival_release_stale_input().
 static void survival_do_frame_inner(void)
 {
 	// Ahead of every early-out below on purpose. If the match ends, the
@@ -2618,38 +2729,41 @@ static void survival_do_frame_inner(void)
 	}
 }
 
-// Hands input back cleanly when the shop lets go of it.
+// Hands input back cleanly when whatever was blocking it lets go -- the shop
+// closing, or (now) a downed player getting revived, both of which gate
+// should_read_controls in ReadControls() (gamecntl.c) the same way.
 //
 // Everything that means "this control is being held" lives in Controls and is
 // edge-driven: kconfig_read_controls() ORs a state bit in on the key/button
-// down event and ANDs it back out on the matching up event. While the shop
-// owns input neither event reaches it -- presses are swallowed by the gate in
-// ReadControls() (gamecntl.c) and releases die with should_read_controls == 0
-// -- so whatever the player was holding the instant the shop opened stays
-// latched for the whole shop, and the release that should have cleared it is
-// simply dropped. The moment the shop closed, kconfig_read_controls() picked
-// those stale bits straight back up and the ship thrust/turned on its own,
-// with nothing left that could ever clear them; it came back at *full*
-// deflection too, since the keyboard ramps (Controls.key_*_down_time) had long
-// since saturated at F1_0. Only pressing and releasing that control again --
-// or opening the ESC menu, which cleared it purely as a side effect of
+// down event and ANDs it back out on the matching up event. While input is
+// blocked neither event reaches it -- presses are swallowed by the gate in
+// ReadControls() and releases die with should_read_controls == 0 -- so
+// whatever the player was holding the instant the block started stays
+// latched, and the release that should have cleared it is simply dropped.
+// The moment the block lifted, kconfig_read_controls() picked those stale
+// bits straight back up and the ship thrust/turned on its own, with nothing
+// left that could ever clear them; it came back at *full* deflection too,
+// since the keyboard ramps (Controls.key_*_down_time) had long since
+// saturated at F1_0. Only pressing and releasing that control again -- or
+// opening the ESC menu, which cleared it purely as a side effect of
 // game_flush_inputs() on the way out -- ended it.
 //
-// So run exactly that flush ourselves, on the shop's own falling edge. It also
-// covers the mouse: kconfig's accumulated axis and Controls.*_time_overrun are
-// both inside control_info, and the queued SDL motion from the cursor being
-// free (including the warp SDL does re-entering relative mode) goes with the
+// So run exactly that flush ourselves, on the falling edge. It also covers
+// the mouse: kconfig's accumulated axis and Controls.*_time_overrun are both
+// inside control_info, and the queued SDL motion from the cursor being free
+// (including the warp SDL does re-entering relative mode) goes with the
 // event_flush()/mouse_get_delta() in there.
 //
 // Placement matters twice over. It has to be after survival_do_frame_inner(),
-// because that's what clears Survival_shop_phase, and before object_move_all()
-// in GameProcessFrame() (game.c) reaches read_flying_controls() -- multi_do_
-// frame() runs earlier in that same function, so this lands in the right frame
-// and no stale input ever gets applied at all.
-static void survival_shop_release_stale_input(void)
+// because that's what clears Survival_shop_phase and runs survival_revive_
+// all(), and before object_move_all() in GameProcessFrame() (game.c) reaches
+// read_flying_controls() -- multi_do_frame() runs earlier in that same
+// function, so this lands in the right frame and no stale input ever gets
+// applied at all.
+static void survival_release_stale_input(void)
 {
 	static int was_blocking = 0;
-	int blocking = survival_shop_blocks_input();
+	int blocking = survival_shop_blocks_input() || survival_is_eliminated(Player_num);
 
 	if (was_blocking && !blocking)
 	{
@@ -2668,7 +2782,7 @@ static void survival_shop_release_stale_input(void)
 void survival_do_frame(void)
 {
 	survival_do_frame_inner();
-	survival_shop_release_stale_input();
+	survival_release_stale_input();
 }
 
 // Detects wave-start/wave-clear transitions purely from state that's now
@@ -2731,9 +2845,17 @@ void survival_draw_hud(void)
 
 	if (survival_is_eliminated(Player_num))
 	{
+		const char *watching = survival_spectate_target_name();
+
 		gr_set_fontcolor(BM_XRGB(31, 0, 0), -1);
 		gr_string(FSPACX(2), LINE_SPACING * row++ + FSPACY(1),
 			Survival_wave_in_progress ? "DOWN - Spectating (back next wave)" : "DOWN - Spectating");
+
+		if (watching)
+		{
+			sprintf(buf, "Watching %s (Ctrl+9/0 to cycle)", watching);
+			gr_string(FSPACX(2), LINE_SPACING * row++ + FSPACY(1), buf);
+		}
 	}
 
 	if (GameTime64 < Survival_banner_until)

@@ -4122,15 +4122,10 @@ void show_HUD_names()
 							if (nrg < 0) nrg = 0;
 							if (nrg > 100) nrg = 100;
 
-							// Hull: green when healthy, amber when hurt, red
-							// when nearly out -- readable without a number.
+							// Hull: always blue, so it reads at a glance as
+							// "shields" against the yellow energy bar below.
 							fill = (SURVIVAL_MINIBAR_WIDTH * hull) / 100;
-							if (hull > 60)
-								gr_setcolor(BM_XRGB(0, 28, 0));
-							else if (hull > 25)
-								gr_setcolor(BM_XRGB(28, 24, 0));
-							else
-								gr_setcolor(BM_XRGB(31, 4, 4));
+							gr_setcolor(BM_XRGB(0, 16, 31));
 
 							if (fill > 0)
 								gr_urect(bx, by, bx + fill, by + SURVIVAL_MINIBAR_HEIGHT);
@@ -4140,13 +4135,12 @@ void show_HUD_names()
 								gr_urect(bx + fill, by, bx + SURVIVAL_MINIBAR_WIDTH, by + SURVIVAL_MINIBAR_HEIGHT);
 							}
 
-							// Energy, directly underneath. Always the same
-							// blue so the two bars can't be confused at a
-							// glance -- only the hull bar changes color.
+							// Energy, directly underneath. Always yellow so
+							// the two bars can't be confused at a glance.
 							by += SURVIVAL_MINIBAR_HEIGHT + SURVIVAL_MINIBAR_GAP;
 							fill = (SURVIVAL_MINIBAR_WIDTH * nrg) / 100;
 
-							gr_setcolor(BM_XRGB(0, 16, 31));
+							gr_setcolor(BM_XRGB(31, 31, 0));
 							if (fill > 0)
 								gr_urect(bx, by, bx + fill, by + SURVIVAL_MINIBAR_HEIGHT);
 							if (fill < SURVIVAL_MINIBAR_WIDTH)
