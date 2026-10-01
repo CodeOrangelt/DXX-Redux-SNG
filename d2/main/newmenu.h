@@ -70,6 +70,13 @@ extern int newmenu_do2(char *title, char *subtitle, int nitems, newmenu_item *it
 // Same as above, but returns menu instead of citem
 extern newmenu *newmenu_do3(char *title, char *subtitle, int nitems, newmenu_item *item, int (*subfunction)(newmenu *menu, d_event *event, void *userdata), void *userdata, int citem, char *filename);
 
+// SNG: same as newmenu_do1/do3, but drawn as a Nuklear panel in OpenGL builds
+// (falls back to the legacy menu otherwise). Handlers are unchanged.
+extern int newmenu_do1_nk(char *title, char *subtitle, int nitems, newmenu_item *item, int (*subfunction)(newmenu *menu, d_event *event, void *userdata), void *userdata, int citem);
+extern newmenu *newmenu_do3_nk(char *title, char *subtitle, int nitems, newmenu_item *item, int (*subfunction)(newmenu *menu, d_event *event, void *userdata), void *userdata, int citem, char *filename);
+
+extern newmenu *newmenu_dotiny_nk(char * title, char * subtitle, int nitems, newmenu_item * item, int TabsFlag, int (*subfunction)(newmenu *menu, d_event *event, void *userdata), void *userdata);
+
 // Tiny menu with GAME_FONT
 extern newmenu *newmenu_dotiny(char * title, char * subtitle, int nitems, newmenu_item * item, int TabsFlag, int (*subfunction)(newmenu *menu, d_event *event, void *userdata), void *userdata);
 
@@ -108,6 +115,7 @@ int nm_messagebox(char *title, int nchoices, ...);
 int nm_messagebox1(char *title, int (*subfunction)(newmenu *menu, d_event *event, void *userdata), void *userdata, int nchoices, ...);
 
 newmenu_item *newmenu_get_items(newmenu *menu);
+void newmenu_set_fixed_sections(newmenu *menu);
 int newmenu_get_nitems(newmenu *menu);
 int newmenu_get_citem(newmenu *menu);
 struct window *newmenu_get_window(newmenu *menu);

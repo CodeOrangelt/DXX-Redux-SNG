@@ -15,6 +15,7 @@
 // Runs the Advanced netgame options screen. Edits the global Netgame
 // struct in place, same as the legacy net_udp_more_game_options().
 void nk_ui_advanced_options(void);
+void nk_ui_weapon_autoselect(void);
 
 // Browses the screenshots in SCRNS_DIR, previewing the one selected.
 void nk_ui_screenshots(void);

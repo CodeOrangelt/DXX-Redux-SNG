@@ -177,6 +177,7 @@ int new_player_config()
 	PlayerCfg.RaceSpeedFOV = 1;
 	PlayerCfg.RaceSpeedometer = 1;
 	PlayerCfg.ClassicAutoselectWeapon = 0;
+	PlayerCfg.LaserAutoselectMinLevel = 1;
 
 	// Default taunt macros
 	#ifdef NETWORK
@@ -449,6 +450,8 @@ int read_player_d2x(char *filename)
 					PlayerCfg.NoChatSound = atoi(line);
 				if(!strcmp(word,"CLASSICAUTOSELECTWEAPON"))
 					PlayerCfg.ClassicAutoselectWeapon = atoi(line);
+				if(!strcmp(word,"LASERAUTOSELECTMINLEVEL"))
+					PlayerCfg.LaserAutoselectMinLevel = atoi(line);
 				if(!strcmp(word,"RACETRACKLABELS"))
 					PlayerCfg.RaceTrackLabels = atoi(line);
 				if(!strcmp(word,"RACEMINIMAP"))
@@ -728,6 +731,7 @@ int write_player_d2x(char *filename)
 		PHYSFSX_printf(fout,"maxfps=%i\n",PlayerCfg.maxFps);	
 		PHYSFSX_printf(fout,"nochatsound=%i\n",PlayerCfg.NoChatSound);
 		PHYSFSX_printf(fout,"classicautoselectweapon=%i\n",PlayerCfg.ClassicAutoselectWeapon);
+		PHYSFSX_printf(fout,"laserautoselectminlevel=%i\n",PlayerCfg.LaserAutoselectMinLevel);
 		PHYSFSX_printf(fout,"racetracklabels=%i\n",PlayerCfg.RaceTrackLabels);
 		PHYSFSX_printf(fout,"raceminimap=%i\n",PlayerCfg.RaceMinimap);
 		PHYSFSX_printf(fout,"racespeedfov=%i\n",PlayerCfg.RaceSpeedFOV);
