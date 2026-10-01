@@ -1102,6 +1102,8 @@ int HandleGameKey(int key)
 						break;
 					}
 				}
+			else if ((Game_mode & GM_MULTI) && survival_is_eliminated(Player_num))
+				survival_spectate_cycle(0);
 			return 1;
 		case KEY_CTRLED + KEY_0:
 			if (is_observer())
@@ -1116,6 +1118,8 @@ int HandleGameKey(int key)
 						break;
 					}
 				}
+			else if ((Game_mode & GM_MULTI) && survival_is_eliminated(Player_num))
+				survival_spectate_cycle(1);
 			return 1;
 		case KEY_CTRLED + KEY_MINUS:
 			if (is_observer())
@@ -2012,6 +2016,11 @@ int ReadControls(d_event *event)
 			ConsoleObject->pos = Objects[Players[Current_obs_player].objnum].pos;
 			ConsoleObject->orient = Objects[Players[Current_obs_player].objnum].orient;
 		}
+	} else if ((Game_mode & GM_MULTI) && Newdemo_state < ND_STATE_PLAYBACK) {
+		// Same idea as the real observer camera above, for a downed Survival
+		// player -- can't reuse set_obs()/reset_obs() themselves, since they
+		// assert on GM_OBSERVER, which is deliberately never set here.
+		survival_spectate_update_camera();
 	}
 
 	if (Newdemo_state == ND_STATE_PLAYBACK)
@@ -2108,8 +2117,11 @@ int ReadControls(d_event *event)
 	// Survival's shop takes priority over the SPAWN_STYLE_PREVIEW override
 	// above too: browsing (or waiting on teammates in) the shop should never
 	// let thrust, turning, firing, or weapon-select leak through just
-	// because a death-preview respawn happened to also be in flight.
-	if ((Game_mode & GM_MULTI) && survival_shop_blocks_input())
+	// because a death-preview respawn happened to also be in flight. A downed
+	// Survival player gets the same treatment -- their ship is frozen
+	// (survival_player_died(), survival.c) and the camera is being driven by
+	// survival_spectate_update_camera() above instead of flight input.
+	if ((Game_mode & GM_MULTI) && (survival_shop_blocks_input() || survival_is_eliminated(Player_num)))
 		should_read_controls = 0;
 	#endif
 
