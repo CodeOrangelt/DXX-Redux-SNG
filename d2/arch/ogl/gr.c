@@ -82,6 +82,10 @@ int sdl_video_flags = SDL_OPENGL;
 #endif
 int gr_installed = 0;
 int gl_initialized=0;
+
+// SNG: bumped every time the GL context may be rebuilt, so holders of texture
+// ids can tell "mine" from "the game's, now living at the same number".
+int ogl_context_generation = 0;
 int linedotscale=1; // scalar of glLinewidth and glPointSize - only calculated once when resolution changes
 int sdl_no_modeswitch=0;
 
@@ -312,6 +316,7 @@ int ogl_init_window(int x, int y)
 	int iConfigs;
 #endif // OGLES
 
+	ogl_context_generation++;
 	if (gl_initialized)
 		ogl_smash_texture_list_internal();//if we are or were fullscreen, changing vid mode will invalidate current textures
 

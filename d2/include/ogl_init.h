@@ -82,6 +82,7 @@ extern GLfloat ogl_maxanisotropy;
 void ogl_setActiveTexture(int t);
 
 int ogl_init_window(int x, int y);//create a window/switch modes/etc
+extern int ogl_context_generation;	// SNG: changes whenever texture ids may have been invalidated
 
 #define OGL_FLAG_MIPMAP (1 << 0)
 #define OGL_FLAG_NOCOLOR (1 << 1)

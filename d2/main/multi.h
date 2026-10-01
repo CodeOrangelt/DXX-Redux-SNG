@@ -61,7 +61,7 @@ extern int multi_protocol; // set and determinate used protocol
 #define MULTI_PROTO_UDP 1 // UDP protocol
 
 // What version of the multiplayer protocol is this? Increment each time something drastic changes in Multiplayer without the version number changes. Can be reset to 0 each time the version of the game changes
-#define MULTI_PROTO_VERSION 30014 // + Race bots (RaceBotFill byte in netgame_info/game-info packet)
+#define MULTI_PROTO_VERSION 30015 // + Nuklear hosting/advanced-options UI, SmallerSpawn/NewSpawnAlgorithm, lite game-info rules summary/ping/SNG-toggles
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -547,6 +547,7 @@ typedef struct netgame_info
 	ubyte   					max_numobservers;
 	ubyte   					obs_delay;
 	ubyte						obs_min;
+	ubyte						SmallerSpawn;
 	ubyte						host_is_obs;
 	ubyte   					numconnected;
 	ubyte   					game_flags;
@@ -645,6 +646,7 @@ typedef struct netgame_info
 	ubyte						RaceBotFill;		// race mode: total field size the host tops up to with bots (0 = no bots)
 	ubyte						RaceBotSlots;		// race mode: bitmask of player slots the host is driving as bots
 	ubyte						team_color[2];
+	ubyte						NewSpawnAlgorithm;
 } __pack__ netgame_info;
 
 extern int Host_is_obs; // Reminder for host only that they are an observer.  Do not set for other players or observers.

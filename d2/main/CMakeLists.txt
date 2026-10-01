@@ -105,6 +105,11 @@ endif()
 
 if(UDP)
     target_sources(d2x-redux PRIVATE net_udp.c)
+    if(OPENGL)
+        # Nuklear-based hosting/advanced-options UI (nk_ui.c) needs a GL
+        # context to draw into -- only available in OpenGL builds.
+        target_sources(d2x-redux PRIVATE nk_ui.c shotimg.c menu_logo_data.c menu_lava_data.c)
+    endif()
 endif()
 
 if(WIN32)

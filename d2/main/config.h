@@ -21,6 +21,12 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #ifndef _CONFIG_H
 #define _CONFIG_H
 
+#define MENU_BACKGROUND_LEN 64
+// SNG: the art shown until the player picks another. D1's default points at
+// its hi-res add-on's jup01h.pcx; D2 has no equivalent add-on, so this stays
+// empty and nk_ui_draw_backdrop() falls back to the stock menu background.
+#define MENU_BACKGROUND_DEFAULT ""
+
 #include "player.h"
 #include "mission.h"
 
@@ -54,6 +60,8 @@ typedef struct Cfg
 	int Grabinput;
 	int ClassicDepth;
 	int BorderlessWindow;
+	int MenuColor;	// SNG: accent colour family of the menus, see nk_ui.c
+	char MenuBackground[MENU_BACKGROUND_LEN];	// SNG: screenshot file in SCRNS_DIR, empty = stock
 } __pack__ Cfg;
 
 extern struct Cfg GameCfg;
