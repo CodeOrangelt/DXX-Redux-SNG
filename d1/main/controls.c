@@ -65,6 +65,8 @@ void read_flying_controls( object * obj )
 	}
 #endif
 
+	sngmouse_apply(obj);
+
 	//	Couldn't the "50" in the next three lines be changed to "64" with no ill effect?
 	obj->mtype.phys_info.rotthrust.x = Controls.pitch_time;
 	obj->mtype.phys_info.rotthrust.y = Controls.heading_time;

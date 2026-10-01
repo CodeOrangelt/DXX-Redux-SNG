@@ -22,6 +22,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include <string.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <math.h>
 
 #include "dxxerror.h"
 #include "pstypes.h"
@@ -1106,6 +1107,134 @@ int is_key_rotate_event(d_event *event) {
 	return 0; 
 }
 
+// SNG mouse look: raw counts turn into view angle directly, so turn speed
+// does not depend on frame rate. Inertia is an exponential glide on the turn
+// rate; it never changes the total angle a movement adds up to.
+#define SNG_LOOK_HEADING 0
+#define SNG_LOOK_PITCH 1
+#define SNG_LOOK_BANK 2
+#define SNG_LOOK_AXES 3
+#define SNG_LOOK_INPUT_AXES 2	// mouse x and y
+#define SNG_LOOK_FIXANG_PER_COUNT 7.3f	// 0.04 degree per count at sensitivity 8
+#define SNG_LOOK_UNITY_SENS 8.0f
+#define SNG_LOOK_INERTIA_SECONDS_PER_STEP 0.012f
+#define SNG_LOOK_STALE_TIME (F1_0 / 4)	// counts older than this are from before a pause
+#define SNG_LOOK_MAX_STEP 32000	// fixang per frame, below the +-32768 wrap
+#define SNG_LOOK_STOP_RATE 1.0f	// fixang/s below which the glide ends
+#define SNG_LOOK_FAST_RATE 20000.0f	// fixang/s (about 110 deg/s) at which the glide halves
+#define SNG_LOOK_MIN_GLIDE_FRACTION 0.6f	// fast flicks keep at least this much of the glide
+#define SNG_LOOK_MAX_RATE 98304.0f	// fixang/s (540 deg/s) soft ceiling on turn speed
+#define SNG_LOOK_SPEED_SECONDS 0.03f	// how quickly the speed estimate follows the hand
+#define SNG_LOOK_NO_AXIS 255
+#define SNG_LOOK_HEADING_AXIS_ITEM 15
+#define SNG_LOOK_HEADING_INVERT_ITEM 16
+#define SNG_LOOK_PITCH_AXIS_ITEM 13
+#define SNG_LOOK_PITCH_INVERT_ITEM 14
+#define SNG_LOOK_BANK_INVERT_ITEM 22
+
+static struct {
+	float pending[SNG_LOOK_INPUT_AXES];	// raw counts since the last frame, x then y
+	fix64 pending_time;
+	float rate[SNG_LOOK_AXES];	// fixang per second
+	float speed[SNG_LOOK_AXES];	// recent hand speed in fixang/s, steers the glide
+	float carry[SNG_LOOK_AXES];	// fraction of a fixang unit not yet applied
+} SngLook;
+
+static int sng_look_active(void)
+{
+	return PlayerCfg.MouseControlStyle == MOUSE_CONTROL_SNG
+		&& (PlayerCfg.ControlType & CONTROL_USING_MOUSE);
+}
+
+static float sng_look_target_angle(int axis_item, int invert_item, int sens, int flip)
+{
+	int axis = kc_mouse[axis_item].value;
+	float counts;
+
+	if (axis == SNG_LOOK_NO_AXIS || axis >= SNG_LOOK_INPUT_AXES)
+		return 0.0f;
+	counts = SngLook.pending[axis] * (max(sens, 1) / SNG_LOOK_UNITY_SENS) * SNG_LOOK_FIXANG_PER_COUNT;
+	return (kc_mouse[invert_item].value != 0) != flip ? -counts : counts;
+}
+
+// Slow movements get the full glide so jitter is ironed out; fast ones keep
+// most of it, and turn speed is soft-limited so a violent flick can't spin
+// the view out of control.
+static float sng_look_glide(int axis, float target_angle, float dt)
+{
+	float base_tau = PlayerCfg.MouseInertia * SNG_LOOK_INERTIA_SECONDS_PER_STEP;
+	float wanted_rate = target_angle / dt;
+	float *rate = &SngLook.rate[axis];
+	float tau;
+
+	SngLook.speed[axis] += (fabsf(wanted_rate) - SngLook.speed[axis]) * (1.0f - expf(-dt / SNG_LOOK_SPEED_SECONDS));
+	tau = base_tau * fmaxf(SNG_LOOK_MIN_GLIDE_FRACTION, 1.0f / (1.0f + SngLook.speed[axis] / SNG_LOOK_FAST_RATE));
+
+	// Reversing against the glide drops the momentum instead of fighting it
+	if (wanted_rate * *rate < 0.0f)
+		*rate = 0.0f;
+
+	if (tau <= 0.0f)
+		*rate = wanted_rate;
+	else
+		*rate += (wanted_rate - *rate) * (1.0f - expf(-dt / tau));
+	if (fabsf(*rate) < SNG_LOOK_STOP_RATE && wanted_rate == 0.0f)
+		*rate = 0.0f;
+	return SNG_LOOK_MAX_RATE * tanhf(*rate / SNG_LOOK_MAX_RATE) * dt;
+}
+
+void sngmouse_add_motion(int dx, int dy)
+{
+	SngLook.pending[0] += dx;
+	SngLook.pending[1] += dy;
+	SngLook.pending_time = timer_query();
+}
+
+void sngmouse_apply(object *obj)
+{
+	float dt = FrameTime / (float)F1_0;
+	float target[SNG_LOOK_AXES] = { 0.0f, 0.0f, 0.0f };
+	float step[SNG_LOOK_AXES];
+	vms_angvec angles;
+	vms_matrix rotation, new_orient;
+	int i;
+
+	if (!sng_look_active() || dt <= 0.0f)
+	{
+		memset(&SngLook, 0, sizeof(SngLook));
+		return;
+	}
+	if (timer_query() - SngLook.pending_time > SNG_LOOK_STALE_TIME)
+		SngLook.pending[0] = SngLook.pending[1] = 0.0f;
+
+	// Slide on / Bank on hand the mouse to slide or bank, as in the stock code
+	if (!Controls.slide_on_state)
+		target[SNG_LOOK_PITCH] = sng_look_target_angle(SNG_LOOK_PITCH_AXIS_ITEM, SNG_LOOK_PITCH_INVERT_ITEM, PlayerCfg.MouseSens[1], 1);
+	if (!Controls.slide_on_state && !Controls.bank_on_state)
+		target[SNG_LOOK_HEADING] = sng_look_target_angle(SNG_LOOK_HEADING_AXIS_ITEM, SNG_LOOK_HEADING_INVERT_ITEM, PlayerCfg.MouseSens[0], 0);
+	if (Controls.bank_on_state)
+		target[SNG_LOOK_BANK] = sng_look_target_angle(SNG_LOOK_HEADING_AXIS_ITEM, SNG_LOOK_BANK_INVERT_ITEM, PlayerCfg.MouseSens[4], 0);
+	SngLook.pending[0] = SngLook.pending[1] = 0.0f;
+
+	for (i = 0; i < SNG_LOOK_AXES; i++)
+	{
+		step[i] = sng_look_glide(i, target[i], dt) + SngLook.carry[i];
+		step[i] = fmaxf(-SNG_LOOK_MAX_STEP, fminf(SNG_LOOK_MAX_STEP, step[i]));
+		SngLook.carry[i] = step[i] - truncf(step[i]);
+	}
+
+	angles.h = (fixang)truncf(step[SNG_LOOK_HEADING]);
+	angles.p = (fixang)truncf(step[SNG_LOOK_PITCH]);
+	angles.b = (fixang)truncf(step[SNG_LOOK_BANK]);
+	if (!angles.h && !angles.p && !angles.b)
+		return;
+
+	vm_angles_2_matrix(&rotation, &angles);
+	vm_matrix_x_matrix(&new_orient, &obj->orient, &rotation);
+	obj->orient = new_orient;
+	check_and_fix_matrix(&obj->orient);
+}
+
 void kconfig_read_controls(d_event *event, int automap_flag)
 {
 	// Don't read from the controls if we are locked into observing a specific player.
@@ -1288,6 +1417,7 @@ void kconfig_read_controls(d_event *event, int automap_flag)
 			{
 				int dx, dy, dz;
 				event_mouse_get_delta(event, &dx, &dy, &dz);
+				sngmouse_add_motion(dx, dy);
 				
 				float sensitivity = PlayerCfg.MouseSens[0] / 8.0f;
 				float raw_x = dx * sensitivity;
@@ -1354,7 +1484,7 @@ void kconfig_read_controls(d_event *event, int automap_flag)
 		else
 			Controls.pitch_time += (Controls.joy_axis[kc_joystick[13].value]*PlayerCfg.JoystickSens[1]*undercalibrate_scale(PlayerCfg.JoystickUndercalibrate[1]))/8;
 		// From mouse...
-		if ( kc_mouse[13].value != 255 ) {
+		if ( kc_mouse[13].value != 255 && !sng_look_active() ) {
 			if ( !kc_mouse[14].value ) // If not inverted...
 				Controls.pitch_time -= (Controls.mouse_axis[kc_mouse[13].value]*PlayerCfg.MouseSens[1])/8;
 			else
@@ -1455,7 +1585,7 @@ void kconfig_read_controls(d_event *event, int automap_flag)
 		else
 			Controls.heading_time -= (Controls.joy_axis[kc_joystick[15].value]*PlayerCfg.JoystickSens[0]*undercalibrate_scale(PlayerCfg.JoystickUndercalibrate[0]))/8;
 		// From mouse...
-		if ( kc_mouse[15].value != 255 ) {
+		if ( kc_mouse[15].value != 255 && !sng_look_active() ) {
 			if ( !kc_mouse[16].value )		// If not inverted...
 				Controls.heading_time += (Controls.mouse_axis[kc_mouse[15].value]*PlayerCfg.MouseSens[0])/8;
 			else
@@ -1556,7 +1686,7 @@ void kconfig_read_controls(d_event *event, int automap_flag)
 		else
 			Controls.bank_time += (Controls.joy_axis[kc_joystick[15].value]*PlayerCfg.JoystickSens[4]*undercalibrate_scale(PlayerCfg.JoystickUndercalibrate[4]))/8;
 		// From mouse...
-		if ( kc_mouse[15].value != 255 ) {
+		if ( kc_mouse[15].value != 255 && !sng_look_active() ) {
 			if ( !kc_mouse[22].value /*!kc_mouse[16].value*/ )		// If not inverted... NOTE: Use Bank L/R invert setting
 				Controls.bank_time += (Controls.mouse_axis[kc_mouse[15].value]*PlayerCfg.MouseSens[4])/8;
 			else
