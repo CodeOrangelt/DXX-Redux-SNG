@@ -26,6 +26,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdarg.h>
+#include <ctype.h>
 
 // GLEW must be the first GL header included in the translation unit, or its
 // own include guard rejects a plain <GL/gl.h> included ahead of it.
@@ -73,6 +75,7 @@ static void nk_ui_note(const char *text, float extra_rows);
 #include "text.h"
 #include "playsave.h"
 #include "weapon.h"
+#include "powerup.h"
 #include "laser.h"
 #include "config.h"
 #include "gr.h"
@@ -530,13 +533,18 @@ static void nk_ui_checkbox_ubyte(struct nk_context *ctx, const char *label, ubyt
 	*field = val ? 1 : 0;
 }
 
-static void nk_ui_ubyte_slider(struct nk_context *ctx, const char *label_fmt, ubyte *field, int lo, int hi)
+static void nk_ui_ubyte_slider_step(struct nk_context *ctx, const char *label_fmt, ubyte *field, int lo, int hi, int step)
 {
 	int v = *field;
 
 	nk_labelf(ctx, NK_TEXT_LEFT, label_fmt, v);
-	nk_slider_int(ctx, lo, &v, hi, 1);
+	nk_slider_int(ctx, lo, &v, hi, step);
 	*field = (ubyte)v;
+}
+
+static void nk_ui_ubyte_slider(struct nk_context *ctx, const char *label_fmt, ubyte *field, int lo, int hi)
+{
+	nk_ui_ubyte_slider_step(ctx, label_fmt, field, lo, hi, 1);
 }
 
 static void nk_ui_checkbox_short(struct nk_context *ctx, const char *label, short *field)
@@ -1611,16 +1619,136 @@ void nk_ui_weapon_autoselect(void)
 // Advanced options
 // ==============================
 
+// Pushes/pops the accent color onto every text slot a checkbox/radio label
+// can draw from (toggle widgets read style.checkbox/option, not style.text),
+// so a checkbox tinted this way actually changes color instead of the push
+// silently doing nothing.
+static void nk_ui_push_accent_toggle_text(struct nk_context *ctx)
+{
+	nk_style_push_color(ctx, &ctx->style.checkbox.text_normal, NK_UI_ACCENT);
+	nk_style_push_color(ctx, &ctx->style.checkbox.text_hover, NK_UI_ACCENT);
+	nk_style_push_color(ctx, &ctx->style.checkbox.text_active, NK_UI_ACCENT);
+}
+
+static void nk_ui_pop_accent_toggle_text(struct nk_context *ctx)
+{
+	nk_style_pop_color(ctx);
+	nk_style_pop_color(ctx);
+	nk_style_pop_color(ctx);
+}
+
+// A game mode's settings, indented a bit and tinted with the accent color so
+// they read as clearly distinct from the plain-white mode list above them.
 static void nk_ui_build_turkey_rules(struct nk_context *ctx)
 {
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	nk_ui_ubyte_slider(ctx, "Round Length (min): %d", &Netgame.TurkeyRoundMinutes, 1, 30);
-	nk_ui_ubyte_slider(ctx, "Turkey Shields: %d", &Netgame.TurkeyShields, 10, 200);
-	nk_ui_ubyte_slider(ctx, "Turkey Speed: %d%%", &Netgame.TurkeySpeedPct, 100, 200);
-	nk_ui_ubyte_slider(ctx, "Cloak Every (s): %d", &Netgame.TurkeyCloakInterval, 5, 120);
-	nk_ui_ubyte_slider(ctx, "Cloak Lasts (s): %d", &Netgame.TurkeyCloakDuration, 0, 60);
-	nk_ui_ubyte_slider(ctx, "Min Kills to Win (Hunters): %d", &Netgame.TurkeyMinKills, 1, 100);
-	nk_ui_ubyte_slider(ctx, "Extra Kills per Hunter: %d", &Netgame.TurkeyKillsPerHunter, 0, 20);
+	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT);
+	nk_ui_ubyte_slider(ctx, "    Round Length (min): %d", &Netgame.TurkeyRoundMinutes, 1, 30);
+	nk_ui_ubyte_slider(ctx, "    Turkey Shields: %d", &Netgame.TurkeyShields, 10, 200);
+	nk_ui_ubyte_slider(ctx, "    Turkey Speed: %d%%", &Netgame.TurkeySpeedPct, 100, 200);
+	nk_ui_ubyte_slider(ctx, "    Cloak Every (s): %d", &Netgame.TurkeyCloakInterval, 5, 120);
+	nk_ui_ubyte_slider(ctx, "    Cloak Lasts (s): %d", &Netgame.TurkeyCloakDuration, 0, 60);
+	nk_ui_ubyte_slider(ctx, "    Min Kills to Win (Hunters): %d", &Netgame.TurkeyMinKills, 1, 100);
+	nk_ui_ubyte_slider(ctx, "    Extra Kills per Hunter: %d", &Netgame.TurkeyKillsPerHunter, 0, 20);
+	nk_style_pop_color(ctx);
+}
+
+static void nk_ui_build_team_rules(struct nk_context *ctx)
+{
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_ui_push_accent_toggle_text(ctx);
+	nk_ui_checkbox_ubyte(ctx, "    No Friendly Fire", &Netgame.NoFriendlyFire);
+	nk_ui_pop_accent_toggle_text(ctx);
+}
+
+// Ported from the legacy net_udp_arcade_menu() (net_udp.c) -- same fields,
+// same ranges, just driven by Nuklear sliders/checkboxes directly instead of
+// the old menu's stepped-slider-position encoding.
+static void nk_ui_build_arcade_rules(struct nk_context *ctx)
+{
+	int i;
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT);
+	nk_ui_push_accent_toggle_text(ctx);
+	nk_ui_checkbox_ubyte(ctx, "    Team Anarchy (off = FFA)", &Netgame.ArcadeTeams);
+
+	nk_label(ctx, "    Powers That Can Drop", NK_TEXT_LEFT);
+	for (i = 0; i < NUM_ARCADE_SUPERPOWERS; i++)
+	{
+		char label[48];
+		snprintf(label, sizeof(label), "        %s", arcade_superpower_menu_name(i));
+		nk_ui_checkbox_ubyte(ctx, label, &Netgame.ArcadeEnabled[i]);
+	}
+	nk_ui_pop_accent_toggle_text(ctx);
+
+	nk_ui_ubyte_slider_step(ctx, "    Drop Every (s): %d", &Netgame.ArcadeInterval, 5, 60, 5);
+	nk_ui_ubyte_slider_step(ctx, "    Max Active: %d", &Netgame.ArcadeMaxActive, 2, 20, 2);
+	nk_ui_ubyte_slider(ctx, "    Warning Countdown (s): %d", &Netgame.ArcadeCountdown, 0, 9);
+	nk_ui_ubyte_slider_step(ctx, "    Energy Duration (s): %d", &Netgame.ArcadeEnergyTime, 2, 24, 2);
+	nk_ui_ubyte_slider(ctx, "    Homing Missiles Given: %d", &Netgame.ArcadeHomingCount, 1, 12);
+	nk_ui_ubyte_slider(ctx, "    Smart Missiles Given: %d", &Netgame.ArcadeSmartCount, 1, 10);
+	nk_ui_ubyte_slider(ctx, "    Proximity Bombs Given: %d", &Netgame.ArcadeProxyCount, 1, 12);
+	nk_ui_ubyte_slider(ctx, "    Mega Missiles Given: %d", &Netgame.ArcadeMegaCount, 1, 5);
+	nk_style_pop_color(ctx);
+}
+
+// Survival's pacing is driven by the same Netgame.difficulty field as every
+// other mode (see "Game Rules" in Advanced Options) -- this isn't a separate
+// Survival-only setting, just a convenience copy so it's visible right where
+// you pick Survival instead of only in Advanced Options.
+static void nk_ui_build_survival_rules(struct nk_context *ctx)
+{
+	int v = Netgame.difficulty;
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT);
+	nk_labelf(ctx, NK_TEXT_LEFT, "    Difficulty: %s", MENU_DIFFICULTY_TEXT(v));
+	nk_slider_int(ctx, 0, &v, NDL - 1, 1);
+	nk_style_pop_color(ctx);
+	Netgame.difficulty = (ubyte)v;
+}
+
+// King of the Hill and Last Man Standing aren't entries in GMNames -- they're
+// netgame toggles that combine with whichever base mode is selected above,
+// so they're checkboxes here rather than another radio option.
+static void nk_ui_build_koth_rules(struct nk_context *ctx)
+{
+	int v = Netgame.ScoreGoal;
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT);
+	if (Netgame.ScoreGoal == 0)
+		nk_label(ctx, "    Score Goal: Unlimited", NK_TEXT_LEFT);
+	else
+		nk_labelf(ctx, NK_TEXT_LEFT, "    Score Goal: %d", Netgame.ScoreGoal * 1000);
+	nk_slider_int(ctx, 0, &v, 10, 1);
+	nk_ui_ubyte_slider_step(ctx, "    Capture Rate (pts/sec): %d", &Netgame.PointCaptureRate, 50, 500, 25);
+	nk_style_pop_color(ctx);
+	Netgame.ScoreGoal = v;
+}
+
+static void nk_ui_build_lms_rules(struct nk_context *ctx)
+{
+	int v = Netgame.DeathmatchShields;
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT);
+	nk_labelf(ctx, NK_TEXT_LEFT, "    Starting Shields: %d", v * 100);
+	nk_slider_int(ctx, 5, &v, 40, 5);
+	nk_style_pop_color(ctx);
+	Netgame.DeathmatchShields = (ubyte)v;
+}
+
+// Renders one game mode's radio row, plain and identical whether selected
+// or not -- no layout change, no extra widgets, no hint text. The settings
+// for the active mode (if any) render directly below, with no header, the
+// moment the mode becomes active (see the NETGAME_* blocks in
+// nk_ui_build_hosting).
+static int nk_ui_gamemode_option(struct nk_context *ctx, const char *name, int active)
+{
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	return nk_option_label(ctx, name, active);
 }
 
 static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
@@ -1640,7 +1768,8 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 
 		v = Netgame.difficulty;
-		nk_property_int(ctx, "Difficulty", 0, &v, NDL - 1, 1, 1);
+		nk_labelf(ctx, NK_TEXT_LEFT, "Difficulty: %s", MENU_DIFFICULTY_TEXT(v));
+		nk_slider_int(ctx, 0, &v, NDL - 1, 1);
 		Netgame.difficulty = (ubyte)v;
 
 		v = Netgame.control_invul_time / 5 / F1_0 / 60;
@@ -1667,12 +1796,18 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 
 		v = Netgame.PrimaryDupFactor - 1;
-		nk_labelf(ctx, NK_TEXT_LEFT, "Extra Primaries: %s", Netgame.PrimaryDupFactor < 2 ? "None" : "xN");
+		if (Netgame.PrimaryDupFactor < 2)
+			nk_label(ctx, "Extra Primaries: None", NK_TEXT_LEFT);
+		else
+			nk_labelf(ctx, NK_TEXT_LEFT, "Extra Primaries: x%d", Netgame.PrimaryDupFactor);
 		nk_slider_int(ctx, 0, &v, 7, 1);
 		Netgame.PrimaryDupFactor = (ubyte)(v + 1);
 
 		v = Netgame.SecondaryDupFactor - 1;
-		nk_labelf(ctx, NK_TEXT_LEFT, "Extra Secondaries: %s", Netgame.SecondaryDupFactor < 2 ? "None" : "xN");
+		if (Netgame.SecondaryDupFactor < 2)
+			nk_label(ctx, "Extra Secondaries: None", NK_TEXT_LEFT);
+		else
+			nk_labelf(ctx, NK_TEXT_LEFT, "Extra Secondaries: x%d", Netgame.SecondaryDupFactor);
 		nk_slider_int(ctx, 0, &v, 7, 1);
 		Netgame.SecondaryDupFactor = (ubyte)(v + 1);
 
@@ -1711,22 +1846,6 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		nk_label(ctx, "Spawn Logic", NK_TEXT_LEFT);
 		nk_ui_checkbox_ubyte(ctx, "Redux: New Spawn Location Algorithm", &Netgame.NewSpawnAlgorithm);
 		nk_ui_checkbox_ubyte(ctx, "Smaller Map Spawning", &Netgame.SmallerSpawn);
-		nk_tree_pop(ctx);
-	}
-
-	if (nk_tree_push(ctx, NK_TREE_TAB, "Misc Game Modes", NK_MINIMIZED))
-	{
-		int v;
-		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-		nk_ui_checkbox_ubyte(ctx, "King of the Hill", &Netgame.PointCapture);
-		v = Netgame.ScoreGoal;
-		if (Netgame.PointCapture)
-			nk_labelf(ctx, NK_TEXT_LEFT, "Score Goal: %s", Netgame.ScoreGoal == 0 ? "Unlimited" : "");
-		else
-			nk_label(ctx, "Score Goal: (King of the Hill only)", NK_TEXT_LEFT);
-		nk_slider_int(ctx, 0, &v, 10, 1);
-		Netgame.ScoreGoal = v;
-		nk_ui_checkbox_ubyte(ctx, "Last Man Standing", &Netgame.Deathmatch);
 		nk_tree_pop(ctx);
 	}
 
@@ -1779,7 +1898,6 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		else
 			Netgame.game_flags &= ~NETGAME_FLAG_SHOW_MAP;
 
-		nk_ui_checkbox_ubyte(ctx, "No Friendly Fire (Team/Coop)", &Netgame.NoFriendlyFire);
 		nk_tree_pop(ctx);
 	}
 
@@ -1817,6 +1935,250 @@ void nk_ui_advanced_options(void)
 	while (running)
 	{
 		if (!nk_ui_frame("Advanced Options", nk_vec2(0.62f, 0.82f), nk_ui_build_advanced_options, &running))
+			break;
+	}
+}
+
+// ==============================
+// Netgame presets -- ported from upstream dxx-redux's Save/Load Preset
+// feature (net_udp.c's load_preset()/save_preset()), reimplemented for the
+// Nuklear UI. A preset is a "<name>.ngs" text file of key=value lines in
+// the write directory, holding every setting on the hosting screen (this
+// fork's SNG fields included, which upstream's version predates).
+// ==============================
+
+// One X-macro entry per plain integer-like Netgame field a preset should
+// capture. Keeping a single list drives both the writer and the reader, so
+// adding a field to a preset never means touching two duplicated switches.
+#define NK_UI_PRESET_FIELDS(X) \
+	X(gamemode) X(RefusePlayers) X(difficulty) X(max_numplayers) X(max_numobservers) \
+	X(game_flags) X(AllowedItems) X(ShowEnemyNames) X(BrightPlayers) X(SpawnStyle) \
+	X(NewSpawnAlgorithm) X(GaussAmmoStyle) X(KillGoal) X(PlayTimeAllowed) X(control_invul_time) \
+	X(PacketsPerSec) X(ShortPackets) X(NoFriendlyFire) X(RetroProtocol) X(RespawnConcs) \
+	X(LowVulcan) X(AllowPreferredColors) X(AllowColoredLighting) X(FairColors) X(BlackAndWhitePyros) \
+	X(PrimaryDupFactor) X(SecondaryDupFactor) X(SecondaryCapFactor) X(obs_delay) X(obs_min) \
+	X(HomingUpdateRate) X(RemoteHitSpark) X(AllowCustomModelsTextures) X(ReducedFlash) X(DisableFOVChange) \
+	X(WeaponStun) X(PurpleFlash) X(VulcanShake) X(FusionShake) X(FastDoor) X(QuietFan) \
+	X(DarkSmartBlobs) X(SmallerSpawn) X(CTF) X(Deathmatch) X(DeathmatchShields) \
+	X(PointCapture) X(PointCaptureRate) X(ScoreGoal) \
+	X(TurkeyRoundMinutes) X(TurkeyShields) X(TurkeySpeedPct) X(TurkeyCloakInterval) X(TurkeyCloakDuration) \
+	X(TurkeyMinKills) X(TurkeyKillsPerHunter) \
+	X(ArcadeTeams) X(ArcadeInterval) X(ArcadeMaxActive) X(ArcadeCountdown) X(ArcadeEnergyTime) \
+	X(ArcadeHomingCount) X(ArcadeSmartCount) X(ArcadeProxyCount) X(ArcadeMegaCount) \
+	X(StaticPowerups) X(StaticFusion) X(StaticPlasma) X(StaticVulcan) X(StaticSpread) X(StaticLasers) X(StaticMissiles) X(StaticBombs) \
+	X(FusionSpawn) X(VulcanSpawn) X(LasersSpawn) X(PlasmaSpawn) X(SpreadSpawn) X(SmartsSpawn) X(HomersSpawn) X(BombsSpawn) X(MegasSpawn)
+
+#define NK_UI_PRESET_EXT ".ngs"
+#define NK_UI_PRESET_LIST_MAX 64
+#define NK_UI_PRESET_NAME_LEN 32
+
+static void nk_ui_preset_write(PHYSFS_file *file)
+{
+	int i;
+
+#define NK_UI_PRESET_WRITE_ONE(field) PHYSFSX_printf(file, #field "=%d\n", (int)Netgame.field);
+	NK_UI_PRESET_FIELDS(NK_UI_PRESET_WRITE_ONE)
+#undef NK_UI_PRESET_WRITE_ONE
+
+	for (i = 0; i < NUM_ARCADE_SUPERPOWERS; i++)
+		PHYSFSX_printf(file, "ArcadeEnabled%d=%d\n", i, Netgame.ArcadeEnabled[i]);
+}
+
+static void nk_ui_preset_apply_field(const char *token, const char *value)
+{
+	long v;
+	int idx;
+
+	v = strtol(value, NULL, 10);
+
+#define NK_UI_PRESET_READ_ONE(field) if (!strcmp(token, #field)) { Netgame.field = (__typeof__(Netgame.field))v; return; }
+	NK_UI_PRESET_FIELDS(NK_UI_PRESET_READ_ONE)
+#undef NK_UI_PRESET_READ_ONE
+
+	if (sscanf(token, "ArcadeEnabled%d", &idx) == 1 && idx >= 0 && idx < NUM_ARCADE_SUPERPOWERS)
+		Netgame.ArcadeEnabled[idx] = (ubyte)v;
+}
+
+static void nk_ui_preset_read(PHYSFS_file *file)
+{
+	char line[128];
+
+	while (!PHYSFS_eof(file))
+	{
+		char *token, *value, *ptr;
+
+		memset(line, 0, sizeof(line));
+		PHYSFSX_gets(file, line);
+		ptr = line;
+		while (isspace((unsigned char)*ptr))
+			ptr++;
+		if (!*ptr)
+			continue;
+		token = strtok(ptr, "=");
+		value = strtok(NULL, "=");
+		if (!token || !value)
+			continue;
+		nk_ui_preset_apply_field(token, value);
+	}
+}
+
+static void nk_ui_preset_path(char *out, size_t outsz, const char *name)
+{
+	snprintf(out, outsz, "%s" NK_UI_PRESET_EXT, name);
+}
+
+struct nk_ui_preset_list
+{
+	char names[NK_UI_PRESET_LIST_MAX][NK_UI_PRESET_NAME_LEN];
+	int count;
+};
+
+static int nk_ui_preset_name_cmp(const void *a, const void *b)
+{
+	return strcasecmp((const char *)a, (const char *)b);
+}
+
+static void nk_ui_preset_scan(struct nk_ui_preset_list *list)
+{
+	char **found = PHYSFS_enumerateFiles("");
+	char **f;
+	size_t ext_len = strlen(NK_UI_PRESET_EXT);
+
+	list->count = 0;
+	if (!found)
+		return;
+	for (f = found; *f && list->count < NK_UI_PRESET_LIST_MAX; f++)
+	{
+		size_t len = strlen(*f);
+
+		if (len <= ext_len || strcasecmp(*f + len - ext_len, NK_UI_PRESET_EXT))
+			continue;
+		len -= ext_len;
+		if (len >= NK_UI_PRESET_NAME_LEN)
+			len = NK_UI_PRESET_NAME_LEN - 1;
+		memcpy(list->names[list->count], *f, len);
+		list->names[list->count][len] = '\0';
+		list->count++;
+	}
+	PHYSFS_freeList(found);
+	if (list->count > 1)
+		qsort(list->names, list->count, NK_UI_PRESET_NAME_LEN, nk_ui_preset_name_cmp);
+}
+
+struct nk_ui_load_preset_state
+{
+	int running;
+	int selected;
+	struct nk_ui_preset_list list;
+};
+
+static void nk_ui_build_load_preset(struct nk_context *ctx, void *userdata)
+{
+	struct nk_ui_load_preset_state *st = (struct nk_ui_load_preset_state *)userdata;
+	int i;
+	int has_selection = st->selected >= 0 && st->selected < st->list.count;
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 3);
+	if (nk_button_label(ctx, "Back"))
+		st->running = 0;
+	if (nk_button_label(ctx, "Load") && has_selection)
+	{
+		char path[NK_UI_PRESET_NAME_LEN + 8];
+		PHYSFS_file *file = NULL;
+
+		nk_ui_preset_path(path, sizeof(path), st->list.names[st->selected]);
+		if (PHYSFSX_exists(path, 0))
+			file = PHYSFSX_openReadBuffered(path);
+		if (file)
+		{
+			nk_ui_preset_read(file);
+			PHYSFS_close(file);
+			st->running = 0;
+		}
+	}
+	if (nk_button_label(ctx, "Delete") && has_selection)
+	{
+		char path[NK_UI_PRESET_NAME_LEN + 8];
+
+		nk_ui_preset_path(path, sizeof(path), st->list.names[st->selected]);
+		PHYSFS_delete(path);
+		nk_ui_preset_scan(&st->list);
+		st->selected = -1;
+	}
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	if (st->list.count == 0)
+	{
+		nk_label(ctx, "No saved presets", NK_TEXT_LEFT);
+		return;
+	}
+	for (i = 0; i < st->list.count; i++)
+	{
+		nk_bool chosen = i == st->selected;
+
+		if (nk_selectable_label(ctx, st->list.names[i], NK_TEXT_LEFT, &chosen) && chosen)
+			st->selected = i;
+	}
+}
+
+static void nk_ui_load_preset(void)
+{
+	struct nk_ui_load_preset_state st;
+
+	st.running = 1;
+	st.selected = -1;
+	nk_ui_preset_scan(&st.list);
+	nk_ui_init_once();
+	while (st.running)
+	{
+		if (!nk_ui_frame("Load Preset", nk_vec2(0.4f, 0.6f), nk_ui_build_load_preset, &st))
+			break;
+	}
+}
+
+struct nk_ui_save_preset_state
+{
+	int running;
+	char name[NK_UI_PRESET_NAME_LEN];
+};
+
+static void nk_ui_build_save_preset(struct nk_context *ctx, void *userdata)
+{
+	struct nk_ui_save_preset_state *st = (struct nk_ui_save_preset_state *)userdata;
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
+	if (nk_button_label(ctx, "Cancel"))
+		st->running = 0;
+	if ((nk_button_label(ctx, "Save") || nk_ui_take_enter()) && st->name[0])
+	{
+		char path[NK_UI_PRESET_NAME_LEN + 8];
+		PHYSFS_file *file;
+
+		nk_ui_preset_path(path, sizeof(path), st->name);
+		file = PHYSFSX_openWriteBuffered(path);
+		if (file)
+		{
+			nk_ui_preset_write(file);
+			PHYSFS_close(file);
+			st->running = 0;
+		}
+	}
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_label(ctx, "Preset Name", NK_TEXT_LEFT);
+	nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, st->name, sizeof(st->name), nk_filter_default);
+}
+
+static void nk_ui_save_preset(void)
+{
+	struct nk_ui_save_preset_state st;
+
+	memset(&st, 0, sizeof(st));
+	st.running = 1;
+	nk_ui_init_once();
+	while (st.running)
+	{
+		if (!nk_ui_frame("Save Preset", nk_vec2(0.35f, 0.3f), nk_ui_build_save_preset, &st))
 			break;
 	}
 }
@@ -1861,6 +2223,12 @@ static void nk_ui_build_hosting(struct nk_context *ctx, void *userdata)
 			st->start_requested = 1;
 	}
 
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
+	if (nk_button_label(ctx, "Load Preset"))
+		nk_ui_defer(nk_ui_load_preset);
+	if (nk_button_label(ctx, "Save Preset"))
+		nk_ui_defer(nk_ui_save_preset);
+
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	nk_label(ctx, TXT_DESCRIPTION, NK_TEXT_LEFT);
 	nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, Netgame.game_name, NETGAME_NAME_LEN + 1, nk_filter_default);
@@ -1875,18 +2243,51 @@ static void nk_ui_build_hosting(struct nk_context *ctx, void *userdata)
 
 	if (nk_tree_push(ctx, NK_TREE_TAB, "Game Mode", NK_MINIMIZED))
 	{
-	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	if (nk_option_label(ctx, TXT_ANARCHY, Netgame.gamemode == NETGAME_ANARCHY || Netgame.gamemode == 0)) { Netgame.gamemode = NETGAME_ANARCHY; }
-	if (nk_option_label(ctx, TXT_TEAM_ANARCHY, Netgame.gamemode == NETGAME_TEAM_ANARCHY && !Netgame.CTF)) { Netgame.gamemode = NETGAME_TEAM_ANARCHY; Netgame.CTF = 0; }
-	if (nk_option_label(ctx, "Capture the Flag", Netgame.gamemode == NETGAME_TEAM_ANARCHY && Netgame.CTF)) { Netgame.gamemode = NETGAME_TEAM_ANARCHY; Netgame.CTF = 1; }
-	if (nk_option_label(ctx, TXT_ANARCHY_W_ROBOTS, Netgame.gamemode == NETGAME_ROBOT_ANARCHY)) { Netgame.gamemode = NETGAME_ROBOT_ANARCHY; }
-	if (nk_option_label(ctx, TXT_COOPERATIVE, Netgame.gamemode == NETGAME_COOPERATIVE)) { Netgame.gamemode = NETGAME_COOPERATIVE; }
-	if (nk_option_label(ctx, "Bounty", Netgame.gamemode == NETGAME_BOUNTY)) { Netgame.gamemode = NETGAME_BOUNTY; }
-	if (nk_option_label(ctx, "Turkey Shoot", Netgame.gamemode == NETGAME_TURKEY_SHOOT)) { Netgame.gamemode = NETGAME_TURKEY_SHOOT; }
-	if (Netgame.gamemode == NETGAME_TURKEY_SHOOT)
-		nk_ui_build_turkey_rules(ctx);
-	if (nk_option_label(ctx, "Arcade", Netgame.gamemode == NETGAME_ARCADE)) { Netgame.gamemode = NETGAME_ARCADE; Netgame.CTF = 0; }
-	if (nk_option_label(ctx, "Survival", Netgame.gamemode == NETGAME_SURVIVAL)) { Netgame.gamemode = NETGAME_SURVIVAL; Netgame.CTF = 0; }
+		int active;
+
+		active = Netgame.gamemode == NETGAME_ANARCHY || Netgame.gamemode == 0;
+		if (nk_ui_gamemode_option(ctx, TXT_ANARCHY, active)) { Netgame.gamemode = NETGAME_ANARCHY; }
+		nk_ui_checkbox_ubyte(ctx, "    King of the Hill", &Netgame.PointCapture);
+		if (Netgame.PointCapture)
+			nk_ui_build_koth_rules(ctx);
+		nk_ui_checkbox_ubyte(ctx, "    Last Man Standing", &Netgame.Deathmatch);
+		if (Netgame.Deathmatch)
+			nk_ui_build_lms_rules(ctx);
+
+		active = Netgame.gamemode == NETGAME_TEAM_ANARCHY && !Netgame.CTF;
+		if (nk_ui_gamemode_option(ctx, TXT_TEAM_ANARCHY, active)) { Netgame.gamemode = NETGAME_TEAM_ANARCHY; Netgame.CTF = 0; }
+		if (active)
+			nk_ui_build_team_rules(ctx);
+
+		active = Netgame.gamemode == NETGAME_TEAM_ANARCHY && Netgame.CTF;
+		if (nk_ui_gamemode_option(ctx, "Capture the Flag", active)) { Netgame.gamemode = NETGAME_TEAM_ANARCHY; Netgame.CTF = 1; }
+
+		active = Netgame.gamemode == NETGAME_ROBOT_ANARCHY;
+		if (nk_ui_gamemode_option(ctx, TXT_ANARCHY_W_ROBOTS, active)) { Netgame.gamemode = NETGAME_ROBOT_ANARCHY; }
+
+		active = Netgame.gamemode == NETGAME_COOPERATIVE;
+		if (nk_ui_gamemode_option(ctx, TXT_COOPERATIVE, active)) { Netgame.gamemode = NETGAME_COOPERATIVE; }
+		if (active)
+			nk_ui_build_team_rules(ctx);
+
+		active = Netgame.gamemode == NETGAME_BOUNTY;
+		if (nk_ui_gamemode_option(ctx, "Bounty", active)) { Netgame.gamemode = NETGAME_BOUNTY; }
+
+		active = Netgame.gamemode == NETGAME_TURKEY_SHOOT;
+		if (nk_ui_gamemode_option(ctx, "Turkey Shoot", active)) { Netgame.gamemode = NETGAME_TURKEY_SHOOT; }
+		if (active)
+			nk_ui_build_turkey_rules(ctx);
+
+		active = Netgame.gamemode == NETGAME_ARCADE;
+		if (nk_ui_gamemode_option(ctx, "Arcade", active)) { Netgame.gamemode = NETGAME_ARCADE; Netgame.CTF = 0; }
+		if (active)
+			nk_ui_build_arcade_rules(ctx);
+
+		active = Netgame.gamemode == NETGAME_SURVIVAL;
+		if (nk_ui_gamemode_option(ctx, "Survival", active)) { Netgame.gamemode = NETGAME_SURVIVAL; Netgame.CTF = 0; }
+		if (active)
+			nk_ui_build_survival_rules(ctx);
+
 		nk_tree_pop(ctx);
 	}
 
@@ -1960,6 +2361,683 @@ int nk_ui_hosting_setup(void)
 	}
 
 	return st.started;
+}
+
+// ==============================
+// Join Game browser. Only the LIST and its rendering are new here --
+// selecting a row hands off to the existing net_udp_game_connect() state
+// machine (NAT punch, ICE, tracker brokering, retry timing) via
+// net_udp_nk_begin_join()/net_udp_game_connect() exactly as the legacy
+// net_udp_list_join_poll() screen always has. Nothing about that machine is
+// reimplemented or touched here.
+// ==============================
+
+// Snapshot of the row the "Info" button was pressed on, since Active_udp_
+// games[] can shift (games appearing/disappearing) while that screen is up.
+static UDP_netgame_info_lite s_join_info_snapshot;
+// Set by the info screen's Join button; the browser starts the join.
+static int s_join_info_requested;
+
+#define NK_UI_GOOD    nk_rgb(90, 200, 90)
+#define NK_UI_WARN    nk_rgb(230, 170, 40)
+#define NK_UI_BAD     nk_rgb(220, 60, 60)
+#define NK_UI_UNKNOWN nk_rgb(130, 130, 130)
+// Lit and unlit rules flags, as show_netplayerinfo() draws them in game.
+#define NK_UI_FLAG_ON  nk_rgb(206, 206, 206)
+#define NK_UI_FLAG_OFF nk_rgb(99, 99, 99)
+#define NK_UI_INFO_LINE_SPACING 1.25f
+#define NK_UI_INFO_LEFT_LINES 8
+#define NK_UI_INFO_FLAG_ROWS 6
+#define NK_UI_INFO_FLAG_COLS 3
+#define NK_UI_INFO_SNG_ROWS 5
+// Left column, a blank line, then the SNG toggle grid.
+#define NK_UI_INFO_BODY_LINES (NK_UI_INFO_LEFT_LINES + 1 + NK_UI_INFO_SNG_ROWS)
+#define NK_UI_INFO_HEAD_LINES 3
+#define NK_UI_INFO_TEXT_LEN 32
+#define NK_UI_DEFAULT_HOMING_RATE 25
+#define NK_UI_DEFAULT_AMMO_STYLE 1
+
+static int nk_ui_game_is_open(const UDP_netgame_info_lite *g)
+{
+	return g->game_status == NETSTAT_PLAYING && !g->RefusePlayers && !(g->game_flags & NETGAME_FLAG_CLOSED);
+}
+
+static const char *nk_ui_game_status_text(const UDP_netgame_info_lite *g)
+{
+	if (g->game_status == NETSTAT_STARTING)
+		return "FORMING";
+	if (g->game_status != NETSTAT_PLAYING)
+		return "BETWEEN";
+	if (g->RefusePlayers)
+		return "RESTRICT";
+	if (g->game_flags & NETGAME_FLAG_CLOSED)
+		return "CLOSED";
+	return "OPEN";
+}
+
+static struct nk_color nk_ui_game_status_color(const UDP_netgame_info_lite *g)
+{
+	if (nk_ui_game_is_open(g))
+		return NK_UI_GOOD;
+	if (g->game_status == NETSTAT_PLAYING)
+		return NK_UI_BAD;
+	return NK_UI_ACCENT_DIM;
+}
+
+// program_iver[0..2] is in every lite packet regardless of age (see
+// UPID_GAME_INFO_LITE_BASE_SIZE), so this works even for a host too old to
+// carry the rules summary. It mirrors the release-version half of the check
+// net_udp_check_game_info_request() makes when a join is actually attempted
+// (net_udp.c) -- a mismatch here means that attempt will fail with the
+// "Version mismatch" messagebox, so flag it before the player wastes a
+// NAT-punch timeout finding out.
+static int nk_ui_version_mismatch(const UDP_netgame_info_lite *g)
+{
+	return g->program_iver[0] != DXX_VERSION_MAJORi
+		|| g->program_iver[1] != DXX_VERSION_MINORi
+		|| g->program_iver[2] != DXX_VERSION_MICROi;
+}
+
+// "!" drawn in the small HUD font -- there's no separate warning glyph baked
+// into it (font3-1.fnt's only chars past ASCII are the menu cursor arrows,
+// 0x7f-0x82), so plain punctuation in a loud color is the honest option.
+#define NK_UI_WARN_GLYPH "!"
+
+static struct nk_color nk_ui_ping_color(int ms)
+{
+	if (ms <= 0)
+		return NK_UI_UNKNOWN;
+	if (ms > 100)
+		return NK_UI_BAD;
+	if (ms > 70)
+		return NK_UI_WARN;
+	return NK_UI_GOOD;
+}
+
+static void nk_ui_format_ping(char *out, size_t out_size, int ms)
+{
+	if (ms <= 0)
+		snprintf(out, out_size, "--");
+	else
+		snprintf(out, out_size, "%dms", ms);
+}
+
+// Draws straight to the canvas, clipped to the panel so a scrolled-off line
+// can't paint over the border.
+static void nk_ui_draw_text_at(struct nk_context *ctx, float x, float y, float w, const char *text, struct nk_color color)
+{
+	struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+	struct nk_rect clip = nk_window_get_content_region(ctx);
+	struct nk_rect r = nk_rect(x, y, w, s_body_font.handle.height);
+
+	nk_unify(&r, &clip, r.x, r.y, r.x + r.w, r.y + r.h);
+	if (r.w <= 0.0f || r.h <= 0.0f)
+		return;
+	nk_push_scissor(canvas, r);
+	nk_draw_text(canvas, r, text, (int)strlen(text), &s_body_font.handle, nk_rgba(0, 0, 0, 0), color);
+	nk_push_scissor(canvas, clip);
+}
+
+static void nk_ui_draw_text_centered(struct nk_context *ctx, struct nk_rect line, const char *text, struct nk_color color)
+{
+	float w = nk_ui_text_width(&s_body_font, text);
+
+	nk_ui_draw_text_at(ctx, line.x + (line.w - w) * 0.5f, line.y, w + 1.0f, text, color);
+}
+
+struct nk_ui_flag
+{
+	char text[NK_UI_INFO_TEXT_LEN];
+	int on;
+};
+
+static void nk_ui_set_flag(struct nk_ui_flag *flag, int on, const char *fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+	vsnprintf(flag->text, sizeof(flag->text), fmt, args);
+	va_end(args);
+	flag->on = on;
+}
+
+static const char *nk_ui_packet_style_flag(const UDP_netgame_info_lite *g)
+{
+	if (g->RetroProtocol)
+		return "RetroP2P";
+	return g->ShortPackets ? "ShortPkt" : "LongPkt";
+}
+
+static const char *nk_ui_spawn_style_flag(ubyte style)
+{
+	switch (style)
+	{
+		case SPAWN_STYLE_NO_INVUL: return "NoInvul";
+		case SPAWN_STYLE_SHORT_INVUL: return "ShortInv";
+		case SPAWN_STYLE_LONG_INVUL: return "LongInv";
+	}
+	return "Preview";
+}
+
+// Same grid, names and lit/unlit rules as the in-game pause screen.
+static void nk_ui_build_info_flags(const UDP_netgame_info_lite *g, struct nk_ui_flag flags[NK_UI_INFO_FLAG_ROWS][NK_UI_INFO_FLAG_COLS])
+{
+	static const char *const ammo_style[] = { "AmmoDupl", "AmmoDepl", "AmmoDrop", "AmmoSpaw" };
+	const char *ammo = g->GaussAmmoStyle < 4 ? ammo_style[g->GaussAmmoStyle] : "Ammo?";
+
+	nk_ui_set_flag(&flags[0][0], 1, "%s", nk_ui_packet_style_flag(g));
+	nk_ui_set_flag(&flags[0][1], 1, "PPS %d", g->PacketsPerSec);
+	nk_ui_set_flag(&flags[0][2], 1, "%s", nk_ui_spawn_style_flag(g->SpawnStyle));
+	nk_ui_set_flag(&flags[1][0], g->AllowColoredLighting, "ColorLgt");
+	nk_ui_set_flag(&flags[1][1], g->BrightPlayers, "BrtShips");
+	nk_ui_set_flag(&flags[1][2], g->RespawnConcs, "ConcResp");
+	nk_ui_set_flag(&flags[2][0], g->PrimaryDupFactor > 1, "Guns x%d", max(1, (int)g->PrimaryDupFactor));
+	nk_ui_set_flag(&flags[2][1], g->SecondaryDupFactor > 1, "Msls x%d", max(1, (int)g->SecondaryDupFactor));
+	nk_ui_set_flag(&flags[2][2], g->SecondaryCapFactor > 0, "Mcap %s",
+		g->SecondaryCapFactor == 0 ? "ALL" : (g->SecondaryCapFactor == 1 ? "6" : "2"));
+	nk_ui_set_flag(&flags[3][0], g->HomingUpdateRate != NK_UI_DEFAULT_HOMING_RATE, "Hom %d", g->HomingUpdateRate);
+	nk_ui_set_flag(&flags[3][1], g->RemoteHitSpark, "ConfrSprk");
+	nk_ui_set_flag(&flags[3][2], g->AllowCustomModelsTextures, "CustMod");
+	nk_ui_set_flag(&flags[4][0], g->ReducedFlash, "ReduFlas");
+	nk_ui_set_flag(&flags[4][1], g->GaussAmmoStyle != NK_UI_DEFAULT_AMMO_STYLE, "%s", ammo);
+	nk_ui_set_flag(&flags[4][2], g->NewSpawnAlgorithm, "NewSpawn");
+	nk_ui_set_flag(&flags[5][0], g->ShowEnemyNames, "EnmNames");
+	nk_ui_set_flag(&flags[5][1], g->game_flags & NETGAME_FLAG_SHOW_MAP, "MapShow");
+	nk_ui_set_flag(&flags[5][2], g->NoFriendlyFire, "NoFF");
+}
+
+// SNG netgame toggles, abbreviated in the same style.
+static void nk_ui_build_sng_flags(const UDP_netgame_info_lite *g, struct nk_ui_flag flags[NK_UI_INFO_SNG_ROWS][NK_UI_INFO_FLAG_COLS])
+{
+	static const struct { uint32_t bit; const char *text; } toggles[NK_UI_INFO_SNG_ROWS * NK_UI_INFO_FLAG_COLS] = {
+		{ LITE_SNG_KOTH, "KOTH" },            { LITE_SNG_LMS, "LMS" },               { LITE_SNG_SMALL_SPAWN, "SmlSpawn" },
+		{ LITE_SNG_NO_STUN, "NoStun" },       { LITE_SNG_NO_FUSION_FLASH, "NoFsnFl" }, { LITE_SNG_NO_FUSION_SHAKE, "NoFsnShk" },
+		{ LITE_SNG_VULCAN_HEAT, "VulcHeat" }, { LITE_SNG_LOW_VULCAN, "LowVulc" },    { LITE_SNG_FAST_DOORS, "FastDoor" },
+		{ LITE_SNG_DARK_BLOBS, "DarkBlob" },  { LITE_SNG_QUIET_FAN, "QuietFan" },    { LITE_SNG_ALL_BLUE, "AllBlue" },
+		{ LITE_SNG_STATIC_WEAPONS, "StatWpn" }, { LITE_SNG_START_WITH, "StartWth" }, { LITE_SNG_ALT_COLORS, "AltColor" }
+	};
+	int i;
+
+	for (i = 0; i < NK_UI_INFO_SNG_ROWS * NK_UI_INFO_FLAG_COLS; i++)
+		nk_ui_set_flag(&flags[i / NK_UI_INFO_FLAG_COLS][i % NK_UI_INFO_FLAG_COLS],
+			(g->SngToggles & toggles[i].bit) != 0, "%s", toggles[i].text);
+}
+
+static void nk_ui_build_info_left(const UDP_netgame_info_lite *g, char lines[NK_UI_INFO_LEFT_LINES][NK_UI_INFO_TEXT_LEN * 2])
+{
+	char host[16], avg[16];
+	size_t n = sizeof(lines[0]);
+	int i;
+
+	for (i = 0; i < NK_UI_INFO_LEFT_LINES; i++)
+		lines[i][0] = '\0';
+	nk_ui_format_ping(host, sizeof(host), g->host_ping);
+	nk_ui_format_ping(avg, sizeof(avg), g->avg_ping);
+	snprintf(lines[0], n, "mode: %s", g->gamemode < MULTI_GAME_TYPE_COUNT ? GMNames[g->gamemode] : "Unknown");
+	snprintf(lines[1], n, "skill: %s", MENU_DIFFICULTY_TEXT(g->difficulty));
+	snprintf(lines[2], n, "players: %d / %d", g->numconnected, g->max_numplayers);
+	snprintf(lines[3], n, "status: %s", nk_ui_game_status_text(g));
+	snprintf(lines[4], n, "ping: %s avg: %s", host, avg);
+	if (!g->has_rules)
+		return;
+	snprintf(lines[5], n, "reactor: %d min", g->control_invul_time / F1_0 / 60);
+	if (g->PlayTimeAllowed)
+		snprintf(lines[6], n, "time: %d min", g->PlayTimeAllowed * 5);
+	else
+		snprintf(lines[6], n, "time: none");
+	if (g->KillGoal)
+		snprintf(lines[7], n, "goal: %d kills", g->KillGoal * 10);
+	else
+		snprintf(lines[7], n, "goal: none");
+}
+
+// Letters in show_netplayerinfo()'s order; C (concussion) is always allowed.
+static float nk_ui_draw_info_items(struct nk_context *ctx, float x, float y, int allowed)
+{
+	static const struct { const char *letter; int flag; } items[] = {
+		{ "L", NETFLAG_DOLASER }, { "Q", NETFLAG_DOQUAD }, { "V", NETFLAG_DOVULCAN },
+		{ "A", NETFLAG_DOVULCANAMMO }, { "S", NETFLAG_DOSPREAD }, { "P", NETFLAG_DOPLASMA },
+		{ "F", NETFLAG_DOFUSION }, { "C", 0 }, { "H", NETFLAG_DOHOMING },
+		{ "P", NETFLAG_DOPROXIM }, { "S", NETFLAG_DOSMART }, { "M", NETFLAG_DOMEGA },
+		{ "C", NETFLAG_DOCLOAK }, { "I", NETFLAG_DOINVUL }
+	};
+	float step = nk_ui_text_width(&s_body_font, "W") * 1.15f;
+	float label_w = nk_ui_text_width(&s_body_font, "Items: ");
+	int i;
+
+	nk_ui_draw_text_at(ctx, x, y, label_w, "Items:", NK_UI_FLAG_ON);
+	x += label_w;
+	for (i = 0; i < (int)(sizeof(items) / sizeof(items[0])); i++)
+	{
+		int on = !items[i].flag || (allowed & items[i].flag);
+
+		nk_ui_draw_text_at(ctx, x, y, step, items[i].letter, on ? NK_UI_FLAG_ON : NK_UI_FLAG_OFF);
+		x += step;
+	}
+	return label_w + step * i;
+}
+
+static float nk_ui_widest_flag(struct nk_ui_flag (*flags)[NK_UI_INFO_FLAG_COLS], int rows)
+{
+	float widest = 0.0f;
+	int r, c;
+
+	for (r = 0; r < rows; r++)
+		for (c = 0; c < NK_UI_INFO_FLAG_COLS; c++)
+			widest = max(widest, nk_ui_text_width(&s_body_font, flags[r][c].text));
+	return widest;
+}
+
+static float nk_ui_widest_line(char lines[NK_UI_INFO_LEFT_LINES][NK_UI_INFO_TEXT_LEN * 2])
+{
+	float widest = 0.0f;
+	int i;
+
+	for (i = 0; i < NK_UI_INFO_LEFT_LINES; i++)
+		widest = max(widest, nk_ui_text_width(&s_body_font, lines[i]));
+	return widest;
+}
+
+static void nk_ui_draw_flag_grid(struct nk_context *ctx, float x0, float y, float line_h, float flag_w,
+	struct nk_ui_flag (*flags)[NK_UI_INFO_FLAG_COLS], int rows)
+{
+	int r, c;
+
+	for (r = 0; r < rows; r++, y += line_h)
+		for (c = 0; c < NK_UI_INFO_FLAG_COLS; c++)
+			nk_ui_draw_text_at(ctx, x0 + flag_w * c, y, flag_w, flags[r][c].text,
+				flags[r][c].on ? NK_UI_FLAG_ON : NK_UI_FLAG_OFF);
+}
+
+static void nk_ui_draw_info_head(struct nk_context *ctx, struct nk_rect sheet, float line_h, const UDP_netgame_info_lite *g)
+{
+	struct nk_rect line = nk_rect(sheet.x, sheet.y, sheet.w, line_h);
+	char mission[NK_UI_INFO_TEXT_LEN * 2];
+
+	nk_ui_draw_text_centered(ctx, line, g->game_name, NK_UI_ACCENT_BRIGHT);
+	line.y += line_h;
+	snprintf(mission, sizeof(mission), "%s - lvl: %d", g->mission_title, g->levelnum);
+	nk_ui_draw_text_centered(ctx, line, mission, NK_UI_FLAG_ON);
+	line.y += line_h;
+	// The 3rd reserved head line is otherwise blank spacing -- use it here.
+	if (nk_ui_version_mismatch(g))
+	{
+		char warn[NK_UI_INFO_TEXT_LEN * 2];
+
+		snprintf(warn, sizeof(warn), NK_UI_WARN_GLYPH " version mismatch: host %d.%d.%d, you %d.%d.%d " NK_UI_WARN_GLYPH,
+			g->program_iver[0], g->program_iver[1], g->program_iver[2],
+			DXX_VERSION_MAJORi, DXX_VERSION_MINORi, DXX_VERSION_MICROi);
+		nk_ui_draw_text_centered(ctx, line, warn, NK_UI_BAD);
+	}
+}
+
+// Compact rules sheet modelled on the in-game pause overlay: game name and
+// mission centred, facts down the left, a grid of lit/unlit flags right.
+static void nk_ui_draw_info_sheet(struct nk_context *ctx, const UDP_netgame_info_lite *g)
+{
+	struct nk_ui_flag flags[NK_UI_INFO_FLAG_ROWS][NK_UI_INFO_FLAG_COLS];
+	struct nk_ui_flag sng[NK_UI_INFO_SNG_ROWS][NK_UI_INFO_FLAG_COLS];
+	char left[NK_UI_INFO_LEFT_LINES][NK_UI_INFO_TEXT_LEN * 2];
+	float line_h = s_body_font.handle.height * NK_UI_INFO_LINE_SPACING;
+	float gap = nk_ui_text_width(&s_body_font, "  ");
+	int body_lines = g->has_rules ? NK_UI_INFO_BODY_LINES : NK_UI_INFO_LEFT_LINES;
+	float left_w, flag_w, items_w, grid_x, y;
+	struct nk_rect sheet;
+	int i;
+
+	nk_ui_build_info_left(g, left);
+	nk_ui_build_info_flags(g, flags);
+	nk_ui_build_sng_flags(g, sng);
+	left_w = nk_ui_widest_line(left) + gap;
+	flag_w = max(nk_ui_widest_flag(flags, NK_UI_INFO_FLAG_ROWS), nk_ui_widest_flag(sng, NK_UI_INFO_SNG_ROWS)) + gap;
+
+	nk_layout_row_dynamic(ctx, line_h * (NK_UI_INFO_HEAD_LINES + body_lines), 1);
+	sheet = nk_widget_bounds(ctx);
+	nk_label(ctx, "", NK_TEXT_LEFT);
+
+	nk_ui_draw_info_head(ctx, sheet, line_h, g);
+	y = sheet.y + line_h * NK_UI_INFO_HEAD_LINES;
+	for (i = 0; i < NK_UI_INFO_LEFT_LINES; i++)
+		nk_ui_draw_text_at(ctx, sheet.x, y + line_h * i, left_w, left[i], nk_rgb(255, 255, 255));
+
+	if (!g->has_rules)
+	{
+		nk_ui_draw_text_at(ctx, sheet.x + left_w, y, sheet.w - left_w, "rules n/a", NK_UI_FLAG_OFF);
+		nk_ui_draw_text_at(ctx, sheet.x + left_w, y + line_h, sheet.w - left_w, "(older host)", NK_UI_FLAG_OFF);
+		return;
+	}
+
+	// A narrow screen caps the panel width; squeeze the grid rather than clip it.
+	if (left_w + flag_w * NK_UI_INFO_FLAG_COLS > sheet.w)
+		flag_w = (sheet.w - left_w) / NK_UI_INFO_FLAG_COLS;
+	grid_x = sheet.x + left_w;
+	nk_ui_draw_flag_grid(ctx, grid_x, y, line_h, flag_w, flags, NK_UI_INFO_FLAG_ROWS);
+	items_w = nk_ui_draw_info_items(ctx, grid_x, y + line_h * NK_UI_INFO_FLAG_ROWS, g->AllowedItems);
+
+	y += line_h * (NK_UI_INFO_LEFT_LINES + 1);
+	nk_ui_draw_text_at(ctx, sheet.x, y, left_w, "sng:", NK_UI_ACCENT_BRIGHT);
+	nk_ui_draw_flag_grid(ctx, grid_x, y, line_h, flag_w, sng, NK_UI_INFO_SNG_ROWS);
+
+	if (s_widest_label < left_w + max(flag_w * NK_UI_INFO_FLAG_COLS, items_w))
+		s_widest_label = left_w + max(flag_w * NK_UI_INFO_FLAG_COLS, items_w);
+}
+
+static void nk_ui_build_join_info(struct nk_context *ctx, void *userdata)
+{
+	int *running = (int *)userdata;
+
+	nk_ui_draw_info_sheet(ctx, &s_join_info_snapshot);
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
+	if (nk_button_label(ctx, "Join"))
+	{
+		s_join_info_requested = 1;
+		*running = 0;
+	}
+	if (nk_button_label(ctx, "Back") || nk_ui_take_enter())
+		*running = 0;
+}
+
+static void nk_ui_join_info(void)
+{
+	int running = 1;
+
+	nk_ui_init_once();
+	while (running)
+	{
+		if (!nk_ui_frame("Game Info", nk_vec2(0.5f, 0.6f), nk_ui_build_join_info, &running))
+			break;
+	}
+}
+
+struct nk_ui_browse_state
+{
+	int running;
+};
+
+// The join in progress, if any -- owned by nk_ui_join_progress()'s own
+// deferred screen, not by nk_ui_build_browse(). net_udp_game_connect() can
+// pop a legacy nm_messagebox() (version mismatch, no response, ...), which
+// is itself drawn as a nested Nuklear frame; running that mid-build here
+// would call nk_clear() on the still-open "Join Game" panel and freeze the
+// game, exactly the hazard nk_ui_defer() exists to avoid. So the whole
+// connect state machine gets its own screen, deferred the same way the
+// Info popup is.
+static direct_join s_active_join;
+static int s_join_finished;
+static int s_join_succeeded;
+
+enum
+{
+	NK_UI_BROWSE_NAME,
+	NK_UI_BROWSE_MODE,
+	NK_UI_BROWSE_PLAYERS,
+	NK_UI_BROWSE_MISSION,
+	NK_UI_BROWSE_LEVEL,
+	NK_UI_BROWSE_STATUS,
+	NK_UI_BROWSE_PING,
+	NK_UI_BROWSE_AVG,
+	NK_UI_BROWSE_COLS
+};
+
+// Fractions of the clickable row; the Info button sits outside it.
+static const float s_browse_col_w[NK_UI_BROWSE_COLS] = { 0.25f, 0.12f, 0.09f, 0.21f, 0.06f, 0.11f, 0.08f, 0.08f };
+static const char *const s_browse_heads[NK_UI_BROWSE_COLS] = { "Game", "Mode", "Players", "Mission", "Lvl", "Status", "Ping", "Avg" };
+#define NK_UI_BROWSE_ROW_FRAC  0.92f
+#define NK_UI_BROWSE_INFO_FRAC 0.08f
+#define NK_UI_BROWSE_RULE_DIVISOR 12
+#define NK_UI_BROWSE_CELL_PAD_ROWS 0.3f
+
+struct nk_ui_browse_cells
+{
+	char text[NK_UI_BROWSE_COLS][NK_UI_INFO_TEXT_LEN * 2];
+	struct nk_color color[NK_UI_BROWSE_COLS];
+};
+
+static void nk_ui_draw_browse_cells(struct nk_context *ctx, struct nk_rect row, const struct nk_ui_browse_cells *cells)
+{
+	float pad = s_row_h * NK_UI_BROWSE_CELL_PAD_ROWS;
+	float y = row.y + (row.h - s_body_font.handle.height) * 0.5f;
+	float x = row.x;
+	int col;
+
+	for (col = 0; col < NK_UI_BROWSE_COLS; col++)
+	{
+		float w = row.w * s_browse_col_w[col];
+
+		nk_ui_draw_text_at(ctx, x + pad, y, w - pad, cells->text[col], cells->color[col]);
+		x += w;
+	}
+}
+
+static void nk_ui_browse_row_begin(struct nk_context *ctx)
+{
+	nk_layout_row_begin(ctx, NK_DYNAMIC, (float)NK_UI_ROW_HEIGHT, 2);
+	nk_layout_row_push(ctx, NK_UI_BROWSE_ROW_FRAC);
+}
+
+static void nk_ui_browse_header(struct nk_context *ctx)
+{
+	struct nk_ui_browse_cells cells;
+	struct nk_rect row, rule;
+	int col;
+
+	for (col = 0; col < NK_UI_BROWSE_COLS; col++)
+	{
+		snprintf(cells.text[col], sizeof(cells.text[col]), "%s", s_browse_heads[col]);
+		cells.color[col] = NK_UI_ACCENT_BRIGHT;
+	}
+
+	nk_ui_browse_row_begin(ctx);
+	row = nk_widget_bounds(ctx);
+	nk_label(ctx, "", NK_TEXT_LEFT);
+	nk_layout_row_push(ctx, NK_UI_BROWSE_INFO_FRAC);
+	nk_spacing(ctx, 1);
+	nk_layout_row_end(ctx);
+	nk_ui_draw_browse_cells(ctx, row, &cells);
+
+	nk_layout_row_dynamic(ctx, (float)max(1, NK_UI_ROW_HEIGHT / NK_UI_BROWSE_RULE_DIVISOR), 1);
+	rule = nk_widget_bounds(ctx);
+	nk_spacing(ctx, 1);
+	nk_fill_rect(nk_window_get_canvas(ctx), rule, 0, NK_UI_ACCENT_DIM);
+}
+
+// Two-player anarchy is how duels are hosted; the netgame itself is still anarchy.
+static const char *nk_ui_browse_mode_name(const UDP_netgame_info_lite *g)
+{
+	if (g->gamemode == NETGAME_ANARCHY && g->max_numplayers == 2)
+		return "1v1";
+	if (g->gamemode >= MULTI_GAME_TYPE_COUNT)
+		return "?";
+	return GMNamesShrt[g->gamemode];
+}
+
+static void nk_ui_browse_row_cells(const UDP_netgame_info_lite *g, int hovered, struct nk_color text, struct nk_ui_browse_cells *cells)
+{
+	size_t n = sizeof(cells->text[0]);
+	int col;
+
+	for (col = 0; col < NK_UI_BROWSE_COLS; col++)
+		cells->color[col] = text;
+
+	snprintf(cells->text[NK_UI_BROWSE_NAME], n, "%s%s", nk_ui_version_mismatch(g) ? NK_UI_WARN_GLYPH " " : "", g->game_name);
+	snprintf(cells->text[NK_UI_BROWSE_MODE], n, "%s", nk_ui_browse_mode_name(g));
+	snprintf(cells->text[NK_UI_BROWSE_PLAYERS], n, "%d/%d", g->numconnected, g->max_numplayers);
+	snprintf(cells->text[NK_UI_BROWSE_MISSION], n, "%s", g->mission_title);
+	snprintf(cells->text[NK_UI_BROWSE_LEVEL], n, "%d", g->levelnum);
+	snprintf(cells->text[NK_UI_BROWSE_STATUS], n, "%s", nk_ui_game_status_text(g));
+	nk_ui_format_ping(cells->text[NK_UI_BROWSE_PING], n, g->host_ping);
+	nk_ui_format_ping(cells->text[NK_UI_BROWSE_AVG], n, g->avg_ping);
+
+	if (nk_ui_version_mismatch(g))
+		cells->color[NK_UI_BROWSE_NAME] = NK_UI_BAD;
+	else
+		cells->color[NK_UI_BROWSE_NAME] = hovered ? NK_UI_ACCENT_BRIGHT : nk_rgb(255, 255, 255);
+	if (g->numconnected >= g->max_numplayers)
+		cells->color[NK_UI_BROWSE_PLAYERS] = NK_UI_WARN;
+	cells->color[NK_UI_BROWSE_STATUS] = nk_ui_game_status_color(g);
+	cells->color[NK_UI_BROWSE_PING] = nk_ui_ping_color(g->host_ping);
+	cells->color[NK_UI_BROWSE_AVG] = nk_ui_ping_color(g->avg_ping);
+}
+
+static void nk_ui_build_join_progress(struct nk_context *ctx, void *userdata)
+{
+	int *running = (int *)userdata;
+
+	// Keeps the connect state machine moving every frame, exactly like
+	// net_udp_list_join_poll()'s EVENT_IDLE case -- but in its own frame,
+	// so any messagebox it pops gets its own nk_begin()/nk_end() too.
+	if (net_udp_game_connect(&s_active_join))
+	{
+		s_join_succeeded = 1;
+		s_join_finished = 1;
+		*running = 0;
+		return;
+	}
+	if (!s_active_join.connecting)
+	{
+		s_join_succeeded = 0;
+		s_join_finished = 1; // gave up -- net_udp_game_connect() already said why
+		*running = 0;
+		return;
+	}
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_label(ctx, "Connecting...", NK_TEXT_LEFT);
+	if (nk_button_label(ctx, "Cancel"))
+	{
+		s_active_join.connecting = 0;
+		s_join_succeeded = 0;
+		s_join_finished = 1;
+		*running = 0;
+	}
+}
+
+static void nk_ui_join_progress(void)
+{
+	int running = 1;
+
+	nk_ui_init_once();
+	while (running)
+	{
+		if (!nk_ui_frame("Join Game", nk_vec2(0.4f, 0.25f), nk_ui_build_join_progress, &running))
+			break;
+	}
+}
+
+static void nk_ui_browse_start_join(int list_index)
+{
+	memset(&s_active_join, 0, sizeof(s_active_join));
+	net_udp_nk_begin_join(&s_active_join, list_index);
+	s_join_finished = 0;
+	nk_ui_defer(nk_ui_join_progress);
+}
+
+// The list may have reshuffled while the info screen was up.
+static int nk_ui_find_game(const UDP_netgame_info_lite *wanted)
+{
+	int i;
+
+	for (i = 0; i < num_active_udp_games; i++)
+		if (Active_udp_games[i].GameID == wanted->GameID && !d_stricmp(Active_udp_games[i].game_name, wanted->game_name))
+			return i;
+	return -1;
+}
+
+static void nk_ui_browse_game_row(struct nk_context *ctx, int list_index)
+{
+	UDP_netgame_info_lite *g = &Active_udp_games[list_index];
+	struct nk_ui_browse_cells cells;
+	struct nk_rect row;
+	int hovered;
+
+	nk_ui_browse_row_begin(ctx);
+	row = nk_widget_bounds(ctx);
+	hovered = nk_input_is_mouse_hovering_rect(&ctx->input, row);
+	if (nk_button_label(ctx, ""))
+		nk_ui_browse_start_join(list_index);
+	nk_ui_browse_row_cells(g, hovered, ctx->style.text.color, &cells);
+	nk_ui_draw_browse_cells(ctx, row, &cells);
+
+	nk_layout_row_push(ctx, NK_UI_BROWSE_INFO_FRAC);
+	if (nk_button_label(ctx, "Info"))
+	{
+		s_join_info_snapshot = *g;
+		nk_ui_defer(nk_ui_join_info);
+	}
+	nk_layout_row_end(ctx);
+}
+
+static void nk_ui_browse_empty_line(struct nk_context *ctx)
+{
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT_DIM);
+	nk_label(ctx, "No games found yet -- Refresh, or wait for LAN/tracker replies.", NK_TEXT_LEFT);
+	nk_style_pop_color(ctx);
+}
+
+static void nk_ui_build_browse(struct nk_context *ctx, void *userdata)
+{
+	struct nk_ui_browse_state *st = (struct nk_ui_browse_state *)userdata;
+	int i;
+
+	if (s_join_finished)
+	{
+		s_join_finished = 0;
+		if (s_join_succeeded)
+		{
+			st->running = 0;
+			return;
+		}
+	}
+
+	net_udp_listen();
+
+	if (s_join_info_requested)
+	{
+		s_join_info_requested = 0;
+		i = nk_ui_find_game(&s_join_info_snapshot);
+		if (i >= 0)
+			nk_ui_browse_start_join(i);
+	}
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
+	if (nk_button_label(ctx, "Back"))
+		st->running = 0;
+	if (nk_button_label(ctx, "Refresh"))
+		net_udp_nk_browse_refresh();
+
+	if (num_active_udp_games == 0)
+	{
+		nk_ui_browse_empty_line(ctx);
+		return;
+	}
+
+	nk_ui_browse_header(ctx);
+	for (i = 0; i < num_active_udp_games; i++)
+		nk_ui_browse_game_row(ctx, i);
+}
+
+void nk_ui_join_game(void)
+{
+	struct nk_ui_browse_state st;
+
+	nk_ui_init_once();
+	event_toggle_focus(0); // see nk_ui_hosting_setup() -- same reason, same call, needed here too since this is reached directly from the main menu
+
+	memset(&st, 0, sizeof(st));
+	st.running = 1;
+
+	if (!net_udp_nk_browse_begin())
+		return;
+
+	while (st.running)
+	{
+		if (!nk_ui_frame("Join Game", nk_vec2(0.85f, 0.85f), nk_ui_build_browse, &st))
+			break;
+	}
+
+	net_udp_nk_browse_end();
 }
 
 // ==============================

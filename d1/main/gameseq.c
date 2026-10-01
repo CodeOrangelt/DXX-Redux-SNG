@@ -470,7 +470,7 @@ void init_player_stats_new_ship(ubyte pnum)
 	// SNG toggle: Deathmatch mode - high shields, 1 life
 	if (Netgame.Deathmatch && pnum < MAX_PLAYERS)
 	{
-		Players[pnum].shields = i2f(2000);
+		Players[pnum].shields = i2f(Netgame.DeathmatchShields * 100);
 		Players[pnum].lives = 1;
 	}
 

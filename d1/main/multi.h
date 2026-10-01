@@ -70,7 +70,7 @@ extern int multi_protocol; // set and determinate used protocol
 // bump matters: an old peer would happily relay gameplay that a new peer
 // now discards, which would look like a totally broken game rather than the
 // version mismatch it is.
-#define MULTI_PROTO_VERSION 30087 // SNG 1.7 + Arcade mode + Survival (+ shop ready-check) + Turkey Shoot rounds
+#define MULTI_PROTO_VERSION 30090 // SNG 1.7 + Arcade mode + Survival (+ shop ready-check) + Turkey Shoot rounds + KOTH capture rate + LMS starting shields + netlist avg ping + browser rules summary
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -359,6 +359,9 @@ void multi_do_turkey_end(const ubyte *buf);
 #define TURKEY_TEAM_HUNTERS 0
 #define TURKEY_TEAM_TURKEYS 1
 extern int Turkey_round_goal;
+
+#define POINT_CAPTURE_DEFAULT_RATE 250		// points/sec, matches the rate hardcoded before this was a setting
+#define DEATHMATCH_DEFAULT_SHIELDS 20		// x100 -- matches the 2000 hardcoded before this was a setting
 extern int Turkey_round_kills;
 extern int Turkey_round_secs_left;
 extern int Turkey_round_over;
@@ -581,6 +584,7 @@ typedef struct netgame_info
 	ubyte						RespawnConcs; 
 	ubyte						AllowColoredLighting;
 	ubyte						Deathmatch;
+	ubyte						DeathmatchShields;	// SNG: LMS starting shields, x100 (e.g. 20 = 2000)
 	ubyte						PurpleFlash;
 	ubyte   					CTF;
 	ubyte						SmallerSpawn;
@@ -627,7 +631,8 @@ typedef struct netgame_info
 	ubyte						StaticBombs;
 	ubyte						FastDoor;
 	ubyte						PointCapture;
-	ubyte						FairColors;	
+	ubyte						PointCaptureRate;	// SNG: KOTH points scored per second while capturing
+	ubyte						FairColors;
 	ubyte						BlackAndWhitePyros;
 	ubyte						PrimaryDupFactor;
 	ubyte						SecondaryDupFactor;

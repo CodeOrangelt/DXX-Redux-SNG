@@ -142,7 +142,7 @@ static int tracker_index_for_addr(struct _sockaddr addr);
 #endif
 void net_udp_process_ping(ubyte *data, int data_len, struct _sockaddr sender_addr);
 void net_udp_process_pong(ubyte *data, int data_len, struct _sockaddr sender_addr);
-int  net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_addr, int lite_info, ubyte is_sync);
+int  net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_addr, int lite_info, ubyte is_sync, ubyte via_tracker);
 void net_udp_read_endlevel_packet( ubyte *data, int data_len, struct _sockaddr sender_addr );
 void net_udp_send_mdata(int needack, fix64 time);
 void net_udp_send_obs_mdata(fix64 time);
@@ -1005,7 +1005,7 @@ int udp_tracker_process_game( ubyte *data, int data_len )
 		return -1;
 	
 	// Now move on to BIGGER AND BETTER THINGS!
-	net_udp_process_game_info( &data[iPos - 1], data_len - iPos, sAddr, 1 , 0);
+	net_udp_process_game_info( &data[iPos - 1], data_len - (iPos - 1), sAddr, 1 , 0, 1);
 	return 0;
 }
 
@@ -1520,16 +1520,6 @@ void net_udp_upnp_unmap_port(int port)
 }
 
 #endif /* USE_UPNP */
-
-typedef struct direct_join
-{
-	struct _sockaddr host_addr;
-	int connecting;
-	fix64 start_time, last_time;
-	char addrbuf[128];
-	char portbuf[6];
-	ubyte join_as_obs;
-} direct_join;
 
 
 int generate_token() {
@@ -2299,6 +2289,16 @@ int net_udp_list_join_poll( newmenu *menu, d_event *event, direct_join *dj )
 	return 0;
 }
 
+#ifdef OGL
+// Nuklear-based game browser -- see nk_ui.c. Not available in the plain SDL
+// software-surface build, which has no GL context for it to draw into; that
+// build keeps the legacy newmenu-based flow below (same split as
+// net_udp_setup_game()'s Host Game screen).
+void net_udp_list_join_game()
+{
+	nk_ui_join_game();
+}
+#else
 void net_udp_list_join_game()
 {
 	int i = 0;
@@ -2376,6 +2376,99 @@ void net_udp_list_join_game()
 
 	num_active_udp_changed = 1;
 	newmenu_dotiny_nk("NETGAMES", NULL,(UDP_NETGAMES_PPAGE+4), m, 1, (int (*)(newmenu *, d_event *, void *))net_udp_list_join_poll, dj);
+}
+#endif
+
+// ==============================
+// Nuklear game browser glue (nk_ui.c). Mirrors net_udp_list_join_game()'s
+// setup, net_udp_list_join_poll()'s F4 refresh and EVENT_WINDOW_CLOSE, and
+// its EVENT_NEWMENU_SELECTED join handoff -- each copied out rather than
+// shared with the legacy screen, so touching this can never affect it.
+// net_udp_game_connect() itself, and everything under it (NAT punch, ICE,
+// tracker brokering, retry timing), is untouched either way.
+// ==============================
+
+int net_udp_nk_browse_begin(void)
+{
+	net_udp_init();
+	if (udp_open_socket(0, GameArg.MplUdpMyPort != 0 ? GameArg.MplUdpMyPort : UDP_PORT_DEFAULT) < 0)
+		return 0;
+
+	if (GameArg.MplUdpMyPort != 0)
+		if (udp_open_socket(1, UDP_PORT_DEFAULT) < 0)
+			nm_messagebox(TXT_WARNING, 1, TXT_OK, "Cannot open default port!\nYou can only scan for games\nmanually.");
+
+	memset(&GBcast, '\0', sizeof(struct _sockaddr));
+	udp_dns_filladdr(UDP_BCAST_ADDR, UDP_PORT_DEFAULT, &GBcast);
+#ifdef IPv6
+	memset(&GMcast_v6, '\0', sizeof(struct _sockaddr));
+	udp_dns_filladdr(UDP_MCASTv6_ADDR, UDP_PORT_DEFAULT, &GMcast_v6);
+#endif
+
+	change_playernum_to(1);
+	N_players = 0;
+	Network_send_objects = 0;
+	Network_sending_extras = 0;
+	Network_rejoined = 0;
+
+	Network_status = NETSTAT_BROWSING;
+
+	net_udp_flush();
+	net_udp_listen();
+
+	memset(Active_udp_games, 0, sizeof(UDP_netgame_info_lite) * UDP_MAX_NETGAMES);
+	num_active_udp_games = 0;
+
+	net_udp_nk_browse_refresh();
+
+	return 1;
+}
+
+void net_udp_nk_browse_refresh(void)
+{
+	memset(Active_udp_games, 0, sizeof(UDP_netgame_info_lite) * UDP_MAX_NETGAMES);
+	num_active_udp_changed = 1;
+	num_active_udp_games = 0;
+
+	net_udp_request_game_info(GBcast, 1);
+#ifdef IPv6
+	net_udp_request_game_info(GMcast_v6, 1);
+#endif
+#ifdef USE_TRACKER
+	udp_tracker_reqgames();
+#endif
+}
+
+void net_udp_nk_browse_end(void)
+{
+	if (!Game_wind)
+	{
+		net_udp_close();
+		Network_status = NETSTAT_MENU;
+	}
+}
+
+void net_udp_nk_begin_join(direct_join *dj, int list_index)
+{
+	if (list_index < 0 || list_index >= num_active_udp_games)
+		return;
+
+	multi_new_game();
+	net_udp_reset_connection_statuses();
+	N_players = 0;
+	change_playernum_to(1);
+	dj->start_time = timer_query();
+	dj->last_time = 0;
+	memcpy((struct _sockaddr *)&dj->host_addr, (struct _sockaddr *)&Active_udp_games[list_index].game_addr, sizeof(struct _sockaddr));
+
+#ifdef USE_TRACKER
+	// Same reasoning as net_udp_list_join_poll(): the GameID is what the
+	// tracker keys the punch brokerage on.
+	net_udp_punch_set_target(Active_udp_games[list_index].GameID);
+#endif
+
+	memcpy((struct _sockaddr *)&Netgame.players[0].protocol.udp.addr, (struct _sockaddr *)&dj->host_addr, sizeof(struct _sockaddr));
+	dj->connecting = 1;
 }
 
 int color_used(int wingcolor, int missilecolor, int ignore) {
@@ -3690,18 +3783,31 @@ void net_udp_process_version_deny(ubyte *data, struct _sockaddr sender_addr)
 	Netgame.protocol.udp.valid = -1;
 }
 
+// Set whenever we send out a lite info request, so net_udp_process_game_info()
+// can turn "reply arrived" into an RTT for the netlist's Host ping column.
+// One shared timestamp for every outstanding request is good enough for a UI
+// ping display -- it's not a precision per-host measurement, just "how long
+// since we last asked".
+static fix64 s_lite_req_sent_time = 0;
+
 void net_udp_request_game_info(struct _sockaddr game_addr, int lite)
 {
 	ubyte buf[UPID_GAME_INFO_REQ_SIZE];
-	
+
 	buf[0] = (lite?UPID_GAME_INFO_LITE_REQ:UPID_GAME_INFO_REQ);
 	memcpy(&(buf[1]), UDP_REQ_ID, 4);
 	PUT_INTEL_SHORT(buf + 5, DXX_VERSION_MAJORi);
 	PUT_INTEL_SHORT(buf + 7, DXX_VERSION_MINORi);
 	PUT_INTEL_SHORT(buf + 9, DXX_VERSION_MICROi);
 	if (!lite)
+	{
 		PUT_INTEL_SHORT(buf + 11, MULTI_PROTO_VERSION);
-	
+	}
+	else
+	{
+		s_lite_req_sent_time = timer_query();
+	}
+
 	dxx_sendto (UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&game_addr, sizeof(struct _sockaddr));
 }
 
@@ -3728,6 +3834,32 @@ int net_udp_check_game_info_request(ubyte *data, int lite)
 }
 
 extern fix ThisLevelTime;
+
+static uint32_t net_udp_lite_sng_toggles(void)
+{
+	uint32_t bits = 0;
+
+	if (Netgame.PointCapture)       bits |= LITE_SNG_KOTH;
+	if (Netgame.Deathmatch)         bits |= LITE_SNG_LMS;
+	if (Netgame.WeaponStun)         bits |= LITE_SNG_NO_STUN;
+	if (Netgame.PurpleFlash)        bits |= LITE_SNG_NO_FUSION_FLASH;
+	if (Netgame.VulcanShake)        bits |= LITE_SNG_VULCAN_HEAT;
+	if (Netgame.FusionShake)        bits |= LITE_SNG_NO_FUSION_SHAKE;
+	if (Netgame.FastDoor)           bits |= LITE_SNG_FAST_DOORS;
+	if (Netgame.DarkSmartBlobs)     bits |= LITE_SNG_DARK_BLOBS;
+	if (Netgame.QuietFan)           bits |= LITE_SNG_QUIET_FAN;
+	if (Netgame.LowVulcan)          bits |= LITE_SNG_LOW_VULCAN;
+	if (Netgame.SmallerSpawn)       bits |= LITE_SNG_SMALL_SPAWN;
+	if (Netgame.FairColors)         bits |= LITE_SNG_ALL_BLUE;
+	if (Netgame.BlackAndWhitePyros) bits |= LITE_SNG_ALT_COLORS;
+	if (Netgame.StaticPowerups || Netgame.StaticFusion || Netgame.StaticPlasma || Netgame.StaticVulcan ||
+	    Netgame.StaticSpread || Netgame.StaticLasers || Netgame.StaticMissiles || Netgame.StaticBombs)
+		bits |= LITE_SNG_STATIC_WEAPONS;
+	if (Netgame.FusionSpawn || Netgame.VulcanSpawn || Netgame.LasersSpawn || Netgame.PlasmaSpawn ||
+	    Netgame.SpreadSpawn || Netgame.SmartsSpawn || Netgame.HomersSpawn || Netgame.BombsSpawn || Netgame.MegasSpawn)
+		bits |= LITE_SNG_START_WITH;
+	return bits;
+}
 
 void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte send_to_observers, uint player_token)
 {
@@ -3780,7 +3912,53 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.numconnected;						len++;
 		buf[len] = Netgame.max_numplayers;						len++;
 		buf[len] = Netgame.game_flags;							len++;
-		
+
+		{
+			// Average of our own ping to every connected player (see
+			// net_udp_ping_frame()), for the netlist's Avg column -- lets a
+			// browsing client see how laggy the game is for everyone else,
+			// not just the RTT to us.
+			int p, others = 0;
+			fix ping_sum = 0;
+			ushort avg_ping = 0;
+
+			for (p = 1; p < N_players; p++)
+				if (Players[p].connected)
+				{
+					ping_sum += Netgame.players[p].ping;
+					others++;
+				}
+			if (others > 0)
+				avg_ping = (ushort)(ping_sum / others);
+			PUT_INTEL_SHORT(buf + len, avg_ping);					len += 2;
+		}
+
+		// Game Rules summary (see net_udp_show_game_rules()) -- lets the
+		// browser's info popup show the same thing without joining.
+		PUT_INTEL_INT(buf + len, Netgame.AllowedItems);				len += 4;
+		PUT_INTEL_INT(buf + len, Netgame.KillGoal);					len += 4;
+		PUT_INTEL_INT(buf + len, Netgame.PlayTimeAllowed);				len += 4;
+		PUT_INTEL_INT(buf + len, Netgame.control_invul_time);				len += 4;
+		PUT_INTEL_SHORT(buf + len, Netgame.PacketsPerSec);				len += 2;
+		buf[len] = Netgame.HomingUpdateRate;						len++;
+		buf[len] = Netgame.SpawnStyle;							len++;
+		buf[len] = (ubyte)Netgame.BrightPlayers;					len++;
+		buf[len] = (ubyte)Netgame.ShowEnemyNames;					len++;
+		buf[len] = Netgame.NoFriendlyFire;						len++;
+		buf[len] = Netgame.RemoteHitSpark;						len++;
+		buf[len] = Netgame.AllowCustomModelsTextures;					len++;
+		buf[len] = Netgame.ReducedFlash;						len++;
+		buf[len] = Netgame.GaussAmmoStyle;						len++;
+		buf[len] = Netgame.RetroProtocol;		len++;
+		buf[len] = Netgame.ShortPackets;			len++;
+		buf[len] = Netgame.AllowColoredLighting;		len++;
+		buf[len] = Netgame.RespawnConcs;			len++;
+		buf[len] = Netgame.PrimaryDupFactor;		len++;
+		buf[len] = Netgame.SecondaryDupFactor;		len++;
+		buf[len] = Netgame.SecondaryCapFactor;		len++;
+		buf[len] = Netgame.NewSpawnAlgorithm;		len++;
+		PUT_INTEL_INT(buf + len, net_udp_lite_sng_toggles());				len += 4;
+
 		dxx_sendto (UDP_Socket[0], buf, len, 0, (struct sockaddr *)&sender_addr, sizeof(struct _sockaddr));
 	}
 	else
@@ -3896,7 +4074,9 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		
 		// SNG Toggles
 		buf[len] = Netgame.Deathmatch;							len++;
+		buf[len] = Netgame.DeathmatchShields;					len++;
 		buf[len] = Netgame.PointCapture;						len++;
+		buf[len] = Netgame.PointCaptureRate;					len++;
 		buf[len] = Netgame.WeaponStun;							len++;
 		buf[len] = Netgame.PurpleFlash;							len++;
 		buf[len] = Netgame.VulcanShake;							len++;
@@ -4020,14 +4200,67 @@ int net_udp_send_request(void)
 	return i;
 }
 
-int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_addr, int lite_info, ubyte is_sync)
+// The rules summary after avg_ping. Older hosts (seen via tracker relay)
+// omit it, so the caller checks the length first.
+static void net_udp_read_lite_rules(UDP_netgame_info_lite *g, const ubyte *data)
+{
+	int len = 0;
+
+	g->AllowedItems = GET_INTEL_INT(&(data[len]));				len += 4;
+	g->KillGoal = GET_INTEL_INT(&(data[len]));				len += 4;
+	g->PlayTimeAllowed = GET_INTEL_INT(&(data[len]));			len += 4;
+	g->control_invul_time = GET_INTEL_INT(&(data[len]));			len += 4;
+	g->PacketsPerSec = GET_INTEL_SHORT(&(data[len]));			len += 2;
+	g->HomingUpdateRate = data[len];					len++;
+	g->SpawnStyle = data[len];						len++;
+	g->BrightPlayers = data[len];						len++;
+	g->ShowEnemyNames = data[len];						len++;
+	g->NoFriendlyFire = data[len];						len++;
+	g->RemoteHitSpark = data[len];						len++;
+	g->AllowCustomModelsTextures = data[len];				len++;
+	g->ReducedFlash = data[len];						len++;
+	g->GaussAmmoStyle = data[len];						len++;
+	g->RetroProtocol = data[len];		len++;
+	g->ShortPackets = data[len];		len++;
+	g->AllowColoredLighting = data[len];	len++;
+	g->RespawnConcs = data[len];		len++;
+	g->PrimaryDupFactor = data[len];		len++;
+	g->SecondaryDupFactor = data[len];		len++;
+	g->SecondaryCapFactor = data[len];		len++;
+	g->NewSpawnAlgorithm = data[len];		len++;
+	g->SngToggles = GET_INTEL_INT(&(data[len]));
+	g->has_rules = 1;
+}
+
+// Sends a lite-info request straight to one host, bypassing the LAN
+// broadcast address and the shared s_lite_req_sent_time timestamp that
+// tracks it -- so a reply can be matched to the specific entry it's for,
+// giving a tracker-relayed game a real RTT instead of "time since we asked
+// the tracker" (which is normally near-instant and reads as 0ms).
+static void net_udp_ping_probe(struct _sockaddr addr)
+{
+	ubyte buf[UPID_GAME_INFO_REQ_SIZE];
+
+	buf[0] = UPID_GAME_INFO_LITE_REQ;
+	memcpy(&(buf[1]), UDP_REQ_ID, 4);
+	PUT_INTEL_SHORT(buf + 5, DXX_VERSION_MAJORi);
+	PUT_INTEL_SHORT(buf + 7, DXX_VERSION_MINORi);
+	PUT_INTEL_SHORT(buf + 9, DXX_VERSION_MICROi);
+
+	dxx_sendto(UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&addr, sizeof(struct _sockaddr));
+}
+
+int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_addr, int lite_info, ubyte is_sync, ubyte via_tracker)
 {
 	int len = 0, i = 0, j = 0;
 	
 	if (lite_info)
 	{
 		UDP_netgame_info_lite recv_game;
-		
+
+		if (data_len < UPID_GAME_INFO_LITE_BASE_SIZE)
+			return 0;
+		memset(&recv_game, 0, sizeof(recv_game));
 		memcpy(&recv_game, &game_addr, sizeof(struct _sockaddr));
 												len++; // skip UPID byte
 		recv_game.program_iver[0] = GET_INTEL_SHORT(&(data[len]));			len += 2;
@@ -4046,9 +4279,14 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		recv_game.numconnected = data[len];						len++;
 		recv_game.max_numplayers = data[len];						len++;
 		recv_game.game_flags = data[len];						len++;
-	
+		if (data_len >= UPID_GAME_INFO_LITE_SIZE)
+		{
+			recv_game.avg_ping = GET_INTEL_SHORT(&(data[len]));
+			net_udp_read_lite_rules(&recv_game, data + len + 2);
+		}
+
 		num_active_udp_changed = 1;
-		
+
 		for (i = 0; i < num_active_udp_games; i++)
 			if (!d_stricmp(Active_udp_games[i].game_name, recv_game.game_name) && Active_udp_games[i].GameID == recv_game.GameID)
 				break;
@@ -4057,7 +4295,36 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		{
 			return 0;
 		}
-		
+
+		if (!via_tracker && i < num_active_udp_games && Active_udp_games[i].ping_probe_sent)
+		{
+			// This is the reply to our own direct probe below -- a real RTT
+			// to the host itself, not just "time since we last asked anyone".
+			recv_game.host_ping = f2i(fixmul(timer_query() - Active_udp_games[i].ping_probe_sent, i2f(1000)));
+			recv_game.ping_probe_sent = 0;
+		}
+		else
+		{
+			// Local only, not on the wire (like game_addr above): how long
+			// since we broadcast our LAN discovery request is our own RTT to
+			// whoever just replied. Meaningless for a tracker relay -- the
+			// tracker usually answers from cache near-instantly, which would
+			// otherwise always read as ~0ms -- so a tracker-sourced game
+			// gets a direct probe of its own instead (below).
+			recv_game.host_ping = f2i(fixmul(timer_query() - s_lite_req_sent_time, i2f(1000)));
+			if (via_tracker && i == num_active_udp_games)
+			{
+				net_udp_ping_probe(game_addr);
+				recv_game.ping_probe_sent = timer_query();
+			}
+			else if (i < num_active_udp_games)
+				recv_game.ping_probe_sent = Active_udp_games[i].ping_probe_sent; // probe (if any) still outstanding
+		}
+		if (recv_game.host_ping < 0)
+			recv_game.host_ping = 0;
+		if (recv_game.host_ping > 9999)
+			recv_game.host_ping = 9999;
+
 		memcpy(&Active_udp_games[i], &recv_game, sizeof(UDP_netgame_info_lite));
 		
 		if (i == num_active_udp_games)
@@ -4179,7 +4446,9 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		
 		// SNG Toggles
 		Netgame.Deathmatch = data[len];							len++;
+		Netgame.DeathmatchShields = data[len];					len++;
 		Netgame.PointCapture = data[len];						len++;
+		Netgame.PointCaptureRate = data[len];					len++;
 		Netgame.WeaponStun = data[len];							len++;
 		Netgame.PurpleFlash = data[len];						len++;
 		Netgame.VulcanShake = data[len];						len++;
@@ -4393,16 +4662,16 @@ void net_udp_process_packet(ubyte *data, struct _sockaddr sender_addr, int lengt
 			break;
 		
 		case UPID_GAME_INFO:
-			net_udp_process_game_info(data, length, sender_addr, 0, 0);
+			net_udp_process_game_info(data, length, sender_addr, 0, 0, 0);
 			break;
 
-		case UPID_GAME_INFO_LITE_REQ:		
+		case UPID_GAME_INFO_LITE_REQ:
 			if (net_udp_check_game_info_request(data, 1) == 1)
 				net_udp_send_game_info(sender_addr, UPID_GAME_INFO_LITE, 0, 0);
 			break;
-		
+
 		case UPID_GAME_INFO_LITE:
-			net_udp_process_game_info(data, length, sender_addr, 1, 0);
+			net_udp_process_game_info(data, length, sender_addr, 1, 0, 0);
 			break;
 
 		case UPID_DUMP:
@@ -5734,6 +6003,7 @@ void netgame_set_defaults(void)
 	
 	// SNG Toggle Initializations
 	Netgame.Deathmatch = 0;
+	Netgame.DeathmatchShields = DEATHMATCH_DEFAULT_SHIELDS;
 	Netgame.PurpleFlash = 0;
 	Netgame.CTF = 0;
 	Netgame.SmallerSpawn = 0;
@@ -5766,6 +6036,7 @@ void netgame_set_defaults(void)
 	Netgame.BombsSpawn = 0;
 	Netgame.MegasSpawn = 0;
 	Netgame.PointCapture = 0;
+	Netgame.PointCaptureRate = POINT_CAPTURE_DEFAULT_RATE;
 	Netgame.FastDoor = 0;
 	
 	Netgame.DarkSmartBlobs = 0;
@@ -6116,7 +6387,7 @@ void net_udp_read_sync_packet( ubyte * data, int data_len, struct _sockaddr send
 
 	if (data)
 	{
-		int packet_valid = net_udp_process_game_info(data, data_len, sender_addr, 0, 1);
+		int packet_valid = net_udp_process_game_info(data, data_len, sender_addr, 0, 1, 0);
 		if(! packet_valid ) {
 			con_printf(CON_URGENT, "Dropped invalid sync packet.\n");
 			return; 
