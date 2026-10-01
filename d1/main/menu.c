@@ -2216,6 +2216,7 @@ enum
 	opt_misc_player_chat_only,
 	opt_misc_no_chat_sound,
 	opt_misc_no_rankings,
+	opt_misc_auto_download,
 
 	opt_misc_head_demo,
 	opt_misc_label_indicator,
@@ -2366,6 +2367,7 @@ void do_misc_menu()
 		ADD_CHECK(opt_misc_player_chat_only, "Show player chat only", PlayerCfg.MultiMessages);
 		ADD_CHECK(opt_misc_no_chat_sound, "No player chat sound", PlayerCfg.NoChatSound);
 		ADD_CHECK(opt_misc_no_rankings, "No rankings", PlayerCfg.NoRankings);
+		ADD_CHECK(opt_misc_auto_download, "Auto-download missing missions", GameCfg.AutoDownloadMissions);
 
 		ADD_TEXT(opt_misc_head_demo, "DEMOS");
 		ADD_TEXT(opt_misc_label_indicator, "While recording, show:");
@@ -2424,6 +2426,7 @@ void do_misc_menu()
 		PlayerCfg.MultiMessages 		= m[opt_misc_player_chat_only].value;
 		PlayerCfg.NoChatSound			= m[opt_misc_no_chat_sound].value;
 		PlayerCfg.NoRankings 			= m[opt_misc_no_rankings].value;
+		GameCfg.AutoDownloadMissions	= m[opt_misc_auto_download].value;
 		if (m[opt_misc_demo_indicator_text].value) {
 			PlayerCfg.DemoRecordingIndicator = 0;
 		} else if (m[opt_misc_demo_indicator_icon].value) {

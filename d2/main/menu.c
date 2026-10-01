@@ -2286,7 +2286,7 @@ struct misc_menu_data {
 
 void do_misc_menu()
 {
-	newmenu_item m[47];
+	newmenu_item m[48];
 	int i = 0;
 	struct misc_menu_data misc_menu_data;
 
@@ -2418,6 +2418,7 @@ void do_misc_menu()
 		// picking a pilot. This is the one knob that beats it regardless of
 		// what the command line or ini asked for.
 		ADD_CHECK(44, "Never Auto-Play A Demo At The Menu", PlayerCfg.DisableIdleDemo);
+		ADD_CHECK(47, "Auto-download missing missions (Multi)", GameCfg.AutoDownloadMissions);
 
 		i = newmenu_do1_nk(NULL, "Misc Options", SDL_arraysize(m), m, menu_misc_options_handler, &misc_menu_data, i);
 
@@ -2459,6 +2460,7 @@ void do_misc_menu()
 		PlayerCfg.DisableIdleDemo = m[44].value;
 		PlayerCfg.RaceSpeedFOV = m[45].value;
 		PlayerCfg.RaceSpeedometer = m[46].value;
+		GameCfg.AutoDownloadMissions = m[47].value;
 
 	} while( i>-1 );
 
