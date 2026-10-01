@@ -114,6 +114,7 @@ enum MENUS
     #endif
     MENU_RACE_GAME,
     MENU_PLAY,
+    MENU_PLAY_SURVIVAL,
     #ifdef USE_NK_UI
     MENU_SCREENSHOTS,
     #endif
@@ -634,6 +635,10 @@ int do_option ( int select)
 		case MENU_START_UDP_NETGAME:
 			multi_protocol = MULTI_PROTO_UDP;
 			select_mission(1, TXT_MULTI_MISSION, net_udp_setup_game);
+			break;
+		case MENU_PLAY_SURVIVAL:
+			multi_protocol = MULTI_PROTO_UDP;
+			select_mission(1, "Survival\n\nSelect mission", net_udp_setup_solo_survival);
 			break;
 		case MENU_JOIN_MANUAL_UDP_NETGAME:
 			multi_protocol = MULTI_PROTO_UDP;
@@ -2807,11 +2812,11 @@ static void do_play_menu(void)
 	newmenu_item *m;
 	int num_options = 0;
 
-	MALLOC(menu_choice, int, 4);
+	MALLOC(menu_choice, int, 5);
 	if (!menu_choice)
 		return;
 
-	MALLOC(m, newmenu_item, 4);
+	MALLOC(m, newmenu_item, 5);
 	if (!m)
 	{
 		d_free(menu_choice);
@@ -2822,6 +2827,7 @@ static void do_play_menu(void)
 	ADD_ITEM("Race vs bots", MENU_RACE_GAME, KEY_R);
 	ADD_ITEM("Load Game", MENU_LOAD_GAME, KEY_L);
 #ifdef USE_UDP
+	ADD_ITEM("Survival", MENU_PLAY_SURVIVAL, KEY_S);
 	ADD_ITEM("Multiplayer", MENU_MULTIPLAYER, -1);
 #endif
 

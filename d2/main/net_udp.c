@@ -214,6 +214,8 @@ UDP_netgame_info_lite Active_udp_games[UDP_MAX_NETGAMES];
 int num_active_udp_games = 0;
 int num_active_udp_changed = 0;
 static int UDP_Socket[3] = { -1, -1, -1 };
+// SNG: Play-menu Survival -- a netgame no one else can see or join
+static int Solo_survival = 0;
 static char UDP_MyPort[6] = "";
 
 // Accessor for the Nuklear-based advanced-options UI (nk_ui.c), which lives
@@ -2454,6 +2456,8 @@ void net_udp_init()
 
 void net_udp_close()
 {
+	Solo_survival = 0;
+
 #ifdef _WIN32
 	WSACleanup();
 #endif
@@ -4080,6 +4084,9 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 
 static void net_udp_broadcast_game_info(ubyte info_upid)
 {
+	if (Solo_survival)
+		return;
+
 	net_udp_send_game_info(GBcast, info_upid, 0, 0);
 #ifdef IPv6
 	net_udp_send_game_info(GMcast_v6, info_upid, 0, 0);
@@ -4491,6 +4498,9 @@ void net_udp_process_request(UDP_sequence_packet *their)
 
 void net_udp_process_packet(ubyte *data, struct _sockaddr sender_addr, int length, int is_proxy )
 {
+	if (Solo_survival)
+		return;
+
 	UDP_sequence_packet their;
 	memset(&their, 0, sizeof(UDP_sequence_packet));
 
@@ -6154,6 +6164,32 @@ int net_udp_setup_game()
 	return choice >= 0;
 }
 
+int net_udp_setup_solo_survival(void)
+{
+	net_udp_init();
+	net_udp_reset_connection_statuses();
+	change_playernum_to(0);
+	netgame_set_defaults();
+	read_netgame_profile(&Netgame);
+
+	sprintf(Netgame.game_name, "%s%s", Players[Player_num].callsign, TXT_S_GAME);
+	strcpy(Netgame.mission_name, Current_mission_filename);
+	strcpy(Netgame.mission_title, Current_mission_longname);
+	Netgame.levelnum = 1;
+	Netgame.gamemode = NETGAME_SURVIVAL;
+	Netgame.max_numplayers = 1;
+	Netgame.max_numobservers = 0;
+	Netgame.game_flags |= NETGAME_FLAG_CLOSED;
+	Netgame.Tracker = 0;
+
+	Solo_survival = 1;
+	if (net_udp_start_game())
+		return 1;
+
+	net_udp_close();
+	return 0;
+}
+
 void net_udp_reset_connection_statuses() {
 	for(int i = 0; i < MAX_PLAYERS; i++) {
 		connection_statuses[i] = CONNECTION_NONE;
@@ -6575,6 +6611,24 @@ int net_udp_menu_select_teams_handler(newmenu* menu, d_event* event, void* userd
 	return 0;
 }
 
+// Host alone: skip the lobby and take slot 0
+static int net_udp_solo_roster(void)
+{
+	int i;
+
+	N_players = 1;
+	Host_is_obs = 0;
+	Players[0].connected = CONNECT_PLAYING;
+
+	for (i = N_players; i < MAX_PLAYERS; i++)
+	{
+		memset(Netgame.players[i].callsign, 0, CALLSIGN_LEN+1);
+		Netgame.players[i].rank = 0;
+	}
+
+	return 1;
+}
+
 int
 net_udp_select_players(void)
 {
@@ -6585,7 +6639,10 @@ net_udp_select_players(void)
 	int save_nplayers;              //how may people would like to join
 
 	net_udp_add_player( &UDP_Seq );
-		
+
+	if (Solo_survival)
+		return net_udp_solo_roster();
+
 	for (i=0; i< MAX_PLAYERS+4; i++ ) {
 		sprintf( text[i], "%d.  %-20s", i+1, "" );
 		m[i].type = NM_TYPE_CHECK; m[i].text = text[i]; m[i].value = 0;
@@ -6715,18 +6772,19 @@ int net_udp_start_game(void)
 {
 	int i;
 
-	i = udp_open_socket(0, atoi(UDP_MyPort));
+	i = udp_open_socket(0, Solo_survival ? 0 : atoi(UDP_MyPort)); // port 0: ephemeral, nothing can reach it
 
 	if (i != 0)
 		return 0;
 	
-	if (atoi(UDP_MyPort) != UDP_PORT_DEFAULT)
+	if (!Solo_survival && atoi(UDP_MyPort) != UDP_PORT_DEFAULT)
 		i = udp_open_socket(1, UDP_PORT_DEFAULT); // Default port open for Broadcasts
 
 	if (i != 0)
 		return 0;
 
 #ifdef USE_UPNP
+	if (!Solo_survival)
 	{
 		// UPnP discovery is a blocking network round-trip (up to a couple
 		// seconds, more if it has to retry across several interfaces) --

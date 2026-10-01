@@ -115,6 +115,7 @@ enum MENUS
     MENU_DXMA_MISSIONS,
     #endif
     MENU_PLAY,
+    MENU_PLAY_SURVIVAL,
     #ifndef RELEASE
     MENU_SANDBOX
     #endif
@@ -751,6 +752,10 @@ int do_option ( int select)
 		case MENU_START_UDP_NETGAME:
 			multi_protocol = MULTI_PROTO_UDP;
 			select_mission(1, TXT_MULTI_MISSION, net_udp_setup_game);
+			break;
+		case MENU_PLAY_SURVIVAL:
+			multi_protocol = MULTI_PROTO_UDP;
+			select_mission(1, "Survival\n\nSelect mission", net_udp_setup_solo_survival);
 			break;
 		case MENU_JOIN_MANUAL_UDP_NETGAME:
 			multi_protocol = MULTI_PROTO_UDP;
@@ -2809,11 +2814,11 @@ static void do_play_menu(void)
 	newmenu_item *m;
 	int num_options = 0;
 
-	MALLOC(menu_choice, int, 3);
+	MALLOC(menu_choice, int, 4);
 	if (!menu_choice)
 		return;
 
-	MALLOC(m, newmenu_item, 3);
+	MALLOC(m, newmenu_item, 4);
 	if (!m)
 	{
 		d_free(menu_choice);
@@ -2823,6 +2828,7 @@ static void do_play_menu(void)
 	ADD_ITEM("New Game", MENU_NEW_GAME, KEY_N);
 	ADD_ITEM("Load Game", MENU_LOAD_GAME, KEY_L);
 #ifdef USE_UDP
+	ADD_ITEM("Survival", MENU_PLAY_SURVIVAL, KEY_S);
 	ADD_ITEM("Multiplayer", MENU_MULTIPLAYER, -1);
 #endif
 
