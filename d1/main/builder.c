@@ -2,7 +2,8 @@
  * SNG: first-person level builder -- editing core.
  *
  * The crosshair hovers a face, edge or vertex. Left click applies the current
- * tool (Build by default), right click deletes the cube, middle click selects. Precision edits (nudges, snapping,
+ * tool (Build by default), right click deletes the cube, middle click selects,
+ * and the wheel insets/outsets the selected (or hovered) face, edge or vertex. Precision edits (nudges, snapping,
  * flattening, welding, texture alignment) act on the selection and live in
  * the Tab tool panel (builder_ui.c).
  *
@@ -63,6 +64,7 @@
 #define LIGHT_SKY_SHADE		(F1_0 * 15 / 100)
 #define VERTEX_MARK_SIZE	(F1_0 * 3 / 2)
 #define MAX_SELECTED_VERTS	4
+#define WHEEL_FAST_STEPS	5
 
 typedef struct builder_snapshot {
 	int num_segments;
@@ -909,14 +911,30 @@ static int delete_segment(int segnum)
 
 /* ------------------------------------------------- selection operations */
 
-static void nudge_selection(vms_vector *delta)
+static void nudge_element(const builder_element *el, vms_vector *delta)
 {
 	int verts[MAX_SELECTED_VERTS], count;
 
-	if (!need_selection() || !begin_edit())
+	if (!begin_edit())
 		return;
-	count = element_vertices(&Selection, verts);
+	count = element_vertices(el, verts);
 	finish_edit(move_vertices(verts, count, delta), "That would turn a cube inside out");
+}
+
+static void nudge_selection(vms_vector *delta)
+{
+	if (need_selection())
+		nudge_element(&Selection, delta);
+}
+
+/* Inset (direction -1) or outset (+1) an element along its face normal. */
+static void push_element(const builder_element *el, int direction, int steps)
+{
+	vms_vector delta;
+
+	side_normal(&Segments[el->segnum], el->sidenum, &delta);
+	vm_vec_scale(&delta, -units(Builder.nudge_step) * direction * steps);
+	nudge_element(el, &delta);
 }
 
 void builder_nudge_axis(int axis, int direction)
@@ -935,13 +953,19 @@ void builder_nudge_axis(int axis, int direction)
 
 void builder_nudge_normal(int direction)
 {
-	vms_vector delta;
+	if (need_selection())
+		push_element(&Selection, direction, 1);
+}
 
-	if (!need_selection())
-		return;
-	side_normal(&Segments[Selection.segnum], Selection.sidenum, &delta);
-	vm_vec_scale(&delta, -units(Builder.nudge_step) * direction);
-	nudge_selection(&delta);
+/* Mouse wheel, Sauerbraten-style: outset/inset the selection -- or, with
+ * nothing selected, whatever the crosshair is on -- by one step. Shift: 5. */
+static void wheel_push(int direction)
+{
+	builder_element el = Selection.valid && Selection.segnum < Num_segments ? Selection : Hover;
+	int fast = keyd_pressed[KEY_LSHIFT] || keyd_pressed[KEY_RSHIFT];
+
+	if (el.valid)
+		push_element(&el, direction, fast ? WHEEL_FAST_STEPS : 1);
 }
 
 static fix snap_value(fix value, fix grid)
@@ -1344,6 +1368,8 @@ static int handle_mouse(d_event *event)
 		case MBTN_LEFT:		apply_tool(); return 1;
 		case MBTN_RIGHT:	if (Hover.valid) delete_segment(Hover.segnum); return 1;
 		case MBTN_MIDDLE:	select_hovered(); return 1;
+		case MBTN_Z_UP:		wheel_push(1); return 1;
+		case MBTN_Z_DOWN:	wheel_push(-1); return 1;
 		default:		return 0;
 	}
 }
@@ -1352,7 +1378,8 @@ static int is_builder_button(d_event *event)
 {
 	int button = event_mouse_get_button(event);
 
-	return button == MBTN_LEFT || button == MBTN_RIGHT || button == MBTN_MIDDLE;
+	return button == MBTN_LEFT || button == MBTN_RIGHT || button == MBTN_MIDDLE ||
+		button == MBTN_Z_UP || button == MBTN_Z_DOWN;
 }
 
 static int handle_key(int key)
@@ -1548,7 +1575,7 @@ void builder_draw_hud(void)
 	gr_set_fontcolor(BM_XRGB(0, 31, 8), -1);
 	gr_printf(x, y + line_height, "%s", selection_text);
 	gr_set_fontcolor(BM_XRGB(20, 20, 20), -1);
-	gr_printf(x, y + line_height * 2, "Tab tools   LMB %s   RMB delete   MMB select   1-5 tool   V face/edge/vertex",
+	gr_printf(x, y + line_height * 2, "Tab tools  LMB %s  RMB delete  MMB select  Wheel in/out  1-5 tool  V face/edge/vertex",
 		Builder.tool == BTOOL_BUILD ? "build" : Builder_tool_names[Builder.tool]);
 
 	preview_size = grd_curcanv->cv_bitmap.bm_h / 8;
