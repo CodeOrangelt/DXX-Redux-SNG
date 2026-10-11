@@ -23,6 +23,7 @@
 #include "piggy.h"
 #include "game.h"
 #include "event.h"
+#include "mouse.h"
 #include "nk_ui.h"
 #include "config.h"
 #include "builder_int.h"
@@ -346,9 +347,10 @@ void builder_open_tools(void)
 
 	panel.running = 1;
 	stop_time();
-	event_toggle_focus(0);
+	mouse_toggle_relative(0);
+	mouse_touch_cursor_time();
 	nk_ui_run_docked_panel("Builder Tools", PANEL_WIDTH_FRAC, build_panel, &panel.running, &panel);
-	event_toggle_focus(1);
+	mouse_toggle_relative(1);
 	game_flush_inputs();
 	start_time();
 }

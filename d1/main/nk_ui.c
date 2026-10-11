@@ -5257,6 +5257,7 @@ static int nk_ui_docked_frame(const char *title, float width_frac, void (*build)
 	float panel_w = width * width_frac;
 
 	nk_ui_sync_fonts();
+	mouse_cursor_autohide();
 	timer_update();
 	if (!nk_ui_docked_input())
 		return 0;

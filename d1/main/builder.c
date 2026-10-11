@@ -1,8 +1,8 @@
 /*
  * SNG: first-person level builder -- editing core.
  *
- * The crosshair hovers a face, edge or vertex; clicking applies the current
- * tool, and right-click selects. Precision edits (nudges, snapping,
+ * The crosshair hovers a face, edge or vertex. Left click applies the current
+ * tool (Build by default), right click deletes the cube, middle click selects. Precision edits (nudges, snapping,
  * flattening, welding, texture alignment) act on the selection and live in
  * the Tab tool panel (builder_ui.c).
  *
@@ -216,7 +216,7 @@ static int need_selection(void)
 {
 	if (Selection.valid && Selection.segnum < Num_segments)
 		return 1;
-	return builder_refuse("Select something first (right-click)");
+	return builder_refuse("Select something first (middle click)");
 }
 
 void builder_describe_selection(char *out, int size)
@@ -1342,7 +1342,8 @@ static int handle_mouse(d_event *event)
 	switch (event_mouse_get_button(event))
 	{
 		case MBTN_LEFT:		apply_tool(); return 1;
-		case MBTN_RIGHT:	select_hovered(); return 1;
+		case MBTN_RIGHT:	if (Hover.valid) delete_segment(Hover.segnum); return 1;
+		case MBTN_MIDDLE:	select_hovered(); return 1;
 		default:		return 0;
 	}
 }
@@ -1351,7 +1352,7 @@ static int is_builder_button(d_event *event)
 {
 	int button = event_mouse_get_button(event);
 
-	return button == MBTN_LEFT || button == MBTN_RIGHT;
+	return button == MBTN_LEFT || button == MBTN_RIGHT || button == MBTN_MIDDLE;
 }
 
 static int handle_key(int key)
@@ -1547,7 +1548,8 @@ void builder_draw_hud(void)
 	gr_set_fontcolor(BM_XRGB(0, 31, 8), -1);
 	gr_printf(x, y + line_height, "%s", selection_text);
 	gr_set_fontcolor(BM_XRGB(20, 20, 20), -1);
-	gr_printf(x, y + line_height * 2, "Tab tools   LMB use tool   RMB select   1-5 tool   V face/edge/vertex");
+	gr_printf(x, y + line_height * 2, "Tab tools   LMB %s   RMB delete   MMB select   1-5 tool   V face/edge/vertex",
+		Builder.tool == BTOOL_BUILD ? "build" : Builder_tool_names[Builder.tool]);
 
 	preview_size = grd_curcanv->cv_bitmap.bm_h / 8;
 	builder_draw_texture_thumb(Builder.texture,
