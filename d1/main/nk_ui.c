@@ -5220,3 +5220,66 @@ void nk_ui_screenshots(void)
 	nk_ui_shots_drop_texture(&s);
 	d_free(s.names);
 }
+
+// ==============================
+// SNG: docked tool panel (level builder). Unlike nk_ui_frame() the scene
+// behind stays undimmed and live, and Tab closes the panel as well as Escape.
+// ==============================
+
+float nk_ui_row_height(void)
+{
+	return (float)NK_UI_ROW_HEIGHT;
+}
+
+static int nk_ui_docked_input(void)
+{
+	SDL_Event evt;
+	int keep_open = 1;
+
+	s_escape_pressed = 0;
+	s_enter_pressed = 0;
+	nk_input_begin(s_ctx);
+	while (SDL_PollEvent(&evt))
+	{
+		if (evt.type == SDL_QUIT)
+			keep_open = 0;
+		if (evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_TAB)
+			keep_open = 0;
+		nk_ui_handle_event(&evt);
+	}
+	nk_input_end(s_ctx);
+	return keep_open && !s_escape_pressed;
+}
+
+static int nk_ui_docked_frame(const char *title, float width_frac, void (*build)(struct nk_context *ctx, void *userdata), void *userdata)
+{
+	float width = grd_curscreen->sc_w, height = grd_curscreen->sc_h;
+	float panel_w = width * width_frac;
+
+	nk_ui_sync_fonts();
+	timer_update();
+	if (!nk_ui_docked_input())
+		return 0;
+
+	nk_ui_draw_underlying_windows();
+	nk_ui_claim_panel(title);
+	if (nk_ui_begin_panel(title, title, nk_rect(width - panel_w, 0, panel_w, height),
+		NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_SCROLL_AUTO_HIDE))
+		build(s_ctx, userdata);
+	nk_end(s_ctx);
+	nk_window_set_focus(s_ctx, title);
+	s_wheel_steps = 0;
+	s_arrow_steps = 0;
+
+	s_panels_pending = 1;
+	nk_ui_flush();
+	ogl_swap_buffers_internal();
+	return 1;
+}
+
+void nk_ui_run_docked_panel(const char *title, float width_frac, void (*build)(struct nk_context *ctx, void *userdata), int *running, void *userdata)
+{
+	nk_ui_init_once();
+	while (*running && nk_ui_docked_frame(title, width_frac, build, userdata))
+		;
+}

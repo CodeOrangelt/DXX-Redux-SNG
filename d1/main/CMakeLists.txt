@@ -26,6 +26,7 @@ add_executable (d1x-redux
     gamesave.c
     builder.c
     builder_level.c
+    builder_ui.c
     gameseg.c
     gameseq.c
     gauges.c

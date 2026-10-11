@@ -120,4 +120,9 @@ int nk_ui_filter_matches(const char *text, const char *filter);
 // Draws one scrollable list panel; see nk_ui.c for the click semantics.
 int nk_ui_listbox_frame(const void *id, const char *title, char **items, int nitems, int *citem, int *last_citem, unsigned int *scroll_y, char *filter, int allow_abort, int has_focus);
 
+// SNG: right-docked tool panel over a live scene; Tab or Escape closes it.
+struct nk_context;
+float nk_ui_row_height(void);
+void nk_ui_run_docked_panel(const char *title, float width_frac, void (*build)(struct nk_context *ctx, void *userdata), int *running, void *userdata);
+
 #endif /* _NK_UI_H */
