@@ -550,8 +550,6 @@ void read_object(object *obj,PHYSFS_file *f,int version)
 
 }
 
-#ifdef EDITOR
-
 //writes one object to the given file
 void write_object(object *obj, PHYSFS_file *f)
 {
@@ -716,7 +714,6 @@ void write_object(object *obj, PHYSFS_file *f)
 	}
 
 }
-#endif
 
 // --------------------------------------------------------------------
 // Load game 

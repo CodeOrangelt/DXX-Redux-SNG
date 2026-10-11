@@ -26,6 +26,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "menu.h"
 #include "inferno.h"
 #include "game.h"
+#include "builder.h"
 #include "gr.h"
 #include "key.h"
 #include "mouse.h"
@@ -116,6 +117,7 @@ enum MENUS
     #endif
     MENU_PLAY,
     MENU_PLAY_SURVIVAL,
+    MENU_LEVEL_BUILDER,
     #ifndef RELEASE
     MENU_SANDBOX
     #endif
@@ -774,6 +776,9 @@ int do_option ( int select)
 			do_multi_player_menu();
 			break;
 #endif
+		case MENU_LEVEL_BUILDER:
+			builder_start_menu();
+			break;
 		case MENU_CONFIG:
 			do_options_menu();
 			break;
@@ -2846,11 +2851,11 @@ static void do_play_menu(void)
 	newmenu_item *m;
 	int num_options = 0;
 
-	MALLOC(menu_choice, int, 4);
+	MALLOC(menu_choice, int, 5);
 	if (!menu_choice)
 		return;
 
-	MALLOC(m, newmenu_item, 4);
+	MALLOC(m, newmenu_item, 5);
 	if (!m)
 	{
 		d_free(menu_choice);
@@ -2863,6 +2868,7 @@ static void do_play_menu(void)
 	ADD_ITEM("Survival", MENU_PLAY_SURVIVAL, KEY_S);
 	ADD_ITEM("Multiplayer", MENU_MULTIPLAYER, -1);
 #endif
+	ADD_ITEM("Level Builder", MENU_LEVEL_BUILDER, KEY_B);
 
 	newmenu_do3_nk( NULL, "Play", num_options, m, (int (*)(newmenu *, d_event *, void *))play_menu_handler, menu_choice, 0, NULL );
 }

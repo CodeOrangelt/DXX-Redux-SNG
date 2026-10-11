@@ -38,6 +38,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "physics.h"
 #include "3d.h"
 #include "survival.h"
+#include "builder.h"
 #include "gameseg.h"
 #include "vclip.h"
 #include "lighting.h"
@@ -1454,6 +1455,7 @@ void render_frame(fix eye_offset)
 	}
 
 	render_mine(start_seg_num,eye_offset);
+	builder_render_overlay();
 
 	g3_end_frame();
 }

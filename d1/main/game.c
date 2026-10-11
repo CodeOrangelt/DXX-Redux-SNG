@@ -79,6 +79,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "rbaudio.h"
 #include "multi.h"
 #include "survival.h"
+#include "builder.h"
 #include "cntrlcen.h"
 #include "pcx.h"
 #include "state.h"
@@ -1174,6 +1175,7 @@ int game_handler(window *wind, d_event *event, void *data)
 			break;
 
 		case EVENT_WINDOW_CLOSE:
+			builder_end();
 			digi_stop_digi_sounds();
 
 			if ( (Newdemo_state == ND_STATE_RECORDING) || (Newdemo_state == ND_STATE_PAUSED) )
@@ -1250,6 +1252,7 @@ void GameProcessFrame(void)
 	fix player_shields = Players[Player_num].shields;
 	int player_was_dead = Player_is_dead;
 
+	builder_frame();
 	update_player_stats();
 	diminish_palette_towards_normal();		//	Should leave palette effect up for as long as possible by putting right before render.
 	do_cloak_stuff();

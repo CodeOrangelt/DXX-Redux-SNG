@@ -42,6 +42,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "text.h"
 #include "multi.h"
 #include "survival.h"
+#include "builder.h"
 #include "endlevel.h"
 #include "cntrlcen.h"
 #include "fuelcen.h"
@@ -567,6 +568,7 @@ void game_render_frame_mono(int flip)
 	gr_set_current_canvas(&Screen_3d_window);
 
 	game_draw_hud_stuff();
+	builder_draw_hud();
 
 #ifdef NETWORK
 	if (netplayerinfo_on && Game_mode & GM_MULTI)

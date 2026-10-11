@@ -79,6 +79,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #include "multi.h"
 #include "survival.h"
+#include "builder.h"
 #include "cntrlcen.h"
 #include "fuelcen.h"
 #include "pcx.h"
@@ -1441,6 +1442,9 @@ int ReadControls(d_event *event)
 	if (Newdemo_state == ND_STATE_PLAYBACK)
 		update_vcr_state();
 
+	if (builder_handle_event(event))
+		return 1;
+
 	if (event->type == EVENT_KEY_COMMAND)
 	{
 		key = event_key_get(event);
@@ -1526,6 +1530,7 @@ int ReadControls(d_event *event)
 	if (should_read_controls)
 	{
 		kconfig_read_controls(event, 0);
+		builder_filter_controls();
 
 		check_rear_view();
 
