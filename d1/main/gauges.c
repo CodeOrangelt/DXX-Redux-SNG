@@ -41,6 +41,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "sounds.h"
 #include "multi.h"
 #include "survival.h"
+#include "builder.h"
 #include "endlevel.h"
 #include "wall.h"
 #include "text.h"
@@ -4714,13 +4715,13 @@ void draw_hud()
 		display_score_ctf();
 
 	//	Show score so long as not in rearview
-	if ( !Rear_view && PlayerCfg.CurrentCockpitMode!=CM_REAR_VIEW && PlayerCfg.CurrentCockpitMode!=CM_STATUS_BAR) {
+	if ( !builder_active() && !Rear_view && PlayerCfg.CurrentCockpitMode!=CM_REAR_VIEW && PlayerCfg.CurrentCockpitMode!=CM_STATUS_BAR) {
 		hud_show_score();
 		if (score_time)
 			hud_show_score_added();
 	}
 
-	if ( !Rear_view && PlayerCfg.CurrentCockpitMode!=CM_REAR_VIEW)
+	if ( !builder_active() && !Rear_view && PlayerCfg.CurrentCockpitMode!=CM_REAR_VIEW)
 		hud_show_timer_count();
 
 	//	Show other stuff if not in rearview or letterbox.
@@ -4731,7 +4732,8 @@ void draw_hud()
 		if (PlayerCfg.CurrentCockpitMode==CM_STATUS_BAR || PlayerCfg.CurrentCockpitMode==CM_FULL_SCREEN)
 			hud_show_homing_warning();
 
-		if (PlayerCfg.CurrentCockpitMode==CM_FULL_SCREEN) {
+		// SNG: the level builder draws its own status bar instead
+		if (PlayerCfg.CurrentCockpitMode==CM_FULL_SCREEN && !builder_active()) {
 			hud_show_energy();
 			hud_show_shield();
 			hud_show_weapons();
@@ -4746,12 +4748,12 @@ void draw_hud()
 		}
 
 #ifndef RELEASE
-		if (!(Game_mode&GM_MULTI && Show_kill_list))
+		if (!(Game_mode&GM_MULTI && Show_kill_list) && !builder_active())
 			show_time();
 #endif
 		HUD_render_message_frame();
 
-		if (PlayerCfg.CurrentCockpitMode!=CM_STATUS_BAR)
+		if (PlayerCfg.CurrentCockpitMode!=CM_STATUS_BAR && !builder_active())
 			hud_show_lives();
 		if (Game_mode&GM_MULTI && Show_kill_list)
 			hud_show_kill_list();

@@ -101,6 +101,29 @@ static void heading_label(struct nk_context *ctx, const char *text)
 
 /* ------------------------------------------------------------ sections */
 
+/* Multi-tag editing: how an axis nudge spreads across the tags. */
+static void section_tags(struct nk_context *ctx, float row)
+{
+	int i;
+
+	nk_layout_row_dynamic(ctx, row, 1);
+	heading_label(ctx, "Several tags move (M)");
+	nk_layout_row_dynamic(ctx, row, BLINK_COUNT + 1);
+	for (i = 0; i < BLINK_COUNT; i++)
+		if (nk_option_label(ctx, Builder_link_names[i], Builder.link_mode == i))
+			Builder.link_mode = i;
+	if (button(ctx, "Clear tags"))
+		builder_clear_tags();
+
+	if (Builder.link_mode != BLINK_MIRROR)
+		return;
+	nk_layout_row_dynamic(ctx, row, 4);
+	nk_label(ctx, "Mirror on", NK_TEXT_LEFT);
+	for (i = 0; i < 3; i++)
+		if (nk_option_label(ctx, Builder_axis_names[i], Builder.mirror_axis == i))
+			Builder.mirror_axis = i;
+}
+
 static void section_tools(struct nk_context *ctx, float row)
 {
 	char selection_text[96];
@@ -123,6 +146,7 @@ static void section_tools(struct nk_context *ctx, float row)
 	builder_describe_selection(selection_text, sizeof(selection_text));
 	nk_layout_row_dynamic(ctx, row, 1);
 	nk_label_colored(ctx, selection_text, NK_TEXT_LEFT, nk_rgb(90, 255, 120));
+	section_tags(ctx, row);
 	nk_tree_pop(ctx);
 }
 
@@ -163,9 +187,9 @@ static void section_geometry(struct nk_context *ctx, float row)
 	heading_label(ctx, "Nudge selection");
 	nk_layout_row_dynamic(ctx, row, 2);
 	if (button(ctx, "Face in"))
-		builder_nudge_normal(-1);
+		builder_push(-1, 1);
 	if (button(ctx, "Face out"))
-		builder_nudge_normal(1);
+		builder_push(1, 1);
 	axis_buttons(ctx, row);
 
 	nk_layout_row_dynamic(ctx, row, 1);
@@ -315,14 +339,14 @@ static void section_level(struct nk_context *ctx, float row, builder_panel *pane
 	if (button(ctx, "Rebuild lighting"))
 		builder_rebake();
 
-	snprintf(undo_label, sizeof(undo_label), "Undo (%d)", builder_undo_depth());
-	snprintf(redo_label, sizeof(redo_label), "Redo (%d)", builder_redo_depth());
+	snprintf(undo_label, sizeof(undo_label), "Undo (%d)", bld_undo_depth());
+	snprintf(redo_label, sizeof(redo_label), "Redo (%d)", bld_redo_depth());
 	nk_layout_row_dynamic(ctx, row, 2);
 	if (button(ctx, undo_label))
 		builder_undo();
 	if (button(ctx, redo_label))
 		builder_redo();
-	if (button(ctx, builder_is_dirty() ? "Save *" : "Save"))
+	if (button(ctx, bld_is_dirty() ? "Save *" : "Save"))
 		builder_save();
 	if (button(ctx, "Close (Tab)"))
 		panel->running = 0;
