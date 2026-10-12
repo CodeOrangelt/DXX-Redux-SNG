@@ -533,6 +533,9 @@ void special_reset_objects(void);
 // a robot
 void obj_attach(object *parent,object *sub);
 
+// Camera that trails `target` smoothly between network updates; `pullback` is a signed distance along the camera's forward vector.
+void camera_follow_smoothed(object *cam, const object *target, fix pullback);
+
 extern void create_small_fireball_on_object(object *objp, fix size_scale, int sound_flag);
 
 extern void object_rw_swap(object_rw *obj_rw, int swap);

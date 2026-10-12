@@ -2306,3 +2306,83 @@ void set_homing_update_rate(int update_rate) {
 
 	con_printf(CON_DEBUG, "Homing update rate: %d\n", update_rate);
 }
+
+// Follows `target` from behind with a camera that moves smoothly between
+// network updates. Remote players only move when a packet arrives, so the
+// goal is the last sample carried forward along its velocity, and the camera
+// closes on that goal by an amount that does not depend on the frame rate.
+#define FOLLOW_SMOOTH_TIME (F1_0 / 40)		// camera trails its goal by about this much
+#define FOLLOW_MAX_EXTRAPOLATE (F1_0 / 8)	// past a lost packet or two, guessing only drifts
+#define FOLLOW_TELEPORT_DIST (F1_0 * 60)	// farther than this is a respawn, not motion
+
+static void follow_blend_orient(vms_matrix *orient, const vms_matrix *goal, fix factor)
+{
+	vms_vector fvec, other, rvec;
+
+	fvec = orient->fvec;
+	vm_vec_scale(&fvec, F1_0 - factor);
+	other = goal->fvec;
+	vm_vec_scale(&other, factor);
+	vm_vec_add2(&fvec, &other);
+	if (vm_vec_normalize_quick(&fvec) <= F1_0 / 256)
+		return;
+
+	rvec = orient->rvec;
+	vm_vec_scale(&rvec, F1_0 - factor);
+	other = goal->rvec;
+	vm_vec_scale(&other, factor);
+	vm_vec_add2(&rvec, &other);
+	vm_vec_normalize_quick(&rvec);
+	vm_vector_2_matrix(orient, &fvec, NULL, &rvec);
+}
+
+void camera_follow_smoothed(object *cam, const object *target, fix pullback)
+{
+	static const object *followed = NULL;
+	static vms_vector sample_pos, sample_vel, smooth_pos;
+	static vms_matrix sample_orient, smooth_orient;
+	static fix sample_age;
+	vms_vector goal, step, back;
+	fix factor;
+
+	if (target != followed)
+	{
+		followed = target;
+		smooth_pos = target->pos;
+		smooth_orient = target->orient;
+		sample_pos = target->pos;
+		sample_orient = target->orient;
+		sample_vel = target->mtype.phys_info.velocity;
+		sample_age = 0;
+	}
+	else if (!vm_vec_equal(&sample_pos, &target->pos) || !vm_mat_equal(&sample_orient, &target->orient))
+	{
+		sample_pos = target->pos;
+		sample_orient = target->orient;
+		sample_vel = target->mtype.phys_info.velocity;
+		sample_age = 0;
+	}
+	else
+		sample_age += FrameTime;
+
+	vm_vec_scale_add(&goal, &sample_pos, &sample_vel, min(sample_age, FOLLOW_MAX_EXTRAPOLATE));
+	if (vm_vec_dist(&goal, &smooth_pos) > FOLLOW_TELEPORT_DIST)
+	{
+		smooth_pos = goal;
+		smooth_orient = sample_orient;
+	}
+
+	factor = fixdiv(FrameTime, FrameTime + FOLLOW_SMOOTH_TIME);
+	follow_blend_orient(&smooth_orient, &sample_orient, factor);
+	vm_vec_sub(&step, &goal, &smooth_pos);
+	vm_vec_scale(&step, factor);
+	vm_vec_add2(&smooth_pos, &step);
+
+	cam->orient = smooth_orient;
+	cam->pos = smooth_pos;
+	if (pullback)
+	{
+		vm_vec_copy_scale(&back, &smooth_orient.fvec, pullback);
+		vm_vec_add2(&cam->pos, &back);
+	}
+}

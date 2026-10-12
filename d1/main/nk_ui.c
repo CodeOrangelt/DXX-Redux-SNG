@@ -69,6 +69,7 @@ static void nk_ui_note(const char *text, float extra_rows);
 #include "game.h"
 #include "multi.h"
 #include "net_udp.h"
+#include "timer.h"
 #include "player.h"
 #include "gameseq.h"
 #include "mission.h"
@@ -806,6 +807,18 @@ static int nk_ui_bake_font(struct nk_ui_font *font, const grs_font *src, int sca
 }
 
 #define NK_UI_MAX_SCREEN_FRAC 0.95f
+#define NK_UI_MAX_LAYOUT_ASPECT (16.0f / 9.0f)
+#define NK_UI_MODAL_FPS 60
+
+// Panels size themselves as a share of the screen. On an ultrawide that share
+// of the full width is a stretched slab, so they size against a 16:9 slice
+// instead and stay centred; a narrower screen is used as it is.
+static int nk_ui_layout_width(int width, int height)
+{
+	int widest = (int)(height * NK_UI_MAX_LAYOUT_ASPECT);
+
+	return width < widest ? width : widest;
+}
 #define NK_UI_MODAL_MIN_WIDTH_ROWS 24
 #define NK_UI_NUMBER_EXTRA_ROWS 5
 #define NK_UI_INPUT_MIN_CHARS 24
@@ -1257,6 +1270,7 @@ static int nk_ui_frame(const char *title, struct nk_vec2 size_frac, void (*build
 {
 	SDL_Event evt;
 	int width = grd_curscreen->sc_w, height = grd_curscreen->sc_h;
+	int layout_w = nk_ui_layout_width(grd_curscreen->sc_w, grd_curscreen->sc_h);
 	struct nk_rect bounds;
 	float panel_w;
 	int title_wraps;
@@ -1291,11 +1305,11 @@ static int nk_ui_frame(const char *title, struct nk_vec2 size_frac, void (*build
 
 	nk_ui_draw_underlying_windows();
 
-	panel_w = max(width * size_frac.x, (float)(s_row_h * NK_UI_MODAL_MIN_WIDTH_ROWS));
+	panel_w = max(layout_w * size_frac.x, (float)(s_row_h * NK_UI_MODAL_MIN_WIDTH_ROWS));
 	panel_w = max(panel_w, s_modal_need + s_ctx->style.window.padding.x * 2 + s_ctx->style.window.border * 2 + s_row_h * NK_UI_SCROLLBAR_ROWS);
 	if (s_title_font.ready)
 		panel_w = max(panel_w, nk_ui_text_width(&s_title_font, title) / s_title_font.scale + s_ctx->style.window.padding.x * 4);
-	panel_w = min(panel_w, width * NK_UI_MAX_SCREEN_FRAC);
+	panel_w = min(panel_w, layout_w * NK_UI_MAX_SCREEN_FRAC);
 	title_wraps = nk_ui_text_width(s_head_font.ready ? &s_head_font : &s_body_font, title)
 		> panel_w - s_ctx->style.window.padding.x * 2 - s_row_h * NK_UI_SCROLLBAR_ROWS;
 	if (title_wraps)
@@ -1328,6 +1342,7 @@ static int nk_ui_frame(const char *title, struct nk_vec2 size_frac, void (*build
 	s_panels_pending = 1;
 	nk_ui_flush();
 	ogl_swap_buffers_internal();
+	timer_delay2(NK_UI_MODAL_FPS);	// uncapped, a big screen redraws thousands of times a second
 	nk_ui_run_pending_screen();
 
 	return 1;
@@ -4058,6 +4073,7 @@ static void nk_ui_draw_items(struct nk_context *ctx, struct nk_ui_menu_draw *d, 
 void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle, newmenu_item *items, int nitems, int citem, int refocus, int reorder, unsigned int *collapsed, int has_focus, int *changed, int *selected)
 {
 	int width = grd_curscreen->sc_w, height = grd_curscreen->sc_h;
+	int layout_w = nk_ui_layout_width(grd_curscreen->sc_w, grd_curscreen->sc_h);
 	int heading_is_subtitle = nk_ui_subtitle_is_heading(title, subtitle);
 	const char *body = heading_is_subtitle ? NULL : subtitle;
 	const char *heading = title ? title : (heading_is_subtitle ? subtitle : NULL);
@@ -4114,10 +4130,10 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 	s_item_font = (!reorder && s_head_font.ready && nk_ui_is_navigation(items, nitems))
 		? &s_head_font : &s_body_font;
 	table_w = nk_ui_measure_table(items, nitems);
-	panel_w = nk_ui_menu_width(width, has_table);
-	panel_w = nk_ui_fit_width(panel_w, width, heading, subtitle, items, nitems);
+	panel_w = nk_ui_menu_width(layout_w, has_table);
+	panel_w = nk_ui_fit_width(panel_w, layout_w, heading, subtitle, items, nitems);
 	if (table_w > 0.0f)
-		panel_w = min(max(panel_w, table_w + s_ctx->style.window.padding.x * 2 + s_row_h * NK_UI_SCROLLBAR_ROWS), width * NK_UI_MAX_SCREEN_FRAC);
+		panel_w = min(max(panel_w, table_w + s_ctx->style.window.padding.x * 2 + s_row_h * NK_UI_SCROLLBAR_ROWS), layout_w * NK_UI_MAX_SCREEN_FRAC);
 	header_w = panel_w - s_ctx->style.window.padding.x * 2 - s_row_h * NK_UI_SCROLLBAR_ROWS;
 
 	// A heading too long for the title bar even in the small font becomes
@@ -4134,7 +4150,7 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 	// pick rows out of -- the mission browser, the netgame list -- must stay
 	// one column: splitting it squeezes the cells until they clip.
 	if (has_table && (table_picks
-			|| table_w * 2.0f + s_ctx->style.window.padding.x * 3 > width * NK_UI_MAX_SCREEN_FRAC))
+			|| table_w * 2.0f + s_ctx->style.window.padding.x * 3 > layout_w * NK_UI_MAX_SCREEN_FRAC))
 		wide_table = 1;
 	if (!reorder && !wide_table)
 		ncols = nk_ui_plan_columns(items, nitems, rows_per_col, col_start);
@@ -4144,7 +4160,7 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 		col_start[1] = nitems;
 	}
 	if (ncols > 1)
-		panel_w = min(panel_w * ncols, width * NK_UI_MAX_SCREEN_FRAC);
+		panel_w = min(panel_w * ncols, layout_w * NK_UI_MAX_SCREEN_FRAC);
 	content_w = panel_w - s_ctx->style.window.padding.x * 2 - s_row_h * NK_UI_SCROLLBAR_ROWS;
 	if (ncols > 1)
 		content_w = (content_w - s_ctx->style.window.spacing.x * (ncols - 1)) / ncols;
@@ -4348,6 +4364,7 @@ int nk_ui_bind_frame(const void *id, const char *title, const char *hint,
 	int current_row, int current_slot, int changing, int *picked_row, int *picked_slot)
 {
 	int width = grd_curscreen->sc_w, height = grd_curscreen->sc_h;
+	int layout_w = nk_ui_layout_width(grd_curscreen->sc_w, grd_curscreen->sc_h);
 	float row_stride, label_w, slot_w, col_w, panel_w, panel_h, column_h;
 	int max_slots, rows_per_col, ncols, per_col;
 	int result = NK_UI_BIND_NONE;
@@ -4373,18 +4390,18 @@ int nk_ui_bind_frame(const void *id, const char *title, const char *hint,
 	ncols = (nrows + rows_per_col - 1) / rows_per_col;
 	if (ncols < 1)
 		ncols = 1;
-	while (ncols > 1 && ncols * col_w + s_ctx->style.window.padding.x * 2 > width * NK_UI_MAX_SCREEN_FRAC)
+	while (ncols > 1 && ncols * col_w + s_ctx->style.window.padding.x * 2 > layout_w * NK_UI_MAX_SCREEN_FRAC)
 		ncols--;
 	per_col = (nrows + ncols - 1) / ncols;
 
 	panel_w = min(ncols * col_w + s_ctx->style.window.padding.x * 2 + s_ctx->style.window.spacing.x * (ncols - 1),
-		width * NK_UI_MAX_SCREEN_FRAC);
+		layout_w * NK_UI_MAX_SCREEN_FRAC);
 	if (id != s_bind_hint_id)
 		s_bind_hint_w = 0.0f;
 	s_bind_hint_id = id;
 	s_bind_hint_w = max(s_bind_hint_w, nk_ui_text_width(&s_body_font, hint));
 	panel_w = max(panel_w, min(s_bind_hint_w + s_ctx->style.window.padding.x * 4,
-		width * NK_UI_MAX_SCREEN_FRAC));
+		layout_w * NK_UI_MAX_SCREEN_FRAC));
 	panel_h = nk_ui_menu_height(NK_UI_BIND_HEAD_ROWS + per_col + (slot_names ? 1 : 0), height);
 	column_h = panel_h - NK_UI_MENU_CHROME_HEIGHT - NK_UI_BIND_HEAD_ROWS * row_stride
 		+ s_ctx->style.window.padding.y * 2;
@@ -4467,7 +4484,8 @@ int nk_ui_filter_matches(const char *text, const char *filter)
 int nk_ui_listbox_frame(const void *id, const char *title, char **items, int nitems, int *citem, int *last_citem, unsigned int *scroll_y, char *filter, int allow_abort, int has_focus)
 {
 	int width = grd_curscreen->sc_w, height = grd_curscreen->sc_h;
-	float panel_w = width * NK_UI_LISTBOX_WIDTH_FRAC, panel_h = height * NK_UI_LISTBOX_HEIGHT_FRAC;
+	int layout_w = nk_ui_layout_width(grd_curscreen->sc_w, grd_curscreen->sc_h);
+	float panel_w = layout_w * NK_UI_LISTBOX_WIDTH_FRAC, panel_h = height * NK_UI_LISTBOX_HEIGHT_FRAC;
 	float item_need = 0.0f;
 	float list_h = panel_h - NK_UI_MENU_CHROME_HEIGHT - NK_UI_ROW_HEIGHT * (nitems >= NK_UI_LISTBOX_FILTER_MIN ? 2 : 1) - NK_UI_LISTBOX_PADDING;
 	int shown = 0;
@@ -4483,7 +4501,7 @@ int nk_ui_listbox_frame(const void *id, const char *title, char **items, int nit
 	nk_ui_claim_panel(id);
 	for (i = 0; i < nitems; i++)
 		item_need = max(item_need, nk_ui_text_width(&s_body_font, items[i]));
-	panel_w = min(max(panel_w, item_need + s_row_h * 3 + s_ctx->style.window.padding.x * 2), width * NK_UI_MAX_SCREEN_FRAC);
+	panel_w = min(max(panel_w, item_need + s_row_h * 3 + s_ctx->style.window.padding.x * 2), layout_w * NK_UI_MAX_SCREEN_FRAC);
 	if (title && title[0])
 		flags |= NK_WINDOW_TITLE;
 	if (!has_focus || s_drawing_underneath)
@@ -5167,7 +5185,7 @@ void nk_ui_draw_menu_logo(float left_px, float menu_top_px)
 {
 	float screen_w = (float)SWIDTH, screen_h = (float)SHEIGHT;
 	float min_top = screen_h * NK_UI_LOGO_MIN_TOP_FRAC;
-	float w = screen_w * NK_UI_LOGO_WIDTH_FRAC;
+	float w = (float)nk_ui_layout_width(SWIDTH, SHEIGHT) * NK_UI_LOGO_WIDTH_FRAC;
 	float h, top, version_h;
 
 	nk_ui_init_once();

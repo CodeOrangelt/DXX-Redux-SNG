@@ -1944,7 +1944,6 @@ void survival_spectate_cycle(int forward)
 void survival_spectate_update_camera(void)
 {
 	object *cam, *target;
-	vms_vector pullback = ZERO_VECTOR;
 
 	if (!survival_is_eliminated(Player_num))
 	{
@@ -1959,14 +1958,9 @@ void survival_spectate_update_camera(void)
 	cam = &Objects[Players[Player_num].objnum];
 	target = &Objects[Players[Survival_spectate_target].objnum];
 
-	cam->orient = target->orient;
-	cam->pos = target->pos;
-
-	// Same third-person pullback the real observer camera uses (gamecntl.c,
-	// ReadControls()) when Obs_at_distance is set -- always on here, since
-	// sitting exactly inside a teammate's cockpit gives nothing to look at.
-	vm_vec_copy_scale(&pullback, &cam->orient.fvec, F1_0 * -20);
-	vm_vec_add2(&cam->pos, &pullback);
+	// Third-person pullback like the real observer camera: sitting exactly inside
+	// a teammate's cockpit gives nothing to look at.
+	camera_follow_smoothed(cam, target, F1_0 * -20);
 }
 
 const char *survival_spectate_target_name(void)
@@ -2118,6 +2112,13 @@ fix survival_damage_multiplier(void)
 	return F1_0 - Survival_armor_tier * (F1_0 * SURVIVAL_SHOP_ARMOR_PCT_PER_TIER / 100);
 }
 
+// Everyone else shows our score, so a purchase has to be announced like a kill is.
+static void survival_shop_charge(int price)
+{
+	Players[Player_num].score -= price;
+	multi_send_score();
+}
+
 // Grants a powerup's effect straight to the local player, bypassing the
 // normal fly-through-a-physical-object pickup -- a shop purchase should be
 // instant, not something you can walk away from and lose. do_powerup()
@@ -2145,7 +2146,7 @@ static void survival_shop_buy_weapon(void)
 		return;
 	}
 
-	Players[Player_num].score -= price;
+	survival_shop_charge(price);
 	survival_shop_grant_powerup(survival_random_weapon_type());
 }
 
@@ -2159,7 +2160,7 @@ static void survival_shop_buy_supply(void)
 		return;
 	}
 
-	Players[Player_num].score -= price;
+	survival_shop_charge(price);
 	survival_shop_grant_powerup(
 		Survival_shop_supply_types[(d_rand() * SURVIVAL_NUM_SHOP_SUPPLY_TYPES) >> 15]);
 }
@@ -2180,7 +2181,7 @@ static void survival_shop_buy_shield_full(void)
 		return;
 	}
 
-	Players[Player_num].score -= price;
+	survival_shop_charge(price);
 	repair = SURVIVAL_SHOP_SHIELD_RESTORE_CAP - Players[Player_num].shields;
 	Players[Player_num].shields = SURVIVAL_SHOP_SHIELD_RESTORE_CAP;
 	multi_send_repair(repair, Players[Player_num].shields, OBJ_POWERUP);
@@ -2203,7 +2204,7 @@ static void survival_shop_buy_speed(void)
 		return;
 	}
 
-	Players[Player_num].score -= price;
+	survival_shop_charge(price);
 	Survival_speed_tier++;
 	survival_banner("SPEED BOOST PURCHASED!", F1_0, -1);
 }
@@ -2225,7 +2226,7 @@ static void survival_shop_buy_armor(void)
 		return;
 	}
 
-	Players[Player_num].score -= price;
+	survival_shop_charge(price);
 	Survival_armor_tier++;
 	survival_banner("ARMOR PLATING PURCHASED!", F1_0, -1);
 }

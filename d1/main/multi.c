@@ -3977,6 +3977,7 @@ static void multi_arcade_spawn_superpower(int spid)
 	arcade_mark_superpower(objnum, spid);
 
 	multi_send_arcade_powerup(spid, segnum, objnum, &new_pos);
+	map_objnum_local_to_local(objnum);	// else a pickup by anyone else cannot remove it here
 
 	object_create_explosion(segnum, &new_pos, i2f(5), VCLIP_POWERUP_DISAPPEARANCE);
 }
