@@ -85,9 +85,17 @@ void bld_set_dirty(int dirty)
 
 /* ----------------------------------------------------------- topology */
 
+static int partner_vertex(int sidenum, int v);
+
 int bld_side_vertnum(segment *seg, int sidenum, int k)
 {
 	return seg->verts[Side_to_verts[sidenum][k]];
+}
+
+/* The cube corner straight across from face corner k. */
+int bld_side_partner(segment *seg, int sidenum, int k)
+{
+	return seg->verts[partner_vertex(sidenum, Side_to_verts[sidenum][k])];
 }
 
 vms_vector *bld_side_vertex(segment *seg, int sidenum, int k)
@@ -163,7 +171,7 @@ static int partner_vertex(int sidenum, int v)
 	return -1;
 }
 
-/* 4 vertex numbers for a face, 2 for an edge, 1 for a vertex. */
+/* 8 vertex numbers for a cube, 4 for a face, 2 for an edge, 1 for a vertex. */
 int bld_element_vertices(const builder_element *el, int *out)
 {
 	segment *seg = &Segments[el->segnum];
@@ -178,6 +186,13 @@ int bld_element_vertices(const builder_element *el, int *out)
 			out[0] = bld_side_vertnum(seg, el->sidenum, el->corner);
 			out[1] = bld_side_vertnum(seg, el->sidenum, (el->corner + 1) % 4);
 			return 2;
+		case BSEL_CUBE:
+			for (k = 0; k < 4; k++)
+			{
+				out[k] = bld_side_vertnum(seg, el->sidenum, k);
+				out[k + 4] = bld_side_partner(seg, el->sidenum, k);
+			}
+			return BUILDER_ELEMENT_VERTS;
 		default:
 			for (k = 0; k < 4; k++)
 				out[k] = bld_side_vertnum(seg, el->sidenum, k);
@@ -187,7 +202,7 @@ int bld_element_vertices(const builder_element *el, int *out)
 
 void bld_element_center(const builder_element *el, vms_vector *center)
 {
-	int verts[4], count, i;
+	int verts[BUILDER_ELEMENT_VERTS], count, i;
 
 	count = bld_element_vertices(el, verts);
 	vm_vec_zero(center);
@@ -393,6 +408,26 @@ int bld_finish_edit(int ok, const char *failure)
 
 /* ---------------------------------------------------------- texturing */
 
+/* Whole tiles are invisible, but the level file keeps UVs in a short
+ * (+-16 tiles) and clamps the rest, which smears far-from-origin faces. */
+static void rebase_uvs(side *sidep)
+{
+	fix whole_u = sidep->uvls[0].u & ~(F1_0 - 1);
+	fix whole_v = sidep->uvls[0].v & ~(F1_0 - 1);
+	int k;
+
+	for (k = 0; k < 4; k++)
+	{
+		sidep->uvls[k].u -= whole_u;
+		sidep->uvls[k].v -= whole_v;
+	}
+}
+
+void bld_rebase_side_uvs(side *sidep)
+{
+	rebase_uvs(sidep);
+}
+
 /* World-aligned planar mapping: neighbouring faces line up seamlessly. */
 void bld_map_side_uvs(segment *seg, int sidenum)
 {
@@ -417,6 +452,7 @@ void bld_map_side_uvs(segment *seg, int sidenum)
 		seg->sides[sidenum].uvls[k].u = fixdiv(vm_vec_dot(p, &right), TEXTURE_WORLD_SIZE);
 		seg->sides[sidenum].uvls[k].v = -fixdiv(vm_vec_dot(p, &up), TEXTURE_WORLD_SIZE);
 	}
+	rebase_uvs(&seg->sides[sidenum]);
 }
 
 static void map_segment_uvs(int segnum)
@@ -427,11 +463,21 @@ static void map_segment_uvs(int segnum)
 		bld_map_side_uvs(&Segments[segnum], sidenum);
 }
 
-void bld_paint_side(segment *seg, int sidenum)
+void bld_paint_side_with(segment *seg, int sidenum, int texnum)
 {
-	seg->sides[sidenum].tmap_num = Builder.texture;
+	seg->sides[sidenum].tmap_num = texnum;
 	seg->sides[sidenum].tmap_num2 = 0;
 	bld_map_side_uvs(seg, sidenum);
+}
+
+void bld_paint_overlay(segment *seg, int sidenum, int texnum, int orientation)
+{
+	seg->sides[sidenum].tmap_num2 = texnum | (orientation << 14);
+}
+
+void bld_paint_side(segment *seg, int sidenum)
+{
+	bld_paint_side_with(seg, sidenum, Builder.texture);
 }
 
 /* ----------------------------------------------------------- lighting */
@@ -733,6 +779,415 @@ static void init_new_segment(segment *seg, segment *style, int style_side)
 		seg->sides[sidenum].tmap_num = style->sides[style_side].tmap_num;
 		seg->sides[sidenum].tmap_num2 = style->sides[style_side].tmap_num2;
 	}
+}
+
+/* ---------------------------------------------------------- splitting */
+
+/* Slicing a cube in two moves the cut through every cube it touches
+ * sideways, so each shared face stays one-to-one with its neighbour. */
+#define MAX_SPLIT_CUBES		128
+#define MAX_CUT_EDGES		(MAX_SPLIT_CUBES * 4)
+#define MAX_TOUCHED		(MAX_SPLIT_CUBES * 8)
+#define MAX_SPLIT_LIMIT		256
+
+typedef struct cut_edge {
+	int near_vert, far_vert, mid;
+	vms_vector pos;
+} cut_edge;
+
+typedef struct split_job {
+	int segnum, a;
+} split_job;
+
+typedef struct split_state {
+	split_job jobs[MAX_SPLIT_CUBES];
+	int made[MAX_SPLIT_CUBES];
+	float fraction[MAX_SPLIT_CUBES];
+	int job_count;
+	cut_edge edges[MAX_CUT_EDGES];
+	int edge_count;
+	float t;
+} split_state;
+
+static split_state Split;
+static int Dry;	/* planning only: no vertices, no segments changed */
+static int Touched[MAX_TOUCHED];
+static int Touched_count;
+static int Sealed;	/* openings closed because the cut stopped at the selection */
+static int Limit_active;
+static int Limit_segs[MAX_SPLIT_LIMIT];
+static int Limit_count;
+
+/* Cuts may only reach these cubes (and the halves they produce). */
+void bld_split_limit(const int *segs, int count)
+{
+	Limit_count = count < MAX_SPLIT_LIMIT ? count : MAX_SPLIT_LIMIT;
+	memcpy(Limit_segs, segs, sizeof(Limit_segs[0]) * Limit_count);
+	Limit_active = 1;
+}
+
+void bld_split_unlimit(void)
+{
+	Limit_active = 0;
+}
+
+static int limit_allows(int segnum)
+{
+	int i;
+
+	if (!Limit_active)
+		return 1;
+	for (i = 0; i < Limit_count; i++)
+		if (Limit_segs[i] == segnum)
+			return 1;
+	return 0;
+}
+
+static void limit_add(int segnum)
+{
+	if (Limit_active && Limit_count < MAX_SPLIT_LIMIT)
+		Limit_segs[Limit_count++] = segnum;
+}
+
+static cut_edge *find_cut_edge(int v0, int v1)
+{
+	int i;
+
+	for (i = 0; i < Split.edge_count; i++)
+	{
+		cut_edge *e = &Split.edges[i];
+
+		if ((e->near_vert == v0 && e->far_vert == v1) || (e->near_vert == v1 && e->far_vert == v0))
+			return e;
+	}
+	return NULL;
+}
+
+/* Fraction of the way from near to far at which an existing cut falls. */
+static float cut_fraction(const cut_edge *e, int near_vert, int far_vert)
+{
+	fix whole = vm_vec_dist(&Vertices[near_vert], &Vertices[far_vert]);
+
+	if (whole <= 0)
+		return 0.5f;
+	return f2fl(vm_vec_dist(&Vertices[near_vert], &e->pos)) / f2fl(whole);
+}
+
+static int cut_vertex(int near_vert, int far_vert, float t)
+{
+	cut_edge *e = find_cut_edge(near_vert, far_vert);
+	vms_vector along;
+
+	if (e)
+		return e->mid;
+	if (Split.edge_count >= MAX_CUT_EDGES || (!Dry && Num_vertices >= MAX_VERTICES))
+		return -1;
+	vm_vec_sub(&along, &Vertices[far_vert], &Vertices[near_vert]);
+	vm_vec_scale(&along, fl2f(t));
+	Split.edges[Split.edge_count].near_vert = near_vert;
+	Split.edges[Split.edge_count].far_vert = far_vert;
+	vm_vec_add(&Split.edges[Split.edge_count].pos, &Vertices[near_vert], &along);
+	Split.edges[Split.edge_count].mid = 0;
+	if (!Dry)
+	{
+		Vertices[Num_vertices] = Split.edges[Split.edge_count].pos;
+		Highest_vertex_index = Num_vertices;
+		Split.edges[Split.edge_count].mid = Num_vertices++;
+	}
+	return Split.edges[Split.edge_count++].mid;
+}
+
+static const char *split_blocker(segment *seg, int a)
+{
+	int sidenum;
+
+	if (seg->special != SEGMENT_IS_NOTHING)
+		return "That cube is a special room";
+	for (sidenum = 0; sidenum < MAX_SIDES_PER_SEGMENT; sidenum++)
+		if (sidenum != a && seg->sides[sidenum].wall_num != -1)
+			return "That cube has a door or wall";
+	return NULL;
+}
+
+static int job_queued(int segnum)
+{
+	int i;
+
+	for (i = 0; i < Split.job_count; i++)
+		if (Split.jobs[i].segnum == segnum)
+			return 1;
+	return 0;
+}
+
+static int side_holds_both(segment *seg, int sidenum, int v0, int v1)
+{
+	int k, found0 = 0, found1 = 0;
+
+	for (k = 0; k < 4; k++)
+	{
+		int v = bld_side_vertnum(seg, sidenum, k);
+
+		found0 |= v == v0;
+		found1 |= v == v1;
+	}
+	return found0 && found1;
+}
+
+/* The neighbour is cut parallel to the edge our own side-a runs along it. */
+static const char *queue_neighbour(segment *seg, int a, int lateral, int child)
+{
+	int shared[2], n_shared = 0, k, q;
+
+	if (job_queued(child))
+		return NULL;
+	if (!limit_allows(child))
+		return "That cut would also slice a cube you haven't tagged";
+	if (Split.job_count >= MAX_SPLIT_CUBES)
+		return "Too many connected cubes to cut through";
+	for (k = 0; k < 4 && n_shared < 2; k++)
+	{
+		int cidx = Side_to_verts[a][k];
+
+		if (side_has_vertex(lateral, cidx))
+			shared[n_shared++] = seg->verts[cidx];
+	}
+	if (n_shared < 2)
+		return "Can't cut through that neighbour";
+	for (q = 0; q < MAX_SIDES_PER_SEGMENT; q++)
+	{
+		if (Segments[child].children[q] == (seg - Segments))
+			continue;
+		if (side_holds_both(&Segments[child], q, shared[0], shared[1]))
+		{
+			Split.jobs[Split.job_count].segnum = child;
+			Split.jobs[Split.job_count].a = q;
+			Split.job_count++;
+			return NULL;
+		}
+	}
+	return "Can't cut through that neighbour";
+}
+
+/* The cut stops at the selection: the opening to an unselected cube is closed. */
+static void seal_opening(segment *seg, int sidenum, int child)
+{
+	int facing = find_connect_side(seg, &Segments[child]);
+
+	Segments[child].children[facing] = -1;
+	Segments[child].sides[facing].tmap_num = seg->sides[sidenum].tmap_num;
+	Segments[child].sides[facing].tmap_num2 = 0;
+	bld_map_side_uvs(&Segments[child], facing);
+	Sealed++;
+}
+
+static float job_fraction(segment *seg, int a, int *cidx_a, int *cidx_b)
+{
+	int k;
+
+	for (k = 0; k < 4; k++)
+	{
+		cut_edge *e = find_cut_edge(seg->verts[cidx_a[k]], seg->verts[cidx_b[k]]);
+
+		if (e)
+			return cut_fraction(e, seg->verts[cidx_a[k]], seg->verts[cidx_b[k]]);
+	}
+	(void)a;
+	return Split.t;
+}
+
+static void relink_child(int child, int from, int to)
+{
+	int x;
+
+	if (child < 0)
+		return;
+	for (x = 0; x < MAX_SIDES_PER_SEGMENT; x++)
+		if (Segments[child].children[x] == from)
+			Segments[child].children[x] = to;
+}
+
+/* Cuts one cube between side a and its opposite; the far half is new. */
+static const char *split_one(int job)
+{
+	segment *seg = &Segments[Split.jobs[job].segnum];
+	int segnum = Split.jobs[job].segnum, a = Split.jobs[job].a;
+	int b = Side_opposite[a], newnum = Num_segments;
+	int cidx_a[4], cidx_b[4], mid[4], k, sidenum;
+	const char *failure = split_blocker(seg, a);
+	segment *fresh;
+	float t;
+
+	if (failure)
+		return failure;
+	if (Num_segments >= MAX_SEGMENTS)
+		return "Segment limit reached";
+	for (k = 0; k < 4; k++)
+	{
+		cidx_a[k] = Side_to_verts[a][k];
+		cidx_b[k] = partner_vertex(a, cidx_a[k]);
+		if (cidx_b[k] < 0)
+			return "That cube is too odd to cut";
+	}
+	t = job_fraction(seg, a, cidx_a, cidx_b);
+	for (k = 0; k < 4; k++)
+	{
+		mid[k] = cut_vertex(seg->verts[cidx_a[k]], seg->verts[cidx_b[k]], t);
+		if (mid[k] < 0)
+			return "Vertex limit reached";
+	}
+	for (sidenum = 0; sidenum < MAX_SIDES_PER_SEGMENT; sidenum++)
+	{
+		int child = seg->children[sidenum];
+
+		if (sidenum == a || sidenum == b)
+			continue;
+		if (child >= 0 && Limit_active && !limit_allows(child))
+		{
+			if (!Dry)
+				seal_opening(seg, sidenum, child);
+		}
+		else if (child >= 0 && (failure = queue_neighbour(seg, a, sidenum, child)))
+			return failure;
+		if (!Dry)
+			seg->children[sidenum] = -1;
+	}
+	Split.fraction[job] = t;
+	if (Dry)
+		return NULL;
+
+	fresh = &Segments[newnum];
+	*fresh = *seg;
+	fresh->objects = -1;
+	for (sidenum = 0; sidenum < MAX_SIDES_PER_SEGMENT; sidenum++)
+	{
+		fresh->sides[sidenum].wall_num = -1;
+		if (sidenum != b)
+			fresh->children[sidenum] = -1;
+	}
+	for (k = 0; k < 4; k++)
+	{
+		seg->verts[cidx_b[k]] = mid[k];
+		fresh->verts[cidx_a[k]] = mid[k];
+	}
+	relink_child(fresh->children[b], segnum, newnum);
+	seg->children[b] = newnum;
+	fresh->children[a] = segnum;
+	Num_segments++;
+	Highest_segment_index = newnum;
+	Split.made[job] = newnum;
+	return NULL;
+}
+
+static const char *finish_split(void)
+{
+	int i;
+
+	for (i = 0; i < Split.job_count; i++)
+	{
+		int pair[2] = {Split.jobs[i].segnum, Split.made[i]}, p;
+
+		for (p = 0; p < 2; p++)
+		{
+			segment *seg = &Segments[pair[p]];
+
+			if (segment_has_duplicate_vertex(seg))
+				return "That cut would collapse a cube";
+			validate_segment(seg);
+			if (!segment_is_sane(seg))
+				return "That cut would leave a cube too thin";
+			map_segment_uvs(pair[p]);
+		}
+	}
+	for (i = 0; i < Split.job_count; i++)
+	{
+		join_coincident_sides(Split.jobs[i].segnum);
+		join_coincident_sides(Split.made[i]);
+	}
+	relink_all_objects();
+	return NULL;
+}
+
+/* Slice a cube between side a and its opposite, t of the way from a.
+ * Cubes sharing the cut's side faces are sliced too. Returns why not, or
+ * NULL and the new (far-half) cube number. */
+static void start_split(int segnum, int a, float t)
+{
+	Split.job_count = 0;
+	Split.edge_count = 0;
+	Split.t = t;
+	Split.jobs[Split.job_count].segnum = segnum;
+	Split.jobs[Split.job_count].a = a;
+	Split.job_count++;
+}
+
+/* Which cubes a cut would slice, and where, without touching the level. */
+int bld_split_plan(int segnum, int a, float t, split_cut *out, int max)
+{
+	const char *failure = NULL;
+	int i, n = 0;
+
+	start_split(segnum, a, t);
+	Dry = 1;
+	for (i = 0; i < Split.job_count && !failure; i++)
+		failure = split_one(i);
+	Dry = 0;
+	for (i = 0; i < Split.job_count && n < max; i++)
+	{
+		out[n].segnum = Split.jobs[i].segnum;
+		out[n].a = Split.jobs[i].a;
+		out[n].t = Split.fraction[i];
+		n++;
+	}
+	return failure ? 0 : n;
+}
+
+void bld_split_touched_reset(void)
+{
+	Touched_count = 0;
+	Sealed = 0;
+}
+
+int bld_split_sealed(void)
+{
+	return Sealed;
+}
+
+int bld_split_was_touched(int segnum)
+{
+	int i;
+
+	for (i = 0; i < Touched_count; i++)
+		if (Touched[i] == segnum)
+			return 1;
+	return 0;
+}
+
+static void note_touched(int segnum)
+{
+	if (Touched_count < MAX_TOUCHED)
+		Touched[Touched_count++] = segnum;
+}
+
+const char *bld_split(int segnum, int a, float t, int *new_num)
+{
+	const char *failure = NULL;
+	int i;
+
+	start_split(segnum, a, t);
+	for (i = 0; i < Split.job_count && !failure; i++)
+		failure = split_one(i);
+	if (!failure)
+		failure = finish_split();
+	if (failure)
+		return failure;
+	for (i = 0; i < Split.job_count; i++)
+	{
+		limit_add(Split.made[i]);
+		note_touched(Split.jobs[i].segnum);
+		note_touched(Split.made[i]);
+	}
+	*new_num = Split.made[0];
+	return NULL;
 }
 
 /* Grow a new cube off a solid face. Returns why it couldn't, or NULL. */

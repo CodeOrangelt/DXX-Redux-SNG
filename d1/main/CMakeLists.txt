@@ -29,6 +29,10 @@ add_executable (d1x-redux
     builder_ui.c
     builder_geom.c
     builder_ops.c
+    builder_shapes.c
+    builder_carve.c
+    builder_cut.c
+    builder_gizmo.c
     builder_hud.c
     gameseg.c
     gameseq.c

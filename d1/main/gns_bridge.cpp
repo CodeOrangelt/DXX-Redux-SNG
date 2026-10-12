@@ -1,6 +1,7 @@
 // See gns_bridge.h for the rationale/scope of this file.
 
 #include "gns_bridge.h"
+#include <cstdlib>
 
 #include <steam/steamnetworkingsockets.h>
 #include <steam/isteamnetworkingsockets.h>
@@ -58,6 +59,13 @@ const char *const k_stun_servers =
 	"stun.l.google.com:19302,"
 	"stun1.l.google.com:19302,"
 	"stun2.l.google.com:19302";
+
+// SNG: DXX_STUN_SERVERS lets tools/netsim point ICE at a local STUN server
+const char *stun_servers()
+{
+	const char *override_list = getenv("DXX_STUN_SERVERS");
+	return (override_list && *override_list) ? override_list : k_stun_servers;
+}
 
 // Set immediately before calling ReceivedP2PCustomSignal() for a signal that
 // might represent a brand new inbound connection, so OnConnectRequest() can
@@ -299,7 +307,7 @@ extern "C" int gns_bridge_init(void)
 	// NAT -- see k_stun_servers above. ICE_Enable already defaults to "All"
 	// in the open-source build, but it is set explicitly so a future GNS
 	// bump can't silently turn P2P off underneath us.
-	SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, k_stun_servers);
+	SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, stun_servers());
 	SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable,
 		k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_All);
 	SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Penalty, 0);

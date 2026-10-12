@@ -27,6 +27,7 @@
 #include "gameseq.h"
 #include "gamesave.h"
 #include "builder.h"
+#include "builder_int.h"
 
 #define RDL_SIGNATURE		0x504c564c	/* "PLVL" */
 #define RDL_LEVEL_VERSION	1
@@ -34,7 +35,7 @@
 #define RDL_GAME_VERSION	25
 #define RDL_GAME_SIGNATURE	0x6705
 #define GAME_FILEINFO_SIZE	119		/* sizeof(game_fileinfo) on the original DOS build */
-#define STARTER_ROOM_SIZE	(40 * F1_0)
+#define STARTER_ROOM_SIZE	(BUILDER_CUBE_UNITS * F1_0)
 #define SIDE_HAS_SPECIAL_BIT	(1 << MAX_SIDES_PER_SEGMENT)
 
 #define LEVEL_PATH	MISSION_DIR BUILDER_LEVEL_FILE

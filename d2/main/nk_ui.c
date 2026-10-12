@@ -83,6 +83,7 @@ static void nk_ui_note(const char *text, float extra_rows);
 #include "ogl_init.h"
 #include "mouse.h"
 #include "event.h"
+#include "timer.h"
 #include "window.h"
 #include "newmenu.h"
 #include "gamefont.h"
@@ -1253,6 +1254,7 @@ static int nk_ui_frame(const char *title, struct nk_vec2 size_frac, void (*build
 
 	nk_ui_sync_fonts();
 	mouse_cursor_autohide();
+	timer_update(); // SDL_PollEvent below bypasses event_process(); join retries/timeout read this clock
 
 	// Only keys pressed while this screen is up may act on it: the Enter
 	// that chose "HOST GAME" in the menu underneath is still flagged when
@@ -2699,14 +2701,7 @@ struct nk_ui_browse_state
 	int running;
 };
 
-// The join in progress, if any -- owned by nk_ui_join_progress()'s own
-// deferred screen, not by nk_ui_build_browse(). net_udp_game_connect() can
-// pop a legacy nm_messagebox() (version mismatch, no response, ...), which
-// is itself drawn as a nested Nuklear frame; running that mid-build here
-// would call nk_clear() on the still-open "Join Game" panel and freeze the
-// game, exactly the hazard nk_ui_defer() exists to avoid. So the whole
-// connect state machine gets its own screen, deferred the same way the
-// Info popup is.
+// The join in progress, if any -- owned by nk_ui_join_progress().
 static direct_join s_active_join;
 static int s_join_finished;
 static int s_join_succeeded;
@@ -2828,49 +2823,52 @@ static void nk_ui_build_join_progress(struct nk_context *ctx, void *userdata)
 {
 	int *running = (int *)userdata;
 
-	// Keeps the connect state machine moving every frame, exactly like
-	// net_udp_list_join_poll()'s EVENT_IDLE case -- but in its own frame,
-	// so any messagebox it pops gets its own nk_begin()/nk_end() too.
-	if (net_udp_game_connect(&s_active_join))
-	{
-		s_join_succeeded = 1;
-		s_join_finished = 1;
-		*running = 0;
-		return;
-	}
-	if (!s_active_join.connecting)
-	{
-		s_join_succeeded = 0;
-		s_join_finished = 1; // gave up -- net_udp_game_connect() already said why
-		*running = 0;
-		return;
-	}
-
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	nk_label(ctx, "Connecting...", NK_TEXT_LEFT);
 	if (nk_button_label(ctx, "Cancel"))
-	{
-		s_active_join.connecting = 0;
-		s_join_succeeded = 0;
-		s_join_finished = 1;
 		*running = 0;
-	}
 }
 
+static void nk_ui_finish_join(int succeeded)
+{
+	con_printf(CON_NORMAL, "Join: connecting screen closed, succeeded=%d\n", succeeded);
+	s_active_join.connecting = 0;
+	s_join_succeeded = succeeded;
+	s_join_finished = 1;
+}
+
+// net_udp_game_connect() opens legacy menus (welcome, sync wait, errors)
+// whose render ends in nk_clear() -- so it must run between frames, never
+// inside a build callback.
 static void nk_ui_join_progress(void)
 {
 	int running = 1;
 
 	nk_ui_init_once();
+	con_printf(CON_NORMAL, "Join: connecting screen opened (connecting=%d)\n", s_active_join.connecting);
 	while (running)
 	{
-		if (!nk_ui_frame("Join Game", nk_vec2(0.4f, 0.25f), nk_ui_build_join_progress, &running))
-			break;
+		if (!nk_ui_frame("Connecting", nk_vec2(0.4f, 0.25f), nk_ui_build_join_progress, &running) || !running)
+		{
+			nk_ui_finish_join(0);
+			return;
+		}
+		if (net_udp_game_connect(&s_active_join))
+		{
+			nk_ui_finish_join(1);
+			return;
+		}
+		if (!s_active_join.connecting)
+		{
+			nk_ui_finish_join(0); // net_udp_game_connect() already said why
+			return;
+		}
 	}
 }
 
 static void nk_ui_browse_start_join(int list_index)
 {
+	con_printf(CON_NORMAL, "Join: row %d clicked (%d games listed)\n", list_index, num_active_udp_games);
 	memset(&s_active_join, 0, sizeof(s_active_join));
 	net_udp_nk_begin_join(&s_active_join, list_index);
 	s_join_finished = 0;
@@ -2935,8 +2933,6 @@ static void nk_ui_build_browse(struct nk_context *ctx, void *userdata)
 		}
 	}
 
-	net_udp_listen();
-
 	if (s_join_info_requested)
 	{
 		s_join_info_requested = 0;
@@ -2979,6 +2975,7 @@ void nk_ui_join_game(void)
 	{
 		if (!nk_ui_frame("Join Game", nk_vec2(0.85f, 0.85f), nk_ui_build_browse, &st))
 			break;
+		net_udp_listen(); // can pop legacy menus (dump notices): keep it out of the build
 	}
 
 	net_udp_nk_browse_end();

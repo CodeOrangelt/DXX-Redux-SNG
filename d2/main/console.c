@@ -10,6 +10,12 @@
 #include <string.h>
 #include <time.h>
 #include <SDL.h>
+#ifdef __linux__
+#include <execinfo.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <unistd.h>
+#endif
 #include "window.h"
 #include "console.h"
 #include "args.h"
@@ -101,6 +107,7 @@ void con_printf(int priority, const char *fmt, ...)
 			}
 #endif
 			PHYSFSX_printf(gamelog_fp,"%s",buffer);
+			PHYSFS_flush(gamelog_fp); // a crash must not eat the log
 		}
 	}
 }
@@ -268,6 +275,43 @@ static void con_close(void)
 	gamelog_fp = NULL;
 }
 
+#ifdef __linux__
+#define CRASH_TRACE_FRAMES 64
+static int crash_trace_fd = -1;
+
+static void con_crash_handler(int sig)
+{
+	static const char header[] = "\nCRASH: fatal signal, backtrace (resolve with addr2line):\n";
+	void *frames[CRASH_TRACE_FRAMES];
+	int depth;
+
+	if (crash_trace_fd >= 0)
+	{
+		(void)!write(crash_trace_fd, header, sizeof(header) - 1);
+		depth = backtrace(frames, CRASH_TRACE_FRAMES);
+		backtrace_symbols_fd(frames, depth, crash_trace_fd);
+	}
+	if (gamelog_fp)
+		PHYSFS_flush(gamelog_fp);
+	signal(sig, SIG_DFL);
+	raise(sig);
+}
+
+static void con_install_crash_handler(void)
+{
+	static const int fatal_signals[] = { SIGSEGV, SIGFPE, SIGABRT, SIGBUS, SIGILL };
+	char path[PATH_MAX];
+	size_t i;
+
+	snprintf(path, sizeof(path), "%s/crash-trace.txt", PHYSFS_getWriteDir());
+	crash_trace_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	for (i = 0; i < sizeof(fatal_signals) / sizeof(fatal_signals[0]); i++)
+		signal(fatal_signals[i], con_crash_handler);
+}
+#else
+static void con_install_crash_handler(void) {}
+#endif
+
 void con_init(void)
 {
 	memset(con_buffer,0,sizeof(con_buffer));
@@ -275,6 +319,7 @@ void con_init(void)
 	con_switch_log(NULL);
 
 	atexit(con_close);
+	con_install_crash_handler();
 }
 
 void con_switch_log(const char* filename)

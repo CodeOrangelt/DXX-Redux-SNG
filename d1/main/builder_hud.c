@@ -4,7 +4,9 @@
  * step, build depth, current texture and save state.
  */
 
+#include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "inferno.h"
 #include "gr.h"
@@ -39,6 +41,22 @@
 typedef struct icon_box {
 	int x, y, size;
 } icon_box;
+
+enum bar_cell_kind {
+	CELL_TOOL,
+	CELL_MODE,
+	CELL_LINK
+};
+
+typedef struct bar_cell {
+	int left, top, right, bottom;
+	int kind, index;
+} bar_cell;
+
+#define MAX_BAR_CELLS	16
+
+static bar_cell Cells[MAX_BAR_CELLS];
+static int Cell_count;
 
 typedef struct bar_layout {
 	int top, height, icon, gap, line;
@@ -177,6 +195,14 @@ static void icon_vertex(const icon_box *box, int color)
 	icon_fill(box, 0.08f, 0.70f, 0.30f, 0.92f);
 }
 
+static void icon_wall(const icon_box *box)
+{
+	icon_rect(box, 0.12f, 0.12f, 0.48f, 0.48f);
+	icon_rect(box, 0.52f, 0.12f, 0.88f, 0.48f);
+	icon_rect(box, 0.12f, 0.52f, 0.48f, 0.88f);
+	icon_rect(box, 0.52f, 0.52f, 0.88f, 0.88f);
+}
+
 static void icon_sync(const icon_box *box)
 {
 	icon_arrow(box, 0.16f, 0.84f, 0.34f);
@@ -195,7 +221,22 @@ static void icon_mirror(const icon_box *box)
 
 /* ---------------------------------------------------------------- cells */
 
-static void draw_cell(bar_layout *bar, int active, void (*draw)(const icon_box *box, int color))
+static void register_cell(const icon_box *box, int kind, int index)
+{
+	bar_cell *cell;
+
+	if (Cell_count >= MAX_BAR_CELLS)
+		return;
+	cell = &Cells[Cell_count++];
+	cell->left = box->x;
+	cell->top = box->y;
+	cell->right = box->x + box->size;
+	cell->bottom = box->y + box->size;
+	cell->kind = kind;
+	cell->index = index;
+}
+
+static void draw_cell(bar_layout *bar, int active, int kind, int index, void (*draw)(const icon_box *box, int color))
 {
 	icon_box box;
 	int color = active ? COLOR_ACTIVE : COLOR_IDLE;
@@ -203,6 +244,7 @@ static void draw_cell(bar_layout *bar, int active, void (*draw)(const icon_box *
 	box.x = bar->x;
 	box.y = bar->top + (bar->height - bar->icon) / 2;
 	box.size = bar->icon;
+	register_cell(&box, kind, index);
 	if (active)
 	{
 		translucent_rect(box.x - 3, box.y - 3, box.x + box.size + 3, box.y + box.size + 3, COLOR_CELL, CELL_FADE);
@@ -237,6 +279,8 @@ static void tool_pick(const icon_box *b, int c)   { draw_tool_icon(b, c, BTOOL_P
 static void mode_face(const icon_box *b, int c)   { (void)c; icon_face(b); }
 static void mode_edge(const icon_box *b, int c)   { icon_edge(b, c); }
 static void mode_vertex(const icon_box *b, int c) { icon_vertex(b, c); }
+static void mode_cube(const icon_box *b, int c)   { (void)c; icon_cube(b); }
+static void mode_wall(const icon_box *b, int c)   { (void)c; icon_wall(b); }
 static void link_sync(const icon_box *b, int c)   { (void)c; icon_sync(b); }
 static void link_mirror(const icon_box *b, int c) { (void)c; icon_mirror(b); }
 
@@ -244,7 +288,7 @@ static void (*const Tool_icons[BTOOL_COUNT])(const icon_box *, int) = {
 	tool_select, tool_build, tool_delete, tool_paint, tool_pick,
 };
 static void (*const Mode_icons[BSEL_COUNT])(const icon_box *, int) = {
-	mode_face, mode_edge, mode_vertex,
+	mode_face, mode_edge, mode_vertex, mode_cube, mode_wall,
 };
 
 static void separator(bar_layout *bar)
@@ -278,8 +322,19 @@ static void group_tools(bar_layout *bar)
 	int i;
 
 	for (i = 0; i < BTOOL_COUNT; i++)
-		draw_cell(bar, Builder.tool == i, Tool_icons[i]);
-	text_block(bar, Builder_tool_names[Builder.tool], COLOR_LABEL, "1-5", COLOR_HINT);
+		draw_cell(bar, Builder.tool == i, CELL_TOOL, i, Tool_icons[i]);
+	if (Builder.tool == BTOOL_PAINT)
+	{
+		char mode[24];
+
+		snprintf(mode, sizeof(mode), "%s%s%s%s", Builder_paint_names[Builder.paint_mode],
+			Builder.paint_mode == BPAINT_FILL ? " " : "",
+			Builder.paint_mode == BPAINT_FILL ? Builder_fill_names[Builder.fill_scope] : "",
+			Builder.seamless ? " +SEAM" : "");
+		text_block(bar, Builder_tool_names[Builder.tool], COLOR_LABEL, mode, COLOR_HINT);
+		return;
+	}
+	text_block(bar, Builder_tool_names[Builder.tool], COLOR_LABEL, "~", COLOR_HINT);
 }
 
 static void group_modes(bar_layout *bar)
@@ -287,21 +342,23 @@ static void group_modes(bar_layout *bar)
 	int i;
 
 	for (i = 0; i < BSEL_COUNT; i++)
-		draw_cell(bar, Builder.sel_mode == i, Mode_icons[i]);
+		draw_cell(bar, Builder.sel_mode == i, CELL_MODE, i, Mode_icons[i]);
 	text_block(bar, Builder_sel_mode_names[Builder.sel_mode], COLOR_LABEL, "V", COLOR_HINT);
 }
 
 static void group_tags(bar_layout *bar)
 {
-	char label[24], value[24];
+	char label[24], value[40];
 	int mirror = Builder.link_mode == BLINK_MIRROR;
 
-	draw_cell(bar, builder_tag_count() > 1, mirror ? link_mirror : link_sync);
+	draw_cell(bar, builder_tag_count() > 1, CELL_LINK, 0, mirror ? link_mirror : link_sync);
 	snprintf(label, sizeof(label), builder_tag_count() == 1 ? "1 TAG" : "%d TAGS", builder_tag_count());
 	if (mirror)
 		snprintf(value, sizeof(value), "MIRROR %s  M", Builder_axis_names[Builder.mirror_axis]);
 	else
 		snprintf(value, sizeof(value), "SYNC  M");
+	if (Builder.tag_drag)
+		snprintf(value + strlen(value), sizeof(value) - strlen(value), " DRAG");
 	text_block(bar, label, builder_tag_count() ? COLOR_ADD : COLOR_LABEL, value, COLOR_VALUE);
 }
 
@@ -341,14 +398,256 @@ static void group_texture(bar_layout *bar, int right_edge)
 /* Controls reminder on its own lighter strip above the bar. */
 static void hint_line(bar_layout *bar, int width)
 {
-	static const char hint[] = "TAB TOOLS   MMB SELECT   SHIFT+MMB TAG   WHEEL IN/OUT   RMB DELETE";
+	static const char hint[] = "TAB PANEL   T TEXTURES   ~ TOOLS   V SELECT (TAP CYCLES)   HOLD 1-9 SHAPES   HOLD C CARVE   X CUT   ALT BAR   LMB TOOL   MMB SELECT   SHIFT+MMB TAG   2xMMB WALL   G TAG DRAG   P PAINT MODE   L LINK   WHEEL IN/OUT   RMB DELETE";
+	const char *text = hint;
 	int top = bar->top - bar->line - bar->gap;
 	int w, h, aw;
 
-	gr_get_string_size(hint, &w, &h, &aw);
+	gr_get_string_size(text, &w, &h, &aw);
 	translucent_rect(0, top, (w + bar->gap * 4 < width ? w + bar->gap * 4 : width) - 1, bar->top - 1, COLOR_BAR, HINT_FADE);
 	gr_set_fontcolor(COLOR_HINT, -1);
-	gr_printf(bar->gap * 2, top + bar->gap / 2, "%s", hint);
+	gr_printf(bar->gap * 2, top + bar->gap / 2, "%s", text);
+}
+
+/* Returns 1 if (x, y) landed on a bar icon, and applies it. */
+int builder_bar_click(int x, int y)
+{
+	int i;
+
+	for (i = 0; i < Cell_count; i++)
+	{
+		const bar_cell *cell = &Cells[i];
+
+		if (x < cell->left || x > cell->right || y < cell->top || y > cell->bottom)
+			continue;
+		if (cell->kind == CELL_TOOL)
+			builder_set_tool(cell->index);
+		else if (cell->kind == CELL_MODE)
+			builder_set_sel_mode(cell->index);
+		else
+			builder_cycle_link_mode();
+		return 1;
+	}
+	return 0;
+}
+
+/* ---------------------------------------------------------- shape icons */
+
+#define ICON_MAX_STAGES	8
+#define PERSPECTIVE_DROP	0.28f
+#define ICON_SCALE	0.40f
+
+static void stage_corners(const shape_stage *stage, float depth, float corners[4][2])
+{
+	static const float signs[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+	float scale = ICON_SCALE / (1.0f + PERSPECTIVE_DROP * depth);
+	float radians = stage->angle * (float)M_PI / 180.0f;
+	int k;
+
+	for (k = 0; k < 4; k++)
+	{
+		float x = signs[k][0] * stage->w * 0.5f, y = signs[k][1] * stage->h * 0.5f;
+
+		corners[k][0] = 0.5f + (stage->cx + x * cosf(radians) - y * sinf(radians)) * scale * 2;
+		corners[k][1] = 0.5f + (stage->cy + x * sinf(radians) + y * cosf(radians)) * scale * 2;
+	}
+}
+
+/* The recipe seen end-on: each cross-section a rectangle, joined at the corners. */
+static void icon_shape(const icon_box *box, int page, int index)
+{
+	shape_stage stages[ICON_MAX_STAGES];
+	float previous[4][2], current[4][2];
+	int count = builder_shape_stages(page, index, stages, ICON_MAX_STAGES), i, k;
+
+	for (i = 0; i < count; i++)
+	{
+		stage_corners(&stages[i], (float)i, current);
+		for (k = 0; k < 4; k++)
+		{
+			icon_line(box, current[k][0], current[k][1], current[(k + 1) % 4][0], current[(k + 1) % 4][1]);
+			if (i)
+				icon_line(box, previous[k][0], previous[k][1], current[k][0], current[k][1]);
+		}
+		memcpy(previous, current, sizeof(previous));
+	}
+}
+
+/* The cube seen from inside: the wall far away, the cube's other side near. */
+static void icon_carve(const icon_box *box, int page, int index)
+{
+	carve_point pts[8];
+	float sx[8], sy[8];
+	int i;
+
+	builder_carve_points(page, index, pts);
+	for (i = 0; i < 8; i++)
+	{
+		float depth = pts[i].z + 0.5f, scale;
+
+		if (depth < -0.4f)
+			depth = -0.4f;
+		scale = 0.9f / (1.0f + 0.6f * depth);
+		sx[i] = 0.5f + pts[i].x * scale;
+		sy[i] = 0.5f - pts[i].y * scale;
+	}
+	for (i = 0; i < 4; i++)
+	{
+		icon_line(box, sx[i], sy[i], sx[(i + 1) % 4], sy[(i + 1) % 4]);
+		icon_line(box, sx[i + 4], sy[i + 4], sx[(i + 1) % 4 + 4], sy[(i + 1) % 4 + 4]);
+		icon_line(box, sx[i], sy[i], sx[i + 4], sy[i + 4]);
+	}
+}
+
+/* The cube front-on with its cut lines; depth cuts show as nested outlines. */
+#define CUT_ICON_LOW	0.10f
+#define CUT_ICON_HIGH	0.90f
+
+static float cut_at(int cuts, int i)
+{
+	return CUT_ICON_LOW + (CUT_ICON_HIGH - CUT_ICON_LOW) * (i + 1) / (cuts + 1);
+}
+
+static void icon_cut(const icon_box *box, int index)
+{
+	int across = index == 0 || index == 3 || index >= 6;
+	int up = index == 1 || index == 4 || index >= 6;
+	int depth = index == 2 || index == 5;
+	int cuts = index >= 3 ? 2 : 1, i;
+
+	icon_rect(box, CUT_ICON_LOW, CUT_ICON_LOW, CUT_ICON_HIGH, CUT_ICON_HIGH);
+	for (i = 0; i < cuts; i++)
+	{
+		float at = cut_at(cuts, i);
+
+		if (across)
+			icon_line(box, at, CUT_ICON_LOW, at, CUT_ICON_HIGH);
+		if (up)
+			icon_line(box, CUT_ICON_LOW, at, CUT_ICON_HIGH, at);
+		if (depth)
+			icon_rect(box, at, at, 1.0f - at, 1.0f - at);
+	}
+	if (index == 7)
+		icon_rect(box, cut_at(2, 0) + 0.04f, cut_at(2, 0) + 0.04f, cut_at(2, 1) - 0.04f, cut_at(2, 1) - 0.04f);
+}
+
+/* ---------------------------------------------------------------- wheel */
+
+#define WHEEL_RING_STEPS	48
+#define WHEEL_INNER		0.34f
+#define WHEEL_ICON_RADIUS	0.68f
+#define WHEEL_ICON_SIZE		0.15f
+
+static double wheel_angle(int entry, int entries)
+{
+	return (-90.0 + entry * 360.0 / entries) * M_PI / 180.0;
+}
+
+static void wheel_ring(int cx, int cy, float radius)
+{
+	int i;
+
+	for (i = 0; i < WHEEL_RING_STEPS; i++)
+	{
+		double a0 = i * 2 * M_PI / WHEEL_RING_STEPS, a1 = (i + 1) * 2 * M_PI / WHEEL_RING_STEPS;
+
+		gr_uline(i2f(cx) + fl2f(cos(a0) * radius), i2f(cy) + fl2f(sin(a0) * radius),
+			i2f(cx) + fl2f(cos(a1) * radius), i2f(cy) + fl2f(sin(a1) * radius));
+	}
+}
+
+static void wheel_dividers(int cx, int cy, float radius, int entries)
+{
+	int i;
+
+	for (i = 0; i < entries; i++)
+	{
+		double a = wheel_angle(i, entries) - M_PI / entries;
+
+		gr_uline(i2f(cx) + fl2f(cos(a) * radius * WHEEL_INNER), i2f(cy) + fl2f(sin(a) * radius * WHEEL_INNER),
+			i2f(cx) + fl2f(cos(a) * radius), i2f(cy) + fl2f(sin(a) * radius));
+	}
+}
+
+static int wheel_entry_current(int kind, int entry)
+{
+	if (kind >= BWHEEL_SHAPES)
+		return 0;
+	if (kind == BWHEEL_SELECT)
+		return Builder.sel_mode == entry;
+	return Builder.tool == entry;
+}
+
+static void wheel_entry_icon(int kind, int entry, const icon_box *box, int color)
+{
+	gr_setcolor(color);
+	if (kind == BWHEEL_CUT)
+		icon_cut(box, entry);
+	else if (kind >= BWHEEL_CARVE)
+		icon_carve(box, kind - BWHEEL_CARVE, entry);
+	else if (kind >= BWHEEL_SHAPES)
+		icon_shape(box, kind - BWHEEL_SHAPES, entry);
+	else if (kind == BWHEEL_SELECT)
+		Mode_icons[entry](box, color);
+	else
+		Tool_icons[entry](box, color);
+}
+
+static void wheel_label(int cx, int cy, int kind, int choice)
+{
+	const char *text;
+	int w, h, aw;
+
+	if (kind < BWHEEL_SHAPES)
+		return;
+	if (kind == BWHEEL_CUT)
+		text = !builder_tag_count() ? "Tag a cube first" : choice < 0 ? "Cut" : builder_cut_name(choice);
+	else if (kind >= BWHEEL_CARVE)
+		text = choice < 0 ? builder_carve_page_name(kind - BWHEEL_CARVE) : builder_carve_name(kind - BWHEEL_CARVE, choice);
+	else
+		text = choice < 0 ? builder_shape_page_name(kind - BWHEEL_SHAPES) : builder_shape_name(kind - BWHEEL_SHAPES, choice);
+	gr_get_string_size(text, &w, &h, &aw);
+	gr_set_fontcolor(COLOR_LABEL, -1);
+	gr_printf(cx - w / 2, cy - h / 2, "%s", text);
+}
+
+void builder_draw_wheel(int kind, int choice, int dx, int dy)
+{
+	int entries = builder_wheel_entries(kind);
+	int width = grd_curcanv->cv_bitmap.bm_w, height = grd_curcanv->cv_bitmap.bm_h;
+	int cx = width / 2, cy = height / 2, entry;
+	float radius = height / 4.0f;
+
+	gr_set_curfont(GAME_FONT);
+#ifdef OGL
+	glLineWidth(ICON_LINE_WIDTH);
+#endif
+	gr_setcolor(COLOR_RULE);
+	wheel_ring(cx, cy, radius);
+	wheel_ring(cx, cy, radius * WHEEL_INNER);
+	wheel_dividers(cx, cy, radius, entries);
+	for (entry = 0; entry < entries; entry++)
+	{
+		icon_box box;
+		double a = wheel_angle(entry, entries);
+
+		box.size = radius * WHEEL_ICON_SIZE * 2;
+		box.x = cx + cos(a) * radius * WHEEL_ICON_RADIUS - box.size / 2;
+		box.y = cy + sin(a) * radius * WHEEL_ICON_RADIUS - box.size / 2;
+		if (entry == choice)
+		{
+			translucent_rect(box.x - 4, box.y - 4, box.x + box.size + 4, box.y + box.size + 4, COLOR_CELL, CELL_FADE);
+			gr_setcolor(COLOR_ACTIVE);
+			icon_rect(&box, -0.08f, -0.08f, 1.08f, 1.08f);
+		}
+		wheel_entry_icon(kind, entry, &box, entry == choice || wheel_entry_current(kind, entry) ? COLOR_ACTIVE : COLOR_IDLE);
+	}
+	gr_setcolor(COLOR_ADD);
+	gr_disk(i2f(cx) + fl2f((float)dx / BUILDER_WHEEL_REACH * radius), i2f(cy) + fl2f((float)dy / BUILDER_WHEEL_REACH * radius), i2f(3));
+#ifdef OGL
+	glLineWidth(1.0f);
+#endif
+	wheel_label(cx, cy, kind, choice);
 }
 
 void builder_draw_status_bar(void)
@@ -363,6 +662,7 @@ void builder_draw_status_bar(void)
 	bar.icon = bar.height * ICON_FRACTION;
 	bar.gap = bar.height / 6;
 	bar.x = bar.gap * 2;
+	Cell_count = 0;
 
 	translucent_rect(0, bar.top, width - 1, height - 1, COLOR_BAR, BAR_FADE);
 	gr_setcolor(COLOR_RULE);

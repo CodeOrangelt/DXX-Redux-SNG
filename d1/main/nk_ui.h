@@ -124,5 +124,6 @@ int nk_ui_listbox_frame(const void *id, const char *title, char **items, int nit
 struct nk_context;
 float nk_ui_row_height(void);
 void nk_ui_run_docked_panel(const char *title, float width_frac, void (*build)(struct nk_context *ctx, void *userdata), int *running, void *userdata);
+void nk_ui_run_docked_panel_left(const char *title, float width_frac, void (*build)(struct nk_context *ctx, void *userdata), int *running, void *userdata);
 
 #endif /* _NK_UI_H */

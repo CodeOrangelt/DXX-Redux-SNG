@@ -1022,6 +1022,24 @@ int net_udp_punch_take_host_addr(struct _sockaddr *out)
 	return 1;
 }
 
+/* A strict (symmetric) host NAT sends its probes from a different public
+ * port than the one the tracker brokered. If one gets through to us, that
+ * source port is the one that can actually reach us back -- join on it. */
+static void net_udp_punch_adopt_probe_source(struct _sockaddr *sender_addr)
+{
+	struct sockaddr_in *probe = (struct sockaddr_in *)sender_addr;
+	struct sockaddr_in *host = (struct sockaddr_in *)&Punch_host_addr;
+
+	if (multi_i_am_master() || !Punch_join_gameid || !Punch_host_addr_valid)
+		return;
+	if (probe->sin_addr.s_addr != host->sin_addr.s_addr || probe->sin_port == host->sin_port)
+		return;
+
+	con_printf(CON_NORMAL, "Punch: host probe arrived from %s:%d -- retargeting join there\n",
+		inet_ntoa(probe->sin_addr), SWAPSHORT(probe->sin_port));
+	memcpy(&Punch_host_addr, sender_addr, sizeof(struct _sockaddr));
+}
+
 void net_udp_process_holepunch(ubyte *data, int data_len, struct _sockaddr sender_addr)
 {
 	struct _sockaddr peer;
@@ -1034,9 +1052,12 @@ void net_udp_process_holepunch(ubyte *data, int data_len, struct _sockaddr sende
 	role = data[1];
 
 	// A probe has already done its job by arriving: our NAT now has an
-	// inbound binding for that peer. Nothing to process.
+	// inbound binding for that peer.
 	if (role == PUNCH_IN_PROBE)
+	{
+		net_udp_punch_adopt_probe_source(&sender_addr);
 		return;
+	}
 
 	// Brokerage is only trustworthy from a tracker we configured. Without
 	// this check any peer could redirect a join to an address of its choosing.
@@ -1514,7 +1535,7 @@ int valid_size(ubyte *data, int data_len, struct _sockaddr sender_addr) {
 		case UPID_VERSION_DENY:  		if(data_len != UPID_VERSION_DENY_SIZE      )  { rv = 0; }  break;
 		case UPID_GAME_INFO_REQ: 		if(data_len != UPID_GAME_INFO_REQ_SIZE     ) { rv = 0; }  break;
 		//case UPID_GAME_INFO_LITE_REQ: 	if(data_len != UPID_GAME_INFO_LITE_REQ_SIZE)  { rv = 0; }  break;
-		case UPID_GAME_INFO_LITE:    	if(data_len != UPID_GAME_INFO_LITE_SIZE    )  { rv = 0; }  break;
+		case UPID_GAME_INFO_LITE:    	if(data_len != UPID_GAME_INFO_LITE_SIZE && data_len != UPID_GAME_INFO_LITE_BASE_SIZE)  { rv = 0; }  break; // base: pre-rules hosts
 		case UPID_DUMP:   			 	if(data_len != UPID_DUMP_SIZE              )  { rv = 0; }  break;
 		case UPID_QUIT_JOINING: 
 		case UPID_REQUEST:   		 	if(data_len != UPID_SEQUENCE_SIZE          )  { rv = 0; }  break;
@@ -3890,6 +3911,11 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.NewSpawnAlgorithm;		len++;
 		PUT_INTEL_INT(buf + len, net_udp_lite_sng_toggles());				len += 4;
 
+#ifdef USE_TRACKER
+		if (tracker_index_for_addr(sender_addr) >= 0)
+			len = UPID_GAME_INFO_LITE_BASE_SIZE; // trackers drop any lite reply not exactly the legacy size
+#endif
+
 		dxx_sendto (UDP_Socket[0], buf, len, 0, (struct sockaddr *)&sender_addr, sizeof(struct _sockaddr));
 	}
 	else
@@ -4559,6 +4585,8 @@ void net_udp_process_packet(ubyte *data, struct _sockaddr sender_addr, int lengt
 
 		case UPID_GAME_INFO_REQ:
 			result = net_udp_check_game_info_request(data, 0);
+			con_printf(CON_NORMAL, "Join: info request from %s:%d -> %s\n", inet_ntoa(((struct sockaddr_in *)&sender_addr)->sin_addr),
+				SWAPSHORT(((struct sockaddr_in *)&sender_addr)->sin_port), result == 1 ? "answering" : result == -1 ? "version deny" : "ignored");
 			if (result == -1)
 				net_udp_send_version_deny(sender_addr);
 			else if (result == 1)
@@ -6978,12 +7006,19 @@ net_udp_level_sync(void)
 		result = net_udp_wait_for_sync();
 	else if (multi_i_am_master())
 	{
+		con_printf(CON_NORMAL, "Sync: host waiting for %d player(s) to load\n", N_players - 1);
 		result = net_udp_wait_for_requests();
+		con_printf(CON_NORMAL, "Sync: host requests done (%d), sending sync\n", result);
 		if (!result)
 			result = net_udp_send_sync();
+		con_printf(CON_NORMAL, "Sync: host sync sent (%d)\n", result);
 	}
 	else
+	{
+		con_printf(CON_NORMAL, "Sync: client waiting for host sync\n");
 		result = net_udp_wait_for_sync();
+		con_printf(CON_NORMAL, "Sync: client wait done (%d)\n", result);
+	}
 
 	multi_powcap_count_powerups_in_mine();
 
