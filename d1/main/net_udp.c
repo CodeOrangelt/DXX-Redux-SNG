@@ -108,8 +108,8 @@ int gettimeofday(struct timeval* tv, void* tz)
 #endif
 #endif
 
-#ifdef USE_GNS
-#include "gns_bridge.h"
+#ifdef USE_SLIKENET
+#include "slk_bridge.h"
 #endif
 
 // Prototypes
@@ -173,17 +173,21 @@ void reattemptDirect(int pnum);
 void resetProxy(int pnum); 
 void update_address_for_player(int pnum, struct _sockaddr new_addr); 
 void net_udp_send_p2p_reattempt_direct (int to_player, int connect_to_player);
-#ifdef USE_GNS
-void net_udp_gns_frame(void);
+#ifdef USE_SLIKENET
 static void net_udp_report_transports(fix64 time);
 #endif
 void net_udp_process_p2p_reattempt_direct (ubyte *data, struct _sockaddr sender_addr, int data_len);
 void drop_rx_packet(ubyte  *data, char* reason);
 
-#ifdef USE_GNS
-void net_udp_gns_send_signal(int to_player, const unsigned char *data, int len);
-void net_udp_gns_route_found(int player_id, const void *addr, int addr_len);
-void net_udp_gns_send_prejoin_signal_to_client(const unsigned char *data, int len);
+#ifdef USE_SLIKENET
+static void net_udp_slk_start(int game_port);
+static int net_udp_slk_receive(ubyte *buf, int len, struct _sockaddr *from);
+static void net_udp_slk_frame(fix64 time);
+static void net_udp_slk_join_frame(void);
+static void net_udp_slk_process_signal(ubyte *data, int length);
+#ifdef USE_TRACKER
+static void net_udp_slk_process_tracker_signal(ubyte *data, int length);
+#endif
 #endif
 
 void forward_to_observers(ubyte *data, int data_len, int needack);
@@ -210,20 +214,14 @@ int   cur_obs_msg = 0;
 int   next_obs_msg_to_send = 0;
 
 // Gameplay traffic is peer-to-peer, full stop. There is deliberately no
-// server-side tunnel in this build and no flag that can turn one on.
+// server-side tunnel in this build and no flag that can turn one on: a relay
+// costs an extra round trip to a third host on every packet.
 //
-// A relayed session costs an extra round trip out to a third host and back on
-// every single packet -- that is where a relayed game's ~300ms and its jitter
-// came from. The tunnel that used to live here (synthetic sentinel addresses
-// wrapping packets into a relay protocol inside dxx_sendto()/dxx_recvfrom())
-// has been removed entirely, along with tools/relay_server.py.
-//
-// What replaced it: the tracker carries ICE *signaling* only -- a few
-// kilobytes of opaque candidate blobs per join, see udp_tracker_send_signal()
-// below -- so two peers who cannot yet reach each other can still negotiate.
-// Once ICE completes, gameplay rides the GNS connection (gns_bridge_send()),
-// which is a genuine direct path. If ICE cannot find one, the join fails
-// cleanly and says so; nothing silently degrades to a tunnel.
+// The tracker carries only a small SLikeNet signal (GUID + port) per join,
+// so two peers who cannot reach each other yet can still find each other;
+// the facilitator then brokers a NAT punch. Once SLikeNet connects, gameplay
+// rides that connection (see dxx_sendto()). If no route is found the join
+// fails and says so; nothing silently degrades to a tunnel.
 //
 // The one thing that must never come back is withholding packets on a live
 // connection as a way to "enforce" peer-to-peer. Held-back
@@ -232,30 +230,6 @@ int   next_obs_msg_to_send = 0;
 // to relay does not produce a peer-to-peer game; it produces a disconnected
 // one. Enforcement belongs at join time, not mid-session.
 
-#ifdef USE_GNS
-// Which player a destination address belongs to, or -1. Used by dxx_sendto()
-// to notice that a packet is bound for someone we have a live P2P connection
-// to, whatever route the address itself describes.
-static int net_udp_player_for_addr(const struct sockaddr *addr)
-{
-	int i;
-
-	if (!addr)
-		return -1;
-
-	for (i = 0; i < MAX_PLAYERS; i++)
-	{
-		if (i == Player_num)
-			continue;
-		if (!gns_bridge_is_connected(i))
-			continue; // cheap test first -- skips the memcmp for most players
-		if (!memcmp(&Netgame.players[i].protocol.udp.addr, addr, sizeof(struct _sockaddr)))
-			return i;
-	}
-
-	return -1;
-}
-#endif
 
 // Variables
 int UDP_num_sendto = 0, UDP_len_sendto = 0, UDP_num_recvfrom = 0, UDP_len_recvfrom = 0;
@@ -301,14 +275,6 @@ static int tracker_index_for_addr(struct _sockaddr addr)
 #endif
 extern obj_position Player_init[MAX_PLAYERS];
 
-#ifdef USE_GNS
-/* Host side: public address of the joining client whose pre-join ICE is in
- * flight. Set when UPID_TRACKER_SIGNAL arrives; cleared once the player is
- * assigned a permanent slot. Routes GAME_INFO and JOIN packets through the
- * pre-join GNS connection before a player slot exists. */
-static struct _sockaddr Prejoin_client_addr;
-static int Prejoin_client_addr_valid = 0;
-#endif
 
 uint netgame_token = 0; 
 uint my_player_token = 0; 
@@ -398,9 +364,9 @@ char* msg_name(int type)
 			return "UPID_OBSDATA";
 		case UPID_OBSQUIT:
 			return "UPID_OBSQUIT";
-#ifdef USE_GNS
-		case UPID_GNS_SIGNAL:
-			return "UPID_GNS_SIGNAL";
+#ifdef USE_SLIKENET
+		case UPID_SLK_SIGNAL:
+			return "UPID_SLK_SIGNAL";
 #endif
 
 		default:
@@ -484,37 +450,14 @@ ssize_t dxx_sendto(int sockfd, const void *msg, int len, unsigned int flags, con
 	// Upstream loss simulator
 	//if(rand() % 100 < 10) { return 0; }
 
-#ifdef USE_GNS
-	// Peer-to-peer takes priority over every other route. Once ICE has a
-	// connection to this player, the bytes go over it -- not to a harvested
-	// address from our own socket, which the peer's NAT would drop (the hole
-	// ICE punched belongs to GNS's socket and its local port; see
-	// gns_bridge.h).
-	if (sockfd == UDP_Socket[0])
+
+#ifdef USE_SLIKENET
+	if (sockfd == UDP_Socket[0] && slk_bridge_send((const struct sockaddr_in *)to, msg, len))
 	{
-		int gns_pnum = net_udp_player_for_addr(to);
-
-		if (gns_pnum >= 0 && gns_bridge_send(gns_pnum, msg, len))
-		{
-			net_log_log(1, msg, len, to, tolen);
-			UDP_num_sendto++;
-			UDP_len_sendto += len;
-			return len;
-		}
-
-		// Pre-join P2P connection (host side): packets destined for the
-		// joining client before they have a player slot.
-		if (Prejoin_client_addr_valid && gns_bridge_prejoin_ready() &&
-		    !memcmp(to, &Prejoin_client_addr, sizeof(struct _sockaddr)))
-		{
-			if (gns_bridge_send_prejoin(msg, len))
-			{
-				net_log_log(1, msg, len, to, tolen);
-				UDP_num_sendto++;
-				UDP_len_sendto += len;
-				return len;
-			}
-		}
+		net_log_log(1, msg, len, to, tolen);
+		UDP_num_sendto++;
+		UDP_len_sendto += len;
+		return len;
 	}
 #endif
 
@@ -531,42 +474,6 @@ ssize_t dxx_sendto(int sockfd, const void *msg, int len, unsigned int flags, con
 
 ssize_t dxx_recvfrom(int sockfd, void *buf, int len, unsigned int flags, struct sockaddr *from, socklen_t *fromlen)
 {
-#ifdef USE_GNS
-	// Drain the P2P connections first. The packet is reported as coming from
-	// whatever address we already have on file for that player, so every
-	// sender_addr comparison downstream (net_udp_process_ping() and friends)
-	// keeps matching -- the peer's identity is unchanged, only the wire it
-	// travelled over is.
-	if (sockfd == UDP_Socket[0])
-	{
-		int from_player = -1;
-		int glen = gns_bridge_recv(&from_player, buf, len);
-
-		if (glen > 0 && from_player >= 0 && from_player < MAX_PLAYERS)
-		{
-			memcpy(from, &Netgame.players[from_player].protocol.udp.addr, sizeof(struct _sockaddr));
-			*fromlen = sizeof(struct _sockaddr);
-			net_log_log(0, buf, glen, from, *fromlen);
-			UDP_num_recvfrom++;
-			UDP_len_recvfrom += glen;
-			return glen;
-		}
-
-		// Pre-join P2P connection (host side): receive from the joining
-		// client before they have a player slot.
-		glen = gns_bridge_recv_prejoin(buf, len);
-		if (glen > 0 && Prejoin_client_addr_valid)
-		{
-			memcpy(from, &Prejoin_client_addr, sizeof(struct _sockaddr));
-			*fromlen = sizeof(struct _sockaddr);
-			net_log_log(0, buf, glen, from, *fromlen);
-			UDP_num_recvfrom++;
-			UDP_len_recvfrom += glen;
-			return glen;
-		}
-	}
-#endif
-
 	ssize_t rv = recvfrom(sockfd, buf, len, flags, from, fromlen);
 
 	net_log_log(0, buf, rv, from, *fromlen);
@@ -763,6 +670,11 @@ int udp_open_socket(int socknum, int port)
 	setsockopt( UDP_Socket[socknum], SOL_SOCKET, SO_BROADCAST, &bcast, sizeof(bcast) );
 #endif
 
+#ifdef USE_SLIKENET
+	if (socknum == 0 && UDP_Socket[0] != -1)
+		net_udp_slk_start(port);
+#endif
+
 	return 0;
 	}
 }
@@ -781,6 +693,7 @@ int udp_general_packet_ready(int socknum)
 		return 0;
 }
 
+
 // Gets some text. Returns 0 if nothing on there.
 int udp_receive_packet(int socknum, ubyte *text, int len, struct _sockaddr *sender_addr)
 {
@@ -789,6 +702,17 @@ int udp_receive_packet(int socknum, ubyte *text, int len, struct _sockaddr *send
 
 	if (UDP_Socket[socknum] == -1)
 		return -1;
+
+#ifdef USE_SLIKENET
+	if (socknum == 0)
+	{
+#ifdef USE_SLIKENET
+		msglen = net_udp_slk_receive(text, len, sender_addr);
+		if (msglen > 0)
+			return msglen;
+#endif
+	}
+#endif
 
 	while (udp_general_packet_ready(socknum))
 	{
@@ -875,13 +799,12 @@ int udp_tracker_unregister()
 {
 	// Variables
 	int iLen = 5;
-	ubyte* pBuf;
+	ubyte pBuf[5];
 	int i;
 
 	// Don't strand the last frame's events behind the game going away.
 	udp_tracker_flush_events();
 
-	pBuf = malloc(iLen);
 
 	// Put the opcode
 	pBuf[0] = TRACKER_PKT_UNREGISTER;
@@ -893,7 +816,6 @@ int udp_tracker_unregister()
 	for (i = 0; i < TrackerCount; i++)
 		dxx_sendto( UDP_Socket[2], pBuf, iLen, 0, (struct sockaddr *)&TrackerSockets[i], sizeof( TrackerSockets[i] ) );
 
-	free(pBuf);
 
 	return TrackerCount;
 }
@@ -903,10 +825,9 @@ int udp_tracker_register()
 {
 	// Variables
 	int iLen = 15; // Thanks Adam Gensler
-	ubyte* pBuf;
+	ubyte pBuf[15];
 	int i;
 
-	pBuf = malloc(iLen);
 
 	// Deliberately NOT resetting iTrackerVerified[] here: this is also called
 	// for the periodic retry resend to unresponsive trackers, and clobbering
@@ -940,7 +861,6 @@ int udp_tracker_register()
 		dxx_sendto( UDP_Socket[2], pBuf, iLen, 0, (struct sockaddr *)&TrackerSockets[i], sizeof( TrackerSockets[i] ) );
 	}
 
-	free(pBuf);
 
 	return TrackerCount;
 }
@@ -950,10 +870,9 @@ int udp_tracker_reqgames()
 {
 	// Variables
 	int iLen = 3;
-	ubyte* pBuf;
+	ubyte pBuf[3];
 	int i;
 
-	pBuf = malloc(iLen);
 
 	// Put the opcode
 	pBuf[0] = TRACKER_PKT_GAMELIST;
@@ -972,7 +891,6 @@ int udp_tracker_reqgames()
 	for (i = 0; i < TrackerCount; i++)
 		dxx_sendto( UDP_Socket[2], pBuf, iLen, 0, (struct sockaddr *)&TrackerSockets[i], sizeof( TrackerSockets[i] ) );
 
-	free(pBuf);
 
 	return TrackerCount;
 }
@@ -1044,12 +962,12 @@ int udp_tracker_process_game( ubyte *data, int data_len )
  *
  * It does NOT work when both peers are behind symmetric NAT, because each
  * predicts a port the other's NAT will not honor. Nothing punches that; it is
- * why TURN exists. Those pairs fall through to ICE (gns_bridge), which has
- * more candidate types to try, and if that fails too the join fails honestly
- * instead of quietly costing everyone 300ms.
+ * why TURN exists. Those pairs fall through to SLikeNet (slk_bridge), whose
+ * facilitator predicts symmetric-NAT ports, and if that fails too the join
+ * fails honestly instead of quietly costing everyone 300ms.
  */
 #define TRACKER_PKT_HOLEPUNCH		6	/* Game -> Tracker, from UDP_Socket[0] */
-#define TRACKER_PKT_SIGNAL		7	/* Game <-> Tracker: relay an ICE signaling blob to/from the remote peer */
+#define TRACKER_PKT_SIGNAL		7	/* Game <-> Tracker: relay a pre-join signal to/from the remote peer */
 
 #define PUNCH_ROLE_HOST_KEEPALIVE	0
 #define PUNCH_ROLE_CLIENT_REQUEST	1
@@ -1072,11 +990,6 @@ void net_udp_punch_set_target(fix gameid)
 	Punch_host_addr_valid = 0;
 	memset(&Punch_host_addr, 0, sizeof(Punch_host_addr));
 
-#ifdef USE_GNS
-	/* Reset slot 0 so a fresh pre-join ICE dial starts for this game. */
-	gns_bridge_reset_player(0);
-	Prejoin_client_addr_valid = 0;
-#endif
 }
 
 static void net_udp_punch_to_tracker(ubyte role, fix gameid)
@@ -1415,6 +1328,36 @@ static struct UPNPUrls upnp_urls;
 static struct IGDdatas upnp_data;
 static int upnp_mapped = 0; // 1 if we successfully added a port mapping we're responsible for removing
 static int upnp_attempted = 0; // 1 once we've tried discovery this session, success or not -- don't re-probe every time we host
+#ifdef USE_SLIKENET
+static int upnp_slk_port = 0;
+#endif
+
+static int upnp_add_mapping(int port, const char *lanaddr, const char *wanaddr)
+{
+	char portstr[6];
+	int r;
+
+	snprintf(portstr, sizeof(portstr), "%d", port);
+	r = UPNP_AddPortMapping(upnp_urls.controlURL, upnp_data.first.servicetype,
+		portstr, portstr, lanaddr, "DXX-Redux-SNG", "UDP", NULL, "0");
+
+	if (r != UPNPCOMMAND_SUCCESS)
+	{
+		con_printf(CON_NORMAL, "UPnP: AddPortMapping %s failed: %s -- manual port-forward still needed\n", portstr, strupnperror(r));
+		return 0;
+	}
+
+	con_printf(CON_NORMAL, "UPnP: successfully mapped UDP port %s -> %s on %s\n", portstr, portstr, wanaddr);
+	return 1;
+}
+
+static void upnp_delete_mapping(int port)
+{
+	char portstr[6];
+
+	snprintf(portstr, sizeof(portstr), "%d", port);
+	UPNP_DeletePortMapping(upnp_urls.controlURL, upnp_data.first.servicetype, portstr, "UDP", NULL);
+}
 
 // Best-effort: ask the LAN router to forward 'port' (UDP) to us, so hosts
 // behind NAT don't have to manually port-forward. Silently does nothing if
@@ -1426,7 +1369,6 @@ void net_udp_upnp_map_port(int port)
 	struct UPNPDev *devlist = NULL;
 	char lanaddr[64];
 	char wanaddr[64];
-	char portstr[6];
 
 	if (upnp_mapped)
 		return; // already have a mapping from this session
@@ -1491,20 +1433,18 @@ void net_udp_upnp_map_port(int port)
 		return;
 	}
 
-	snprintf(portstr, sizeof(portstr), "%d", port);
-
-	int r = UPNP_AddPortMapping(upnp_urls.controlURL, upnp_data.first.servicetype,
-		portstr, portstr, lanaddr, "DXX-Redux-SNG", "UDP", NULL, "0");
-
-	if (r != UPNPCOMMAND_SUCCESS)
+	if (!upnp_add_mapping(port, lanaddr, wanaddr))
 	{
-		con_printf(CON_NORMAL, "UPnP: AddPortMapping failed: %s -- port not auto-forwarded, manual port-forward still needed\n", strupnperror(r));
 		FreeUPNPUrls(&upnp_urls);
 		return;
 	}
-
-	con_printf(CON_NORMAL, "UPnP: successfully mapped UDP port %s -> %s on %s\n", portstr, portstr, wanaddr);
 	upnp_mapped = 1;
+
+#ifdef USE_SLIKENET
+	upnp_slk_port = slk_bridge_local_port();
+	if (upnp_slk_port && !upnp_add_mapping(upnp_slk_port, lanaddr, wanaddr))
+		upnp_slk_port = 0;
+#endif
 }
 
 // Remove the mapping we added, if any. Leaves the router untouched otherwise.
@@ -1513,12 +1453,15 @@ void net_udp_upnp_unmap_port(int port)
 	if (!upnp_mapped)
 		return;
 
-	char portstr[6];
-	snprintf(portstr, sizeof(portstr), "%d", port);
-
-	UPNP_DeletePortMapping(upnp_urls.controlURL, upnp_data.first.servicetype, portstr, "UDP", NULL);
+	upnp_delete_mapping(port);
+#ifdef USE_SLIKENET
+	if (upnp_slk_port)
+		upnp_delete_mapping(upnp_slk_port);
+	upnp_slk_port = 0;
+#endif
 	FreeUPNPUrls(&upnp_urls);
 	upnp_mapped = 0;
+	upnp_attempted = 0; // the router answered once; probe again next time we host
 }
 
 #endif /* USE_UPNP */
@@ -1675,11 +1618,11 @@ int valid_size(ubyte *data, int data_len, struct _sockaddr sender_addr) {
 #ifdef USE_TRACKER
 		case UPID_TRACKER_HOLEPUNCH:	if(data_len != UPID_TRACKER_HOLEPUNCH_SIZE )  { rv = 0; }  break;
 #endif
-#if defined(USE_TRACKER) && defined(USE_GNS)
+#if defined(USE_TRACKER) && defined(USE_SLIKENET)
 		case UPID_TRACKER_SIGNAL:	if(data_len < 2)  { rv = 0; }  break;
 #endif
-#ifdef USE_GNS
-		case UPID_GNS_SIGNAL: 			if(data_len < UPID_GNS_SIGNAL_HEADER_SIZE  )  { rv = 0; }  break;
+#ifdef USE_SLIKENET
+		case UPID_SLK_SIGNAL: 			if(data_len != UPID_SLK_SIGNAL_HEADER_SIZE + SLK_SIGNAL_SIZE)  { rv = 0; }  break;
 #endif
 
 		// Special cases
@@ -1717,8 +1660,8 @@ int valid_token(ubyte *data, int data_len, struct _sockaddr sender_addr) {
 		case UPID_P2P_PONG: 
 		case UPID_PROXY:
 		case UPID_REATTEMPT_DIRECT:
-#ifdef USE_GNS
-		case UPID_GNS_SIGNAL:
+#ifdef USE_SLIKENET
+		case UPID_SLK_SIGNAL:
 #endif
 		// case UPID_SYNC: // Special case is handled in sync processing
 			rv = GET_INTEL_INT(data + 1) == netgame_token;
@@ -1831,16 +1774,8 @@ int net_udp_game_connect(direct_join *dj)
 	// assigned, held open by their keepalive.
 	net_udp_punch_client_frame();
 
-#ifdef USE_GNS
-	// Start ICE toward the host at the same time as the UDP punch. If the
-	// punch succeeds first, the join completes the normal way and the ICE
-	// connection comes up as a bonus for gameplay. If we're behind symmetric
-	// NAT where the punch can't work, ICE-via-tracker is the only path and
-	// it must start as early as possible (ICE takes several seconds to
-	// gather candidates and negotiate). Without this call a symmetric-NAT
-	// host is unreachable until the 20s timeout fires.
-	gns_bridge_connect_to_player(0); // no-op if already connecting/connected
-	gns_bridge_poll();
+#ifdef USE_SLIKENET
+	net_udp_slk_join_frame();
 #endif
 
 	// Only retarget once the advertised address has plainly failed. On a LAN
@@ -1853,6 +1788,9 @@ int net_udp_game_connect(direct_join *dj)
 	if (timer_query() >= dj->start_time + F1_0*3 &&
 	    net_udp_punch_take_host_addr(&dj->host_addr))
 	{
+#ifdef USE_SLIKENET
+		slk_bridge_rebind((struct sockaddr_in *)&Netgame.players[0].protocol.udp.addr, (struct sockaddr_in *)&dj->host_addr);
+#endif
 		memcpy(&Netgame.players[0].protocol.udp.addr, &dj->host_addr, sizeof(struct _sockaddr));
 		dj->last_time = 0; // retry immediately against the new address
 	}
@@ -2162,9 +2100,8 @@ int net_udp_list_join_poll( newmenu *menu, d_event *event, direct_join *dj )
 				// The address here is whatever the tracker/LAN broadcast
 				// advertised -- the host's public IP:port. It works directly
 				// when the host has a forwarded port or UPnP; when they don't,
-				// reaching them is ICE's job (net_udp_gns_frame() dials the
-				// host as soon as we have a player slot, and the tracker
-				// carries the signaling that bootstraps it).
+				// the tracker punch and SLikeNet (net_udp_slk_join_frame())
+				// race to find a route.
 				{
 					struct sockaddr_in *dbg = (struct sockaddr_in *)&dj->host_addr;
 					con_printf(CON_NORMAL, "Join: connecting to %s:%d\n",
@@ -2386,7 +2323,7 @@ void net_udp_list_join_game()
 // setup, net_udp_list_join_poll()'s F4 refresh and EVENT_WINDOW_CLOSE, and
 // its EVENT_NEWMENU_SELECTED join handoff -- each copied out rather than
 // shared with the legacy screen, so touching this can never affect it.
-// net_udp_game_connect() itself, and everything under it (NAT punch, ICE,
+// net_udp_game_connect() itself, and everything under it (NAT punch, SLikeNet,
 // tracker brokering, retry timing), is untouched either way.
 // ==============================
 
@@ -2588,11 +2525,6 @@ void net_udp_init()
 	udp_tracker_init();
 #endif
 
-#ifdef USE_GNS
-	gns_bridge_set_callbacks(net_udp_gns_send_signal, net_udp_gns_route_found);
-	gns_bridge_set_prejoin_signal_callback(net_udp_gns_send_prejoin_signal_to_client);
-	gns_bridge_init();
-#endif
 
 }
 
@@ -2608,9 +2540,8 @@ void net_udp_close()
 	net_udp_upnp_unmap_port(atoi(UDP_MyPort));
 #endif
 
-#ifdef USE_GNS
-	Prejoin_client_addr_valid = 0;
-	gns_bridge_shutdown();
+#ifdef USE_SLIKENET
+	slk_bridge_shutdown();
 #endif
 
 	if( UDP_Socket[0] != -1 )
@@ -2791,15 +2722,6 @@ net_udp_new_player(UDP_sequence_packet *their)
 	//memcpy(&Netgame.players[pnum].protocol.udp.addr, &their->player.protocol.udp.addr, sizeof(struct _sockaddr));
 	update_address_for_player(pnum, their->player.protocol.udp.addr);
 
-#ifdef USE_GNS
-	/* Migrate any live pre-join ICE connection to this permanent player slot. */
-	if (Prejoin_client_addr_valid) {
-		gns_bridge_assign_prejoin(pnum);
-		memcpy(&Netgame.players[pnum].protocol.udp.addr,
-		       &Prejoin_client_addr, sizeof(struct _sockaddr));
-		Prejoin_client_addr_valid = 0;
-	}
-#endif
 
 	if(multi_i_am_master()) {
 		connection_statuses[pnum].type = CONNT_DIRECT;
@@ -3575,18 +3497,6 @@ void net_udp_add_player(UDP_sequence_packet *p)
 	Netgame.players[N_players].LastPacketTime = timer_query();
 	player_tokens[N_players] = p->token;
 
-#ifdef USE_GNS
-	/* If a pre-join ICE connection is live, migrate it to this permanent
-	 * player slot so dxx_sendto/dxx_recvfrom use it automatically. Also
-	 * overwrite the player's stored address with the tracker-brokered public
-	 * address so net_udp_player_for_addr() can match it. */
-	if (Prejoin_client_addr_valid) {
-		gns_bridge_assign_prejoin(N_players);
-		memcpy(&Netgame.players[N_players].protocol.udp.addr,
-		       &Prejoin_client_addr, sizeof(struct _sockaddr));
-		Prejoin_client_addr_valid = 0;
-	}
-#endif
 
 	N_players++;
 	Netgame.numplayers = N_players;
@@ -3664,10 +3574,10 @@ void net_udp_dump_player(struct _sockaddr dump_addr, int their_token, int why)
 			if (!memcmp((struct _sockaddr *)&dump_addr, (struct _sockaddr *)&Netgame.players[i].protocol.udp.addr, sizeof(struct _sockaddr)))
 			{
 				multi_disconnect_player(i);
-#ifdef USE_GNS
-				gns_bridge_reset_player(i);
-#endif
 			}
+#ifdef USE_SLIKENET
+	slk_bridge_forget((struct sockaddr_in *)&dump_addr);
+#endif
 }
 
 void net_udp_update_netgame(void)
@@ -4792,41 +4702,11 @@ void net_udp_process_packet(ubyte *data, struct _sockaddr sender_addr, int lengt
 			break;
 #endif
 
-#if defined(USE_TRACKER) && defined(USE_GNS)
+#if defined(USE_TRACKER) && defined(USE_SLIKENET)
 		case UPID_TRACKER_SIGNAL:
-		{
-			// Must originate from a tracker we configured.
-			if (tracker_index_for_addr(sender_addr) < 0)
-				break;
-
-			if (multi_i_am_master())
-			{
-				// Host receiving a pre-join ICE signal from a client via
-				// the tracker.
-				// Format: [UPID][client_ip:4][client_port:2][signal_blob...]
-				if (length < 8)
-					break;
-				{
-					struct sockaddr_in *sin = (struct sockaddr_in *)&Prejoin_client_addr;
-					memset(sin, 0, sizeof(*sin));
-					sin->sin_family = AF_INET;
-					memcpy(&sin->sin_addr, data + 1, 4);
-					memcpy(&sin->sin_port, data + 5, 2);
-					Prejoin_client_addr_valid = 1;
-				}
-				gns_bridge_accept_prejoin(data + 7, length - 7);
-			}
-			else
-			{
-				// Client receiving a pre-join ICE reply from the host via
-				// the tracker.
-				// Format: [UPID][signal_blob...]
-				if (length < 2)
-					break;
-				gns_bridge_on_signal_received(0, data + 1, length - 1);
-			}
+			if (tracker_index_for_addr(sender_addr) >= 0)
+				net_udp_slk_process_tracker_signal(data, length);
 			break;
-		}
 #endif
 
 		case UPID_P2P_PING:
@@ -4845,15 +4725,11 @@ void net_udp_process_packet(ubyte *data, struct _sockaddr sender_addr, int lengt
 			net_udp_process_p2p_reattempt_direct( data, sender_addr, length);
 			break;
 
-#ifdef USE_GNS
-		case UPID_GNS_SIGNAL:
-		{
-			int to_player = data[5];
-			int from_player = data[6];
-			if (to_player == Player_num && from_player >= 0 && from_player < MAX_PLAYERS)
-				gns_bridge_on_signal_received(from_player, data + UPID_GNS_SIGNAL_HEADER_SIZE, length - UPID_GNS_SIGNAL_HEADER_SIZE);
+
+#ifdef USE_SLIKENET
+		case UPID_SLK_SIGNAL:
+			net_udp_slk_process_signal(data, length);
 			break;
-		}
 #endif
 
 		default:
@@ -5543,7 +5419,7 @@ void net_udp_more_game_options ()
 	// ==============================
 	// NETWORK SETTINGS
 	// ==============================
-	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Packets per second (2 - 40)"; opt++;
+	m[opt].type = NM_TYPE_TEXT; m[opt].text = "Packets per second (10 - 60)"; opt++;
 	opt_packets=opt;
 	m[opt].type = NM_TYPE_INPUT; m[opt].text=packstring; m[opt].text_len=2; opt++;
 
@@ -5568,10 +5444,10 @@ menu:
 
 	Netgame.PacketsPerSec=atoi(packstring);
 	
-	if (Netgame.PacketsPerSec>40)
+	if (Netgame.PacketsPerSec>MAX_PPS)
 	{
-		Netgame.PacketsPerSec=40;
-		nm_messagebox(TXT_ERROR, 1, TXT_OK, "Packet value out of range\nSetting value to 40");
+		Netgame.PacketsPerSec=MAX_PPS;
+		nm_messagebox(TXT_ERROR, 1, TXT_OK, "Packet value out of range\nSetting value to %d", MAX_PPS);
 	}
 
 	if (Netgame.PacketsPerSec<10)
@@ -5993,7 +5869,7 @@ void netgame_set_defaults(void)
 	Netgame.PlayTimeAllowed=0;
 	Netgame.RefusePlayers=0;
 	Netgame.difficulty=PlayerCfg.DefaultDifficulty;
-	Netgame.PacketsPerSec=20;
+	Netgame.PacketsPerSec=DEFAULT_PPS;
 	Netgame.ShortPackets=0;
 	Netgame.ShowEnemyNames = 0;
 	Netgame.BrightPlayers = 1;
@@ -7307,6 +7183,9 @@ void net_udp_listen()
 
 	if (UDP_Socket[0] != -1)
 	{
+#ifdef USE_SLIKENET
+		slk_bridge_poll();
+#endif
 		size = udp_receive_packet( 0, packet, UPID_MAX_SIZE, &sender_addr );
 		while ( size > 0 )	{
 			net_udp_process_packet( packet, sender_addr, size, 0 );
@@ -7532,10 +7411,10 @@ void net_udp_do_frame(int force, int listen)
 #endif
 
 
-#ifdef USE_GNS
-	// Always, regardless of RetroProtocol -- gameplay only travels
-	// peer-to-peer now, so ICE has to be running in every netgame.
-	net_udp_gns_frame();
+#ifdef USE_SLIKENET
+	net_udp_slk_frame(time);
+#endif
+#ifdef USE_SLIKENET
 	net_udp_report_transports(time);
 #endif
 
@@ -8248,6 +8127,8 @@ void add_message_to_obs_buffer(ubyte *data, int data_len, int needack) {
 	//con_printf(CON_NORMAL, "Queueing obs message; next: %d, cur: %d, max: %d\n", next_obs_msg_to_send, cur_obs_msg, MAX_OBS_MESSAGES); 
 	if(observer_data_buffer == 0) {
 		observer_data_buffer = d_malloc(MAX_OBS_MESSAGES*MAX_MESSAGE_SIZE); 
+		if (!observer_data_buffer)
+			return;
 		next_obs_msg_to_send = cur_obs_msg = 0; 
 	}
 
@@ -8996,130 +8877,230 @@ void reattemptDirect(int pnum) {
 
 }
 
-#ifdef USE_GNS
 
-// gns_bridge wants a signaling blob delivered to to_player. Piggyback on
-// whatever route net_udp_send_to_player() already picks (direct or proxied
-// through the host) -- same mesh the naive holepunch above uses.
-//
-// Exception: if we're the client in the join phase (connection_statuses is
-// CONNT_NONE because no route exists yet) and Punch_join_gameid is set, route
-// the signal through the tracker instead.  The tracker relays it to the host
-// as UPID_TRACKER_SIGNAL, bootstrapping ICE before any direct UDP path exists.
-void net_udp_gns_send_signal(int to_player, const unsigned char *data, int len)
+#ifdef USE_SLIKENET
+
+#define SLK_SIGNAL_INTERVAL (F1_0 * 2)
+#define SLK_JOIN_SIGNAL_INTERVAL F1_0
+
+static void net_udp_slk_start(int game_port)
 {
-	ubyte *buf;
-	int hlen = 0;
+	int slk_port = game_port ? game_port + SLK_PORT_OFFSET : 0;
 
-	if (to_player < 0 || to_player >= MAX_PLAYERS)
+	if (Solo_survival)
 		return;
-
-	// Pre-join client path: no connection_status route exists yet.
-	if (!multi_i_am_master() &&
-	    Punch_join_gameid != 0 &&
-	    connection_statuses[to_player].type == CONNT_NONE)
-	{
-		ubyte *tbuf;
-		int tlen = 0;
-		int i;
-
-		tbuf = malloc(len + 6); /* [op][ver][gameid:4] */
-		if (!tbuf)
-			return;
-		tbuf[tlen] = TRACKER_PKT_SIGNAL; tlen++;
-		tbuf[tlen] = TRACKER_SYS_VERSION; tlen++;
-		PUT_INTEL_INT(tbuf + tlen, Punch_join_gameid); tlen += 4;
-		memcpy(tbuf + tlen, data, len);
-
-		for (i = 0; i < TrackerCount; i++)
-			dxx_sendto(UDP_Socket[0], tbuf, tlen + len, 0,
-			           (struct sockaddr *)&TrackerSockets[i], sizeof(TrackerSockets[i]));
-		free(tbuf);
-		return;
-	}
-
-	buf = malloc(len + UPID_GNS_SIGNAL_HEADER_SIZE);
-	if (!buf)
-		return;
-
-	buf[hlen] = UPID_GNS_SIGNAL; hlen++;
-	PUT_INTEL_INT(buf + hlen, netgame_token); hlen += 4;
-	buf[hlen] = to_player; hlen++;
-	buf[hlen] = Player_num; hlen++;
-	memcpy(buf + hlen, data, len);
-
-	net_udp_send_to_player(buf, hlen + len, to_player);
-	free(buf);
+	slk_bridge_start(slk_port, GameArg.MplSlkFacilitatorAddr, GameArg.MplSlkFacilitatorPort);
 }
 
-// Called by gns_bridge when the pre-join ICE connection (host side) needs to
-// send a signaling reply to the joining client.  The host doesn't have a
-// direct UDP path to the client yet, so the signal goes via the tracker:
-//
-//   host -> tracker  TRACKER_PKT_SIGNAL(gameid, client_ip:4, client_port:2, blob)
-//   tracker -> client  UPID_TRACKER_SIGNAL(blob)
-void net_udp_gns_send_prejoin_signal_to_client(const unsigned char *data, int len)
+static int net_udp_slk_receive(ubyte *buf, int len, struct _sockaddr *from)
 {
-	ubyte *buf;
-	int hlen = 0;
+	int got;
+
+	memset(from, 0, sizeof(struct _sockaddr));
+	got = slk_bridge_recv((struct sockaddr_in *)from, buf, len);
+	if (got <= 0)
+		return 0;
+
+	net_log_log(0, buf, got, (struct sockaddr *)from, sizeof(struct sockaddr_in));
+	UDP_num_recvfrom++;
+	UDP_len_recvfrom += got;
+	if (got < len)
+		buf[got] = 0;
+	return got;
+}
+
+static struct sockaddr_in *net_udp_slk_player_addr(int pnum)
+{
+	return (struct sockaddr_in *)&Netgame.players[pnum].protocol.udp.addr;
+}
+
+// In-game: [UPID][token:4][to][from][signal], routed like any other packet,
+// direct or proxied through the host.
+static void net_udp_slk_send_signal(int to_player)
+{
+	ubyte buf[UPID_SLK_SIGNAL_HEADER_SIZE + SLK_SIGNAL_SIZE];
+	int len = 0;
+
+	buf[len] = UPID_SLK_SIGNAL; len++;
+	PUT_INTEL_INT(buf + len, netgame_token); len += 4;
+	buf[len] = to_player; len++;
+	buf[len] = Player_num; len++;
+	if (!slk_bridge_local_signal(buf + len, SLK_SIGNAL_SIZE))
+		return;
+	len += SLK_SIGNAL_SIZE;
+
+	net_udp_send_to_player(buf, len, to_player);
+}
+
+static void net_udp_slk_process_signal(ubyte *data, int length)
+{
+	int to_player = data[5];
+	int from_player = data[6];
+	struct sockaddr_in *peer;
+
+	if (to_player != Player_num || from_player == Player_num)
+		return;
+	if (from_player < 0 || from_player >= MAX_PLAYERS)
+		return;
+
+	peer = net_udp_slk_player_addr(from_player);
+	if (!slk_bridge_learn(peer, data + UPID_SLK_SIGNAL_HEADER_SIZE, length - UPID_SLK_SIGNAL_HEADER_SIZE))
+		return;
+	if (Player_num > from_player)
+		slk_bridge_dial(peer);
+}
+
+// The higher slot dials, so two peers never dial each other at once; the
+// host is slot 0 and only ever answers. Signals keep flowing after connect
+// so an address change on either side is picked up within an interval.
+static void net_udp_slk_frame(fix64 time)
+{
+	static fix64 last_signal = 0;
+	int signal_due = time >= last_signal + SLK_SIGNAL_INTERVAL || time < last_signal;
 	int i;
-	struct sockaddr_in *sin;
 
-	if (TrackerCount == 0 || !Prejoin_client_addr_valid)
-		return;
+	if (signal_due)
+		last_signal = time;
 
-	buf = malloc(len + 12); /* [op][ver][gameid:4][client_ip:4][client_port:2] */
-	if (!buf)
-		return;
+	for (i = 0; i < MAX_PLAYERS; i++)
+	{
+		if (i == Player_num || !Players[i].connected)
+			continue;
+		if (is_observer() && i != multi_who_is_master())
+			continue;
 
-	sin = (struct sockaddr_in *)&Prejoin_client_addr;
+		if (signal_due)
+			net_udp_slk_send_signal(i);
+		if (Player_num > i)
+			slk_bridge_dial(net_udp_slk_player_addr(i));
+	}
+}
 
-	buf[hlen] = TRACKER_PKT_SIGNAL; hlen++;
-	buf[hlen] = TRACKER_SYS_VERSION; hlen++;
-	PUT_INTEL_INT(buf + hlen, Netgame.protocol.udp.GameID); hlen += 4;
-	memcpy(buf + hlen, &sin->sin_addr, 4); hlen += 4;
-	memcpy(buf + hlen, &sin->sin_port, 2); hlen += 2;
-	memcpy(buf + hlen, data, len);
+#ifdef USE_TRACKER
+static void net_udp_slk_send_to_trackers(ubyte *buf, int len)
+{
+	int i;
 
 	for (i = 0; i < TrackerCount; i++)
-		dxx_sendto(UDP_Socket[0], buf, hlen + len, 0,
-		           (struct sockaddr *)&TrackerSockets[i], sizeof(TrackerSockets[i]));
-	free(buf);
+		dxx_sendto(UDP_Socket[0], buf, len, 0, (struct sockaddr *)&TrackerSockets[i], sizeof(TrackerSockets[i]));
 }
 
-// gns_bridge established an ICE peer-to-peer connection to player_id. From
-// this moment dxx_sendto()/dxx_recvfrom() divert that player's traffic onto
-// it, so there is nothing to reroute here -- this is logging plus marking
-// the link direct for the connection_statuses[] mesh.
-//
-// Note what this deliberately does NOT do any more: it used to call
-// update_address_for_player() with the ICE-discovered address and then let
-// the game keep sending from its own UDP socket. That only works behind a
-// full-cone NAT -- the hole ICE punched belongs to GNS's socket and local
-// port, so packets from a different local port get dropped by the peer's
-// NAT. Rewriting the address also destroyed the peer's identity for every
-// `sender_addr` comparison in this file. The address is now informational.
-void net_udp_gns_route_found(int player_id, const void *addr, int addr_len)
+// Older builds relay GNS ICE blobs over the same tracker opcode; the tag
+// keeps those out of SLikeNet, and they fail to parse ours.
+static const ubyte SLK_TRACKER_MAGIC[4] = { 'S', 'L', 'K', '1' };
+#define SLK_TRACKER_SIGNAL_SIZE (sizeof(SLK_TRACKER_MAGIC) + SLK_SIGNAL_SIZE)
+
+static int net_udp_slk_put_tracker_signal(ubyte *out)
 {
-	if (player_id < 0 || player_id >= MAX_PLAYERS)
-		return;
-	if (addr_len != sizeof(struct _sockaddr))
+	memcpy(out, SLK_TRACKER_MAGIC, sizeof(SLK_TRACKER_MAGIC));
+	if (!slk_bridge_local_signal(out + sizeof(SLK_TRACKER_MAGIC), SLK_SIGNAL_SIZE))
+		return 0;
+	return SLK_TRACKER_SIGNAL_SIZE;
+}
+
+static const ubyte *net_udp_slk_tracker_payload(const ubyte *blob, int len)
+{
+	if (len < (int)SLK_TRACKER_SIGNAL_SIZE)
+		return NULL;
+	if (memcmp(blob, SLK_TRACKER_MAGIC, sizeof(SLK_TRACKER_MAGIC)))
+		return NULL;
+	return blob + sizeof(SLK_TRACKER_MAGIC);
+}
+
+// Client, before joining: [op][ver][gameid:4][tagged signal], relayed to the host.
+static void net_udp_slk_signal_host_via_tracker(void)
+{
+	ubyte buf[6 + SLK_TRACKER_SIGNAL_SIZE];
+	int len = 0;
+	int sig_len;
+
+	buf[len] = TRACKER_PKT_SIGNAL; len++;
+	buf[len] = TRACKER_SYS_VERSION; len++;
+	PUT_INTEL_INT(buf + len, Punch_join_gameid); len += 4;
+	sig_len = net_udp_slk_put_tracker_signal(buf + len);
+	if (!sig_len)
 		return;
 
+	net_udp_slk_send_to_trackers(buf, len + sig_len);
+}
+
+// Host: [op][ver][gameid:4][client_ip:4][client_port:2][tagged signal],
+// relayed to the joining client.
+static void net_udp_slk_signal_client_via_tracker(const struct sockaddr_in *client)
+{
+	ubyte buf[12 + SLK_TRACKER_SIGNAL_SIZE];
+	int len = 0;
+	int sig_len;
+
+	buf[len] = TRACKER_PKT_SIGNAL; len++;
+	buf[len] = TRACKER_SYS_VERSION; len++;
+	PUT_INTEL_INT(buf + len, Netgame.protocol.udp.GameID); len += 4;
+	memcpy(buf + len, &client->sin_addr, 4); len += 4;
+	memcpy(buf + len, &client->sin_port, 2); len += 2;
+	sig_len = net_udp_slk_put_tracker_signal(buf + len);
+	if (!sig_len)
+		return;
+
+	net_udp_slk_send_to_trackers(buf, len + sig_len);
+}
+
+// Host gets [UPID][client_ip:4][client_port:2][blob]; the address is the
+// client's game socket as the tracker saw it, which is how its packets will
+// arrive. Client gets [UPID][blob] from the host it is joining.
+static void net_udp_slk_process_tracker_signal(ubyte *data, int length)
+{
+	const int blob_at = multi_i_am_master() ? 7 : 1;
+	const ubyte *sig;
+	struct sockaddr_in client;
+
+	if (length <= blob_at)
+		return;
+	sig = net_udp_slk_tracker_payload(data + blob_at, length - blob_at);
+	if (!sig)
+		return;
+
+	if (!multi_i_am_master())
 	{
-		struct sockaddr_in dbg;
-
-		memcpy(&dbg, addr, sizeof(dbg));
-
-		con_printf(CON_NORMAL, "GNS: P2P connection to player %d established, peer %s:%d -- gameplay is now direct\n",
-			player_id, inet_ntoa(dbg.sin_addr), SWAPSHORT(dbg.sin_port));
+		if (Punch_join_gameid && slk_bridge_learn(net_udp_slk_player_addr(0), sig, SLK_SIGNAL_SIZE))
+			slk_bridge_dial(net_udp_slk_player_addr(0));
+		return;
 	}
 
-	connection_statuses[player_id].type = CONNT_DIRECT;
-	connection_statuses[player_id].last_direct_pong = timer_query();
+	memset(&client, 0, sizeof(client));
+	client.sin_family = AF_INET;
+	memcpy(&client.sin_addr, data + 1, 4);
+	memcpy(&client.sin_port, data + 5, 2);
+	if (slk_bridge_learn(&client, sig, SLK_SIGNAL_SIZE))
+		net_udp_slk_signal_client_via_tracker(&client);
+}
+#endif
+
+static void net_udp_slk_join_frame(void)
+{
+	struct sockaddr_in *host = net_udp_slk_player_addr(0);
+
+	if (slk_bridge_knows(host))
+	{
+		slk_bridge_dial(host);
+		return;
+	}
+
+#ifdef USE_TRACKER
+	{
+		static fix64 last_signal = 0;
+		fix64 now = timer_query();
+
+		if (Punch_join_gameid == 0)
+			return;
+		if (now >= last_signal && now < last_signal + SLK_JOIN_SIGNAL_INTERVAL)
+			return;
+		last_signal = now;
+		net_udp_slk_signal_host_via_tracker();
+	}
+#endif
 }
 
-#endif /* USE_GNS */
+#endif /* USE_SLIKENET */
 
 void net_udp_send_to_player(ubyte* data, int len, int to_player) {
 	if(connection_statuses[to_player].type == CONNT_DIRECT) {
@@ -9140,9 +9121,11 @@ void net_udp_send_to_player_proxy(ubyte* data, int data_len, int to_player, int 
 	// Only proxy through direct connections; drop the packet if we try something else
 	if(connection_statuses[through_player].type != CONNT_DIRECT) { return; }
 
-	ubyte* buf;
+	ubyte buf[UPID_MAX_SIZE];
 	int len = 0;
-	buf = malloc(data_len + UPID_PROXY_HEADER_SIZE);
+
+	if (data_len <= 0 || data_len > UPID_MAX_SIZE - UPID_PROXY_HEADER_SIZE)
+		return;
 
 	buf[len] = UPID_PROXY; len++; 
 	PUT_INTEL_INT(buf + len, netgame_token); len += 4; 
@@ -9151,7 +9134,6 @@ void net_udp_send_to_player_proxy(ubyte* data, int data_len, int to_player, int 
 	memcpy(buf + len, data, data_len); len += data_len; 
 
 	dxx_sendto(UDP_Socket[0], buf, len, 0, (struct sockaddr *)&Netgame.players[through_player].protocol.udp.addr, sizeof(struct _sockaddr));
-	free(buf);
 }
 
 void net_udp_process_proxy(ubyte* data, struct _sockaddr sender_addr, int data_len) {
@@ -9205,56 +9187,25 @@ void net_udp_process_proxy(ubyte* data, struct _sockaddr sender_addr, int data_l
 }
 
 
-#ifdef USE_GNS
-// Pumps GameNetworkingSockets and drives ICE dialing. Called every frame from
-// net_udp_do_frame(), UNCONDITIONALLY -- this used to live inside
-// net_udp_p2p_ping_frame(), which net_udp_do_frame() only calls when
-// Netgame.RetroProtocol is on. With that toggle off, GNS was never polled and
-// never dialed, and ICE could not connect. Peer-to-peer is not an optional
-// protocol variant; it is the only way gameplay travels now.
-void net_udp_gns_frame(void)
+
+#ifdef USE_SLIKENET
+static void net_udp_report_transport(int pnum)
 {
-	int i;
-
-	gns_bridge_poll();
-
-	for (i = 0; i < MAX_PLAYERS; i++)
+#ifdef USE_SLIKENET
+	if (slk_bridge_is_connected(net_udp_slk_player_addr(pnum)))
 	{
-		if (i == Player_num)
-			continue;
-		if (!Players[i].connected)
-			continue;
-		if (gns_bridge_is_connected(i))
-			continue;
-
-		// Only clients ever dial, never the host. ICE glare -- both ends
-		// calling ConnectP2PCustomSignaling at once -- would have each side's
-		// OnConnectRequest reject the other's inbound attempt, since
-		// gns_bridge.cpp refuses a second connection for a player it already
-		// has one for. Clients dial, the host answers.
-		if (multi_i_am_master())
-			continue;
-
-		// The host link is dialed unconditionally, not just when the current
-		// route looks bad. With the relay gone, a host behind NAT with no
-		// forwarded port has *no* working route until ICE finds one, and the
-		// advertised address from the tracker listing looks perfectly
-		// plausible right up until every packet to it disappears. Dialing
-		// always costs one ICE negotiation and wins back every unforwarded
-		// host; the connection is simply preferred over the raw address once
-		// it comes up (see dxx_sendto()).
-		//
-		// Peers we only reach by proxy through someone else are dialed for
-		// the same reason: a proxied hop is two players' latency, not one.
-		if (i == multi_who_is_master() || connection_statuses[i].type == CONNT_PROXY)
-			gns_bridge_connect_to_player(i);
+		con_printf(CON_DEBUG, "Transport: player %d -- PEER-TO-PEER (SLikeNet, %d ms)\n", pnum, slk_bridge_ping(net_udp_slk_player_addr(pnum)));
+		return;
 	}
-}
 #endif
+	if (connection_statuses[pnum].type == CONNT_PROXY)
+		con_printf(CON_NORMAL, "Transport: player %d -- proxied via another player (two hops), still negotiating\n", pnum);
+	else
+		con_printf(CON_DEBUG, "Transport: player %d -- direct UDP\n", pnum);
+}
 
-#ifdef USE_GNS
-// Says out loud, once every few seconds, what gameplay is actually travelling
-// over for each peer, so "is this game peer-to-peer?" is answerable from the
+// Says, once every few seconds, what gameplay is actually travelling over
+// for each peer, so "is this game peer-to-peer?" is answerable from the
 // console instead of inferred from the ping.
 static void net_udp_report_transports(fix64 time)
 {
@@ -9263,23 +9214,14 @@ static void net_udp_report_transports(fix64 time)
 
 	if (Network_status != NETSTAT_PLAYING)
 		return;
-	if (time < last_report + F1_0 * 5)
+	if (time >= last_report && time < last_report + F1_0 * 5)
 		return;
 
 	last_report = time;
 
 	for (i = 0; i < MAX_PLAYERS; i++)
-	{
-		if (i == Player_num || !Players[i].connected)
-			continue;
-
-		if (gns_bridge_is_connected(i))
-			con_printf(CON_DEBUG, "Transport: player %d -- PEER-TO-PEER (ICE)\n", i);
-		else if (connection_statuses[i].type == CONNT_PROXY)
-			con_printf(CON_NORMAL, "Transport: player %d -- proxied via another player (two hops). Still negotiating ICE.\n", i);
-		else
-			con_printf(CON_DEBUG, "Transport: player %d -- direct UDP\n", i);
-	}
+		if (i != Player_num && Players[i].connected)
+			net_udp_report_transport(i);
 }
 #endif
 

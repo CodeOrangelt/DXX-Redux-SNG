@@ -29,7 +29,12 @@ release notes as the changelog for everything predating this repo.
 - `survival.c/h` — Survival mode (**both** d1 and d2)
 - `race.c/h`, `racebot.c/h`, `race_energy_icon*.c/h` — Race mode (**d2 only**)
 - `dxma.c/h` — DXMA mission browser: fetch/refresh/filter missions from sectorgame.com
-- `gns_bridge.cpp/h` — GameNetworkingSockets ICE P2P NAT traversal
+- `slk_bridge.cpp/h` — SLikeNet punchthrough + P2P transport (replaced GNS,
+  whose ICE setup froze Windows clients). Route order SLikeNet → raw UDP. Own
+  UPID 33; tracker signals use opcode 7 behind an `SLK1` tag, so older GNS
+  builds' blobs are ignored; no protocol bump, so older builds interoperate.
+  Facilitator: `tools/slk_facilitator`, deployed on the tracker box. IPv4-only
+  (CMake turns it off when `IPV6=ON`).
 - Multi-tracker support (dxxtracker.com), UPnP port-forwarding, relay server
 - D1 Arcade mode, static powerups, pitched sample playback in SDL_mixer backend
 - HUD/UI: 3-color ping, yellow DEMO/FPS hugging the HUD, total-time counter,
@@ -93,7 +98,7 @@ Redux-side (not SNG): `HomingUpdateRate`, `RemoteHitSpark`, `AllowCustomModelsTe
 ## Build
 
 CMake options (identical in d1 and d2): `OPENGL`, `SDLMIXER`, `ASM`, `EDITOR`, `IPV6`,
-`UDP`, `TRACKER`, `GNS`, `UPNP`, `PNG`, `OPENGLMERGE`. All default ON except `ASM`/`EDITOR`/`IPV6`.
+`UDP`, `TRACKER`, `SLIKENET`, `UPNP`, `PNG`, `OPENGLMERGE`. All default ON except `ASM`/`EDITOR`/`IPV6`.
 
 ### Linux (VS Code Run & Debug)
 Uses **CMake presets**. `CMakePresets.json` is tracked; `CMakeUserPresets.json` is

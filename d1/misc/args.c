@@ -205,6 +205,10 @@ void ReadCmdArgs(void)
 		}
 	}
 #endif
+#ifdef USE_SLIKENET
+	GameArg.MplSlkFacilitatorAddr = get_str_arg("-slk_facilitator_hostaddr", SLK_FACILITATOR_ADDR_DEFAULT);
+	GameArg.MplSlkFacilitatorPort = get_int_arg("-slk_facilitator_hostport", SLK_FACILITATOR_PORT_DEFAULT);
+#endif
 #endif
 
 	// Editor Options

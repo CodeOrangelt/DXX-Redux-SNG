@@ -1907,7 +1907,7 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 
 		v = Netgame.PacketsPerSec;
-		nk_property_int(ctx, "Packets per second", 2, &v, 40, 1, 1);
+		nk_property_int(ctx, "Packets per second", 2, &v, MAX_PPS, 1, 1);
 		Netgame.PacketsPerSec = (short)v;
 
 		strncpy(port_text, net_udp_get_my_port_buf(), sizeof(port_text) - 1);

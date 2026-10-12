@@ -7,9 +7,7 @@
     "sdl1",
     "sdl1-mixer",
     "libpng",
-    "glew",
-    "protobuf",
-    "openssl"
+    "glew"
   ],
   "vcpkg-configuration": {
     "default-registry": {

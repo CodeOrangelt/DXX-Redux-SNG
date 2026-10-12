@@ -1,0 +1,18 @@
+# Install: copy the binary to /usr/local/bin, this file to
+# /etc/systemd/system, set PUBLIC_IP below, open UDP 42430-42431, then
+#   systemctl enable --now slk-facilitator
+[Unit]
+Description=DXX-Redux-SNG SLikeNet NAT punchthrough facilitator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=PORT=42430
+Environment=PUBLIC_IP=
+ExecStart=/bin/sh -c 'exec /usr/local/bin/slk_facilitator "$PORT" $PUBLIC_IP'
+DynamicUser=yes
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

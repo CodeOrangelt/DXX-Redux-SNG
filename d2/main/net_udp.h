@@ -7,7 +7,7 @@
 #include "multi.h"
 
 // direct_join carries one in-progress join attempt through net_udp_game_
-// connect()'s NAT-punch/ICE/retry state machine. Shared with nk_ui.c so its
+// connect()'s NAT-punch/SLikeNet/retry state machine. Shared with nk_ui.c so its
 // Nuklear game browser can drive a join without touching or reimplementing
 // any of that state machine -- it just owns one of these and calls the same
 // functions net_udp_list_join_poll() (the legacy browser) always has.
@@ -79,8 +79,14 @@ void udp_tracker_flush_events(void);
 #define TRACKER2_ADDR_DEFAULT "tracker.dxxtracker.com"
 #define TRACKER2_PORT_DEFAULT 9999
 #endif
+#ifdef USE_SLIKENET
+#define SLK_FACILITATOR_ADDR_DEFAULT "tracker.dxxtracker.com"
+#define SLK_FACILITATOR_PORT_DEFAULT 42430
+#endif
 #define UDP_REQ_ID "D2XR" // ID string for a request packet
 #define UDP_MAX_NETGAMES 900
+#define DEFAULT_PPS 30
+#define MAX_PPS 60
 #define UDP_NETGAMES_PPAGE 12 // Netgames on one page of Netlist
 #define UDP_NETGAMES_PAGES 75 // Pages available on Netlist (UDP_MAX_NETGAMES/UDP_NETGAMES_PPAGE)
 #define UDP_TIMEOUT (15*F1_0) // 15 seconds disconnect timeout
@@ -138,6 +144,7 @@ void udp_tracker_flush_events(void);
 #  define UPID_TRACKER_INCGAME			 22 // The tracker is sending us some game info
 #  define UPID_TRACKER_HOLEPUNCH		 23 // NAT punch brokerage: tracker->peer with the other side's public address, or peer->peer as a throwaway probe. See "NAT hole punching" in net_udp.c.
 #  define UPID_TRACKER_HOLEPUNCH_SIZE		 12
+#  define UPID_TRACKER_SIGNAL			 32 // Tracker-relayed pre-join SLikeNet signal, behind SLK_TRACKER_MAGIC.
 #endif
 
 #define UPID_P2P_PING	25
@@ -151,9 +158,9 @@ void udp_tracker_flush_events(void);
 #define UPID_OBSDATA 29
 #define UPID_OBSQUIT 30
 #define UPID_OBSQUIT_SIZE (1 + 4 + 4)
-#ifdef USE_GNS
-#define UPID_GNS_SIGNAL 31 // Relays a GameNetworkingSockets ICE signaling blob between two players, via net_udp_send_to_player() (direct or proxied through host).
-#define UPID_GNS_SIGNAL_HEADER_SIZE (1 + 4 + 1 + 1) // type, token, to_player, from_player
+#ifdef USE_SLIKENET
+#define UPID_SLK_SIGNAL 33 // A player's SLikeNet signal (GUID + port), via net_udp_send_to_player(). Builds without SLikeNet ignore it.
+#define UPID_SLK_SIGNAL_HEADER_SIZE (1 + 4 + 1 + 1) // type, token, to_player, from_player
 #endif
 
 // Structure keeping lite game infos (for netlist, etc.)

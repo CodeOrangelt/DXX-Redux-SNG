@@ -15,7 +15,7 @@ option(EDITOR "Include editor into build (experimental) [default: OFF]" OFF)
 option(IPV6 "Enable IPv6 compability [default: OFF]" OFF)
 option(UDP "Enable UDP support [default: ON]" ON)
 option(TRACKER "Enable Tracker support (requires UDP) [default: ON]" ON)
-option(GNS "Build with GameNetworkingSockets for ICE-based P2P NAT traversal (requires UDP) [default: ON]" ON)
+option(SLIKENET "Build with SLikeNet for NAT punchthrough and peer-to-peer transport (requires UDP) [default: ON]" ON)
 option(UPNP "Build with miniupnpc for automatic router port-forwarding when hosting (requires UDP) [default: ON]" ON)
 option(PNG "Build with PNG support for screenshots and textures [default: ON]" ON)
 option(OPENGLMERGE "Use an OpenGL shader for texmerge [default: ON]" ON)
@@ -68,41 +68,13 @@ if(UDP)
     if(TRACKER)
         add_definitions(/DUSE_TRACKER)
     endif()
-    if(GNS)
-        add_definitions(/DUSE_GNS)
-        set(BUILD_STATIC_LIB ON CACHE BOOL "" FORCE)
-        set(BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)
-        set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-        set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
-        set(BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-        # Native (non-WebRTC) ICE implementation - enough for STUN-based NAT
-        # traversal without pulling in Google's WebRTC as a dependency.
-        set(ENABLE_ICE ON CACHE BOOL "" FORCE)
-        set(USE_STEAMWEBRTC OFF CACHE BOOL "" FORCE)
-        # When cross-compiling, GNS still needs a *host* protoc to run codegen.
-        # FindProtobuf.cmake normally auto-creates an IMPORTED protobuf::protoc
-        # target pointing at Protobuf_PROTOC_EXECUTABLE the first time
-        # protobuf_generate() runs, but that target isn't marked GLOBAL, so
-        # when it's first instantiated from GNS's own (nested) CMakeLists.txt
-        # it doesn't resolve when referenced from sibling scopes - Ninja ends
-        # up with a literal "protobuf::protoc" command it can't run. Pre-create
-        # it as GLOBAL here so find_package(Protobuf)'s "if(NOT TARGET ...)"
-        # guard picks up ours instead.
-        if(CMAKE_CROSSCOMPILING AND NOT TARGET protobuf::protoc)
-            find_program(Protobuf_PROTOC_EXECUTABLE NAMES protoc)
-            if(Protobuf_PROTOC_EXECUTABLE)
-                add_executable(protobuf::protoc IMPORTED GLOBAL)
-                set_target_properties(protobuf::protoc PROPERTIES
-                    IMPORTED_LOCATION "${Protobuf_PROTOC_EXECUTABLE}")
-            endif()
-        endif()
-        include(FetchContent)
-        FetchContent_Declare(
-            GameNetworkingSockets
-            GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
-            GIT_TAG v1.6.0
-        )
-        FetchContent_MakeAvailable(GameNetworkingSockets)
+    if(SLIKENET AND IPV6)
+        message(STATUS "SLikeNet transport is IPv4-only; disabled for this IPv6 build")
+        set(SLIKENET OFF)
+    endif()
+    if(SLIKENET)
+        add_definitions(/DUSE_SLIKENET)
+        include(${CMAKE_SOURCE_DIR}/../cmake/slikenet.cmake)
     endif()
     if(UPNP)
         add_definitions(/DUSE_UPNP)

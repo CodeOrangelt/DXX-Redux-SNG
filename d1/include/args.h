@@ -78,9 +78,10 @@ typedef struct Arg
 	int MplTrackerPort[MAX_TRACKERS];
 	int MplTrackerCount;
 #endif
-	// Self-hosted relay server, for players who can't port-forward or use a
-	// VPN: transparently tunnels the UDP session through a server both
-	// sides can reach outbound. See tools/relay_server.py.
+#ifdef USE_SLIKENET
+	const char *MplSlkFacilitatorAddr;
+	int MplSlkFacilitatorPort;
+#endif
 	int DbgVerbose;
 	int DbgSafelog;
 	int DbgNoRun;

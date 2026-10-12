@@ -148,6 +148,10 @@ void print_commandline_help()
 	printf( "  -tracker_hostaddr <n>         Address of Tracker server to register/query games to/from\n\t\t\t\t(default: %s)\n", TRACKER_ADDR_DEFAULT);
 	printf( "  -tracker_hostport <n>         Port of Tracker server to register/query games to/from\n\t\t\t\t(default: %i)\n", TRACKER_PORT_DEFAULT);
 #endif // USE_TRACKER
+#ifdef USE_SLIKENET
+	printf( "  -slk_facilitator_hostaddr <s> NAT punchthrough facilitator (default: %s)\n", SLK_FACILITATOR_ADDR_DEFAULT);
+	printf( "  -slk_facilitator_hostport <n> Port of the facilitator (default: %i)\n", SLK_FACILITATOR_PORT_DEFAULT);
+#endif
 #endif // defined(USE_UDP)
 
 #ifdef    EDITOR
