@@ -114,7 +114,7 @@ static int s_chrome_h = 70;
 #define NK_UI_ROW_HEIGHT s_row_h
 #define NK_UI_MENU_CHROME_HEIGHT s_chrome_h
 #define NK_UI_MENU_MAX_HEIGHT_FRAC 0.9f
-#define NK_UI_MENU_WIDTH_FRAC 0.42f
+#define NK_UI_MENU_WIDTH_FRAC 0.6f
 #define NK_UI_TABLE_WIDTH_FRAC 0.8f
 #define NK_UI_MENU_MIN_WIDTH_ROWS 14
 #define NK_UI_DIM_ALPHA 0.6f
@@ -4817,7 +4817,7 @@ static void nk_ui_build_shots(struct nk_context *ctx, void *userdata)
 	struct nk_rect region = nk_window_get_content_region(ctx);
 
 	float list_w = region.w * NK_UI_SHOTS_LIST_FRAC;
-	float body_h = region.h - NK_UI_ROW_HEIGHT * 2;
+	float body_h = region.h - NK_UI_ROW_HEIGHT * 3;
 	int i;
 
 	nk_ui_step_selection(&s->selected, s->count);
@@ -4852,7 +4852,7 @@ static void nk_ui_build_shots(struct nk_context *ctx, void *userdata)
 	}
 	nk_layout_row_end(ctx);
 
-	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 4);
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	if (s->count)
 	{
 		char detail[NK_UI_SHOT_NAME_LEN + 32];
@@ -4862,6 +4862,7 @@ static void nk_ui_build_shots(struct nk_context *ctx, void *userdata)
 	}
 	else
 		nk_label(ctx, s->game_art ? "no game art found" : SCRNS_DIR " is empty", NK_TEXT_LEFT);
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 3);
 	if (nk_button_label(ctx, s->game_art ? "Show screenshots" : "Show game art"))
 		nk_ui_shots_switch_source(s);
 	nk_ui_shots_background_button(ctx, s);
