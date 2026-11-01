@@ -1963,7 +1963,7 @@ void net_udp_manual_join_game()
 	m[nitems].type = NM_TYPE_INPUT; m[nitems].text=UDP_MyPort; m[nitems].text_len=5;	nitems++;
 	m[nitems].type = NM_TYPE_TEXT;  m[nitems].text=blank;								nitems++;	// for connecting_txt
 
-	newmenu_do1( NULL, "ENTER GAME ADDRESS", nitems, m, (int (*)(newmenu *, d_event *, void *))manual_join_game_handler, dj, 0 );
+	newmenu_do1_nk( NULL, "ENTER GAME ADDRESS", nitems, m, (int (*)(newmenu *, d_event *, void *))manual_join_game_handler, dj, 0 );
 }
 
 static char *ljtext;
@@ -2225,6 +2225,16 @@ int net_udp_list_join_poll( newmenu *menu, d_event *event, direct_join *dj )
 	return 0;
 }
 
+#ifdef OGL
+// Nuklear-based game browser -- see nk_ui.c. Not available in the plain SDL
+// software-surface build, which has no GL context for it to draw into; that
+// build keeps the legacy newmenu-based flow below (same split as
+// net_udp_setup_game()'s Host Game screen).
+void net_udp_list_join_game()
+{
+	nk_ui_join_game();
+}
+#else
 void net_udp_list_join_game()
 {
 	int i = 0;
@@ -2297,8 +2307,9 @@ void net_udp_list_join_game()
 	}
 
 	num_active_udp_changed = 1;
-	newmenu_dotiny("NETGAMES", NULL,(UDP_NETGAMES_PPAGE+4), m, 1, (int (*)(newmenu *, d_event *, void *))net_udp_list_join_poll, dj);
+	newmenu_dotiny_nk("NETGAMES", NULL,(UDP_NETGAMES_PPAGE+4), m, 1, (int (*)(newmenu *, d_event *, void *))net_udp_list_join_poll, dj);
 }
+#endif
 
 // ==============================
 // Nuklear game browser glue (nk_ui.c). Mirrors net_udp_list_join_game()'s
