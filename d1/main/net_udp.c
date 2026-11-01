@@ -757,6 +757,7 @@ int udp_receive_packet(int socknum, ubyte *text, int len, struct _sockaddr *send
 #define TRACKER_EVT_OBS_MESSAGE	6	/* MULTI_OBS_MESSAGE equivalent (observer chat) */
 #define TRACKER_EVT_KILL_HOST		43	/* MULTI_KILL_HOST equivalent */
 #define TRACKER_EVT_DAMAGE		48	/* MULTI_DAMAGE equivalent */
+#define TRACKER_EVT_TURKEY_END	60	/* SNG: Turkey Shoot round result, no MULTI_* twin */
 
 /* Tracker initialization */
 int udp_tracker_init()
@@ -1186,6 +1187,9 @@ void net_udp_process_holepunch(ubyte *data, int data_len, struct _sockaddr sende
 #define TRACKER_EVT_SUBLEN_DAMAGE	14							/* type + 13 */
 #define TRACKER_EVT_SUBLEN_MESSAGE	(2 + MAX_MESSAGE_LEN)		/* type + pnum + 35 = 37 */
 #define TRACKER_EVT_SUBLEN_OBS_MESSAGE	47						/* type + pnum + 45 */
+#define TRACKER_EVT_TURKEY_HDR	7							/* type, winner, turkey, kills, goal, round secs */
+#define TRACKER_EVT_TURKEY_SLOT	(CALLSIGN_LEN + 1 + 4)		/* callsign, connected, turkey secs, hunter kills */
+#define TRACKER_EVT_SUBLEN_TURKEY_END	(TRACKER_EVT_TURKEY_HDR + MAX_PLAYERS * TRACKER_EVT_TURKEY_SLOT)
 #define TRACKER_EVT_HDR_SIZE		6
 
 static ubyte Tracker_evt_buf[UPID_MDATA_BUF_SIZE];
@@ -1316,6 +1320,32 @@ void udp_tracker_send_obs_message(const char *formatted_text)
 
 	sub[1] = OBSERVER_PLAYER_ID;
 	udp_tracker_evt_puttext(sub + 2, formatted_text, TRACKER_EVT_SUBLEN_OBS_MESSAGE - 2);
+}
+/* Turkey Shoot round result. Sent alone and flushed at once: the caller
+ * repeats it to ride out UDP loss, and the tracker keys on netgame_token. */
+void udp_tracker_send_turkey_end(const struct turkey_result *r)
+{
+	ubyte *sub = udp_tracker_evt_alloc(TRACKER_EVT_TURKEY_END, TRACKER_EVT_SUBLEN_TURKEY_END);
+	ubyte *slot;
+	int i;
+
+	if (!sub)
+		return;
+
+	sub[1] = r->winner;
+	sub[2] = r->turkey_pnum;
+	sub[3] = r->kills;
+	sub[4] = r->goal;
+	PUT_INTEL_SHORT(sub + 5, r->round_secs);
+	for (i = 0; i < MAX_PLAYERS; i++)
+	{
+		slot = sub + TRACKER_EVT_TURKEY_HDR + i * TRACKER_EVT_TURKEY_SLOT;
+		udp_tracker_evt_puttext(slot, Players[i].callsign, CALLSIGN_LEN + 1);
+		slot[CALLSIGN_LEN + 1] = r->connected[i];
+		PUT_INTEL_SHORT(slot + CALLSIGN_LEN + 2, r->turkey_secs[i]);
+		slot[CALLSIGN_LEN + 4] = r->hunter_kills[i];
+	}
+	udp_tracker_flush_events();
 }
 /* Game-event forwarding to the tracker(s), end! */
 

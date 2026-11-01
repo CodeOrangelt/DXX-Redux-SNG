@@ -3247,6 +3247,9 @@ int Turkey_round_kills = 0;
 int Turkey_round_secs_left = 0;
 int Turkey_round_over = 0;
 int Turkey_round_goal = TURKEY_DEFAULT_MIN_KILLS;
+static struct turkey_result Turkey_report;
+static int Turkey_report_sends_left;
+static fix64 Turkey_report_last_sent;
 
 #define TURKEY_SHIELDS (Netgame.TurkeyShields)
 #define TURKEY_GAME_DURATION (F1_0 * 60 * Netgame.TurkeyRoundMinutes)
@@ -3266,6 +3269,7 @@ void multi_turkey_init_game(void)
     Turkey_start_time = 0;
     Turkey_round_kills = 0;
     Turkey_round_over = 0;
+    Turkey_report_sends_left = 0;
     Turkey_round_secs_left = f2i(TURKEY_GAME_DURATION);
 
     // Clear all turkey times and kills with bounds checking
@@ -3644,6 +3648,9 @@ void multi_turkey_handle_cloak(void)
 #define TURKEY_ROUND_END_COUNTDOWN 5	// seconds; no 30s reactor wait after the verdict
 #define TURKEY_WINNER_HUNTERS 0
 #define TURKEY_WINNER_TURKEYS 1
+#define TURKEY_REPORT_SENDS 3		// UDP to the tracker; it drops repeats
+#define TURKEY_REPORT_GAP F1_0
+
 
 void multi_send_turkey_round(void)
 {
@@ -3718,6 +3725,34 @@ static void multi_turkey_announce_end(int winner, int kills)
     Countdown_timer = min(Countdown_timer, i2f(TURKEY_ROUND_END_COUNTDOWN));
 }
 
+static void multi_turkey_send_report(void)
+{
+    udp_tracker_send_turkey_end(&Turkey_report);
+    Turkey_report_sends_left--;
+    Turkey_report_last_sent = GameTime64;
+}
+
+static void multi_turkey_snapshot_report(int winner)
+{
+    fix64 elapsed = GameTime64 - Turkey_game_start_time;
+    int i;
+
+    memset(&Turkey_report, 0, sizeof(Turkey_report));
+    Turkey_report.winner = winner;
+    Turkey_report.turkey_pnum = Turkey_target;
+    Turkey_report.kills = Turkey_round_kills;
+    Turkey_report.goal = Turkey_round_goal;
+    Turkey_report.round_secs = f2i(min(elapsed, TURKEY_GAME_DURATION));
+    for (i = 0; i < MAX_PLAYERS; i++)
+    {
+        Turkey_report.connected[i] = i < N_players && Players[i].connected == CONNECT_PLAYING;
+        Turkey_report.turkey_secs[i] = f2i(multi_turkey_get_current_time(i));
+        Turkey_report.hunter_kills[i] = Turkey_hunter_kills[i];
+    }
+    Turkey_report_sends_left = TURKEY_REPORT_SENDS;
+    multi_turkey_send_report();
+}
+
 static void multi_turkey_end_round(int winner)
 {
     if (Turkey_round_over || !multi_i_am_master())
@@ -3728,6 +3763,7 @@ static void multi_turkey_end_round(int winner)
     multibuf[2] = Turkey_round_kills;
     multi_send_data(multibuf, 3, 2);
 
+    multi_turkey_snapshot_report(winner);
     multi_turkey_announce_end(winner, Turkey_round_kills);
 }
 
@@ -3745,7 +3781,11 @@ void multi_turkey_round_frame(void)
     fix64 elapsed = GameTime64 - Turkey_game_start_time;
 
     if (Turkey_round_over)
+    {
+        if (Turkey_report_sends_left > 0 && GameTime64 - Turkey_report_last_sent >= TURKEY_REPORT_GAP)
+            multi_turkey_send_report();
         return;
+    }
 
     Turkey_round_secs_left = elapsed >= TURKEY_GAME_DURATION ? 0 : f2i(TURKEY_GAME_DURATION - elapsed);
 
