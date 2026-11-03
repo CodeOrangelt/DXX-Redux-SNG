@@ -86,7 +86,7 @@ void udp_tracker_flush_events(void);
 #define UDP_REQ_ID "D2XR" // ID string for a request packet
 #define UDP_MAX_NETGAMES 900
 #define DEFAULT_PPS 30
-#define MAX_PPS 60
+#define MAX_PPS 90
 #define UDP_NETGAMES_PPAGE 12 // Netgames on one page of Netlist
 #define UDP_NETGAMES_PAGES 75 // Pages available on Netlist (UDP_MAX_NETGAMES/UDP_NETGAMES_PPAGE)
 #define UDP_TIMEOUT (15*F1_0) // 15 seconds disconnect timeout

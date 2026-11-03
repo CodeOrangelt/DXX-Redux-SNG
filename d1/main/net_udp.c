@@ -795,13 +795,18 @@ int udp_tracker_init()
 	return TrackerCount > 0 ? 0 : -1;
 }
 
+// UDP, never acked: one lost packet leaves a dead game listed until timeout.
+#define TRACKER_UNREGISTER_SENDS 3
+
+static int Tracker_listed = 0;
+
 /* Unregister from all trackers */
 int udp_tracker_unregister()
 {
 	// Variables
 	int iLen = 5;
 	ubyte pBuf[5];
-	int i;
+	int i, n;
 
 	// Don't strand the last frame's events behind the game going away.
 	udp_tracker_flush_events();
@@ -814,10 +819,11 @@ int udp_tracker_unregister()
 	PUT_INTEL_INT( pBuf+1, Netgame.protocol.udp.GameID );
 
 	// Send it off to every tracker
-	for (i = 0; i < TrackerCount; i++)
-		dxx_sendto( UDP_Socket[2], pBuf, iLen, 0, (struct sockaddr *)&TrackerSockets[i], sizeof( TrackerSockets[i] ) );
+	for (n = 0; n < TRACKER_UNREGISTER_SENDS; n++)
+		for (i = 0; i < TrackerCount; i++)
+			dxx_sendto( UDP_Socket[2], pBuf, iLen, 0, (struct sockaddr *)&TrackerSockets[i], sizeof( TrackerSockets[i] ) );
 
-
+	Tracker_listed = 0;
 	return TrackerCount;
 }
 
@@ -863,6 +869,7 @@ int udp_tracker_register()
 	}
 
 
+	Tracker_listed = 1;
 	return TrackerCount;
 }
 
@@ -2566,6 +2573,11 @@ void net_udp_close()
 	WSACleanup();
 #endif
 
+#ifdef USE_TRACKER
+	if (Tracker_listed && UDP_Socket[2] != -1)
+		udp_tracker_unregister();
+#endif
+
 #ifdef USE_UPNP
 	net_udp_upnp_unmap_port(atoi(UDP_MyPort));
 #endif
@@ -4197,6 +4209,67 @@ static void net_udp_ping_probe(struct _sockaddr addr)
 	dxx_sendto(UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&addr, sizeof(struct _sockaddr));
 }
 
+// What a tracker relays is its cached copy of the host's lite info, in the
+// older format without rules, and arrives at tracker speed. Only a direct
+// reply from the host says anything about the host itself.
+static void net_udp_lite_copy_rules(UDP_netgame_info_lite *dst, const UDP_netgame_info_lite *src)
+{
+	dst->AllowedItems = src->AllowedItems;
+	dst->KillGoal = src->KillGoal;
+	dst->PlayTimeAllowed = src->PlayTimeAllowed;
+	dst->control_invul_time = src->control_invul_time;
+	dst->PacketsPerSec = src->PacketsPerSec;
+	dst->HomingUpdateRate = src->HomingUpdateRate;
+	dst->SpawnStyle = src->SpawnStyle;
+	dst->BrightPlayers = src->BrightPlayers;
+	dst->ShowEnemyNames = src->ShowEnemyNames;
+	dst->NoFriendlyFire = src->NoFriendlyFire;
+	dst->RemoteHitSpark = src->RemoteHitSpark;
+	dst->AllowCustomModelsTextures = src->AllowCustomModelsTextures;
+	dst->ReducedFlash = src->ReducedFlash;
+	dst->GaussAmmoStyle = src->GaussAmmoStyle;
+	dst->RetroProtocol = src->RetroProtocol;
+	dst->ShortPackets = src->ShortPackets;
+	dst->AllowColoredLighting = src->AllowColoredLighting;
+	dst->RespawnConcs = src->RespawnConcs;
+	dst->PrimaryDupFactor = src->PrimaryDupFactor;
+	dst->SecondaryDupFactor = src->SecondaryDupFactor;
+	dst->SecondaryCapFactor = src->SecondaryCapFactor;
+	dst->NewSpawnAlgorithm = src->NewSpawnAlgorithm;
+	dst->SngToggles = src->SngToggles;
+	dst->has_rules = 1;
+}
+
+// A NAT'd host never answers; without this its probe stays pending forever.
+#define LITE_PROBE_TIMEOUT (F1_0*3)
+
+static void net_udp_lite_probe(UDP_netgame_info_lite *game, struct _sockaddr addr)
+{
+	net_udp_ping_probe(addr);
+	game->ping_probe_sent = timer_query();
+}
+
+static void net_udp_lite_keep_direct_info(UDP_netgame_info_lite *recv_game, const UDP_netgame_info_lite *prev, int via_tracker)
+{
+	if (!via_tracker)
+	{
+		if (prev->ping_probe_sent)
+			recv_game->host_ping = f2i(fixmul(timer_query() - prev->ping_probe_sent, i2f(1000)));
+		else
+			recv_game->host_ping = f2i(fixmul(timer_query() - s_lite_req_sent_time, i2f(1000)));
+		recv_game->ping_probe_sent = 0;
+		return;
+	}
+
+	recv_game->host_ping = prev->host_ping;
+	if (prev->has_rules && !recv_game->has_rules)
+		net_udp_lite_copy_rules(recv_game, prev);
+	if (prev->ping_probe_sent && timer_query() < prev->ping_probe_sent + LITE_PROBE_TIMEOUT)
+		recv_game->ping_probe_sent = prev->ping_probe_sent;
+	else
+		net_udp_lite_probe(recv_game, recv_game->game_addr);
+}
+
 int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_addr, int lite_info, ubyte is_sync, ubyte via_tracker)
 {
 	int len = 0, i = 0, j = 0;
@@ -4243,30 +4316,12 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 			return 0;
 		}
 
-		if (!via_tracker && i < num_active_udp_games && Active_udp_games[i].ping_probe_sent)
-		{
-			// This is the reply to our own direct probe below -- a real RTT
-			// to the host itself, not just "time since we last asked anyone".
-			recv_game.host_ping = f2i(fixmul(timer_query() - Active_udp_games[i].ping_probe_sent, i2f(1000)));
-			recv_game.ping_probe_sent = 0;
-		}
+		if (i < num_active_udp_games)
+			net_udp_lite_keep_direct_info(&recv_game, &Active_udp_games[i], via_tracker);
+		else if (via_tracker)
+			net_udp_lite_probe(&recv_game, game_addr);
 		else
-		{
-			// Local only, not on the wire (like game_addr above): how long
-			// since we broadcast our LAN discovery request is our own RTT to
-			// whoever just replied. Meaningless for a tracker relay -- the
-			// tracker usually answers from cache near-instantly, which would
-			// otherwise always read as ~0ms -- so a tracker-sourced game
-			// gets a direct probe of its own instead (below).
 			recv_game.host_ping = f2i(fixmul(timer_query() - s_lite_req_sent_time, i2f(1000)));
-			if (via_tracker && i == num_active_udp_games)
-			{
-				net_udp_ping_probe(game_addr);
-				recv_game.ping_probe_sent = timer_query();
-			}
-			else if (i < num_active_udp_games)
-				recv_game.ping_probe_sent = Active_udp_games[i].ping_probe_sent; // probe (if any) still outstanding
-		}
 		if (recv_game.host_ping < 0)
 			recv_game.host_ping = 0;
 		if (recv_game.host_ping > 9999)

@@ -100,6 +100,7 @@
 
 extern int choose_drop_segment(void);
 extern void init_player_stats_new_ship(ubyte pnum);
+extern void InitPlayerPosition(int random);
 
 // Defined below, next to the countdown that drives most of the splashes.
 static void survival_banner(const char *text, fix64 duration, int sound);
@@ -1782,6 +1783,8 @@ static void survival_revive_all(void)
 			// come after it, not before.
 			Objects[Players[i].objnum].movement_type = MT_PHYSICS;
 			Survival_spectate_target = -1;
+			// the spectate camera is this ship, often parked outside the mine
+			InitPlayerPosition(1);
 			init_player_stats_new_ship(i);
 			survival_grant_revive_invulnerability(i);
 			survival_banner("BACK IN THE FIGHT!", SURVIVAL_BANNER_DURATION, SURVIVAL_SND_REVIVE);

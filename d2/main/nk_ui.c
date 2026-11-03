@@ -79,6 +79,8 @@ static void nk_ui_note(const char *text, float extra_rows);
 #include "powerup.h"
 #include "laser.h"
 #include "config.h"
+#include "menu.h"
+#include "args.h"
 #include "gr.h"
 #include "gamepal.h"
 #include "ogl_init.h"
@@ -1265,6 +1267,8 @@ static int nk_ui_frame(const char *title, struct nk_vec2 size_frac, void (*build
 	int title_wraps;
 	nk_flags win_flags = NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE | NK_WINDOW_SCROLL_AUTO_HIDE;
 
+	// This loop bypasses event_process(); the join retry and timeout read the clock.
+	timer_update();
 	nk_ui_sync_fonts();
 	mouse_cursor_autohide();
 
@@ -4841,6 +4845,9 @@ static void nk_ui_backdrop_load(void)
 	else
 		snprintf(path, sizeof(path), "%s%s", SCRNS_DIR, value);
 	pixels = shotimg_decode(path, &w, &h, &channels);
+	// the default art may live in an add-on pack this install doesn't have
+	if (!pixels)
+		pixels = shotimg_decode(Menu_pcx_name, &w, &h, &channels);
 	if (!pixels)
 		return;
 	s_backdrop.tex = nk_ui_make_texture(pixels, w, h, channels);
