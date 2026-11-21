@@ -86,3 +86,11 @@ SNG-Media/
 # Claude Code working notes #
 ##############################
 CLAUDE.md
+
+# Local only, not part of the source release #
+################################################
+.claude/
+SNG-Media/
+tools/
+docs/
+/d2x-redux-sng.exe
