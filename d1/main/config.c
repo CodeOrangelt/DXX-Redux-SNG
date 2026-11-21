@@ -142,6 +142,8 @@ int ReadConfigFile()
 			ptr++;
 		if (*ptr != '\0') {
 			token = strtok(ptr, "=");
+			if (!token)	// line of only '='
+				token = "";
 			value = strtok(NULL, "=");
 			if (!value)
 				value = "";
