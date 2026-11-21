@@ -4826,6 +4826,9 @@ static struct
 	char loaded[MENU_BACKGROUND_LEN];	// config value the texture was made from
 } s_backdrop;
 
+extern const unsigned char menu_backdrop_png[];
+extern const unsigned int menu_backdrop_png_len;
+
 static void nk_ui_backdrop_load(void)
 {
 	char path[sizeof(SCRNS_DIR) + MENU_BACKGROUND_LEN];
@@ -4845,7 +4848,9 @@ static void nk_ui_backdrop_load(void)
 	else
 		snprintf(path, sizeof(path), "%s%s", SCRNS_DIR, value);
 	pixels = shotimg_decode(path, &w, &h, &channels);
-	// the default art may live in an add-on pack this install doesn't have
+	// the default art lives in the hi-res pack; carry our own copy
+	if (!pixels)
+		pixels = shotimg_decode_memory(menu_backdrop_png, menu_backdrop_png_len, &w, &h, &channels);
 	if (!pixels)
 		pixels = shotimg_decode(Menu_pcx_name, &w, &h, &channels);
 	if (!pixels)

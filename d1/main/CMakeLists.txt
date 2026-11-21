@@ -103,7 +103,7 @@ if(UDP)
     if(OPENGL)
         # Nuklear-based hosting/advanced-options UI (nk_ui.c) needs a GL
         # context to draw into -- only available in OpenGL builds.
-        target_sources(d1x-redux PRIVATE nk_ui.c shotimg.c menu_logo_data.c menu_lava_data.c)
+        target_sources(d1x-redux PRIVATE nk_ui.c shotimg.c menu_logo_data.c menu_lava_data.c menu_backdrop_data.c)
     endif()
     if(SLIKENET)
         target_sources(d1x-redux PRIVATE slk_bridge.cpp)
