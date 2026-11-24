@@ -231,6 +231,20 @@ int red_key_seg;// segment flag(red) is in
 #define STATIC_COLLECTED_PLASMA  (1<<2)
 #define STATIC_COLLECTED_FUSION  (1<<3)
 #define STATIC_COLLECTED_LASER   (1<<4)
+// SNG: a static weapon stays in the level for everyone; only who has it changes
+int powerup_is_static(int id)
+{
+	switch (id)
+	{
+		case POW_LASER:			return Netgame.StaticPowerups || Netgame.StaticLasers;
+		case POW_VULCAN_WEAPON:		return Netgame.StaticPowerups || Netgame.StaticVulcan;
+		case POW_SPREADFIRE_WEAPON:	return Netgame.StaticPowerups || Netgame.StaticSpread;
+		case POW_PLASMA_WEAPON:		return Netgame.StaticPowerups || Netgame.StaticPlasma;
+		case POW_FUSION_WEAPON:		return Netgame.StaticPowerups || Netgame.StaticFusion;
+		default:			return 0;
+	}
+}
+
 static ubyte StaticPowerupsCollected = 0;
 
 void reset_static_powerups_collected(void)

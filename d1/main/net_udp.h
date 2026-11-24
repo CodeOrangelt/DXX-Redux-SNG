@@ -21,6 +21,10 @@ typedef struct direct_join
 	ubyte join_as_obs;
 } direct_join;
 
+int net_udp_auto_host(int cpus, int level, int port);
+int net_udp_dedicated_host(int level, int port, const char *name, int listed, int host_plays, int skill, int extra_cpus);
+int net_udp_auto_join(const char *host, int port, int my_port);
+
 int net_udp_game_connect(direct_join *dj);
 void net_udp_listen(void);
 
@@ -115,7 +119,7 @@ void udp_tracker_flush_events(void);
 #define UPID_GAME_INFO_REQ_SIZE			 13
 #define UPID_GAME_INFO_LITE_REQ_SIZE		 11
 #define UPID_GAME_INFO				  3 // Packet containing all info about a netgame.
-#define UPID_GAME_INFO_SIZE			(5 + 4*2 + 397 + 7 + 9 + NUM_ARCADE_SUPERPOWERS + (NETGAME_NAME_LEN+1) + (MISSION_NAME_LEN+1) + ((MAX_PLAYERS+4)*(CALLSIGN_LEN+1+1)) + 18*12) // 370 + 27 SNG toggles + 9 arcade scalars + arcade enable flags (+2: PointCaptureRate, DeathmatchShields)
+#define UPID_GAME_INFO_SIZE			(5 + 4*2 + 397 + 7 + 9 + 3 + NUM_ARCADE_SUPERPOWERS + (NETGAME_NAME_LEN+1) + (MISSION_NAME_LEN+1) + ((MAX_PLAYERS+4)*(CALLSIGN_LEN+1+1)) + 18*12) // 370 + 27 SNG toggles + 9 arcade scalars + arcade enable flags (+2: PointCaptureRate, DeathmatchShields)
 #define UPID_GAME_INFO_LITE_REQ			  4 // Requesting lite info about a netgame. Used for discovering games.
 #define UPID_GAME_INFO_LITE			  5 // Packet containing lite netgame info.
 #define UPID_GAME_INFO_LITE_SIZE		 (72 + (NETGAME_NAME_LEN+1) + (MISSION_NAME_LEN+1)) // +2: avg_ping, +39: game-rules summary (SNG)
@@ -206,6 +210,7 @@ typedef struct UDP_netgame_info_lite
 	short                           host_ping;   // SNG: our own RTT (ms) to the host -- local only, like game_addr above, not sent on the wire
 	ubyte                           has_rules;   // SNG: local only -- packet carried the rules summary below
 	fix64                           ping_probe_sent; // SNG: local only -- when we unicast-probed this host directly for a real ping, 0 if none outstanding
+	fix64                           direct_at;   // SNG: local only -- last reply straight from the host; game_addr is then its own, not the tracker's
 
 	// SNG: rest of the "Game Rules" summary (net_udp_show_game_rules(),
 	// shown after joining or from the in-game Pause screen) -- broadcast so

@@ -3757,10 +3757,82 @@ void net_udp_process_version_deny(ubyte *data, struct _sockaddr sender_addr)
 	Netgame.protocol.udp.valid = -1;
 }
 
-// Set whenever we send out a lite info request, so net_udp_process_game_info()
-// can read a reply's arrival time as our own RTT to whoever answered first --
-// "time since we last asked".
-static fix64 s_lite_req_sent_time = 0;
+// SNG: browser ping. A reply counts as a sample only against a request we sent
+// to that same address moments ago; anything else (late, unsolicited, relayed)
+// would read as seconds of "ping" and is ignored.
+#define PING_SLOTS		32
+#define PING_REPLY_WINDOW	(F1_0*2)
+
+static struct
+{
+	struct _sockaddr addr;
+	fix64 sent;
+} Ping_pending[PING_SLOTS];
+static fix64 Ping_broadcast_sent;
+
+static int is_lan_multicast(struct _sockaddr *addr)
+{
+#ifdef IPv6
+	return is_same_addr(addr, &GMcast_v6);
+#else
+	(void)addr;
+	return 0;
+#endif
+}
+
+static void ping_note_send(struct _sockaddr *addr)
+{
+	int i, slot = 0;
+
+	for (i = 0; i < PING_SLOTS; i++)
+	{
+		if (Ping_pending[i].sent && is_same_addr(&Ping_pending[i].addr, addr))
+		{
+			slot = i;
+			break;
+		}
+		if (Ping_pending[i].sent < Ping_pending[slot].sent)
+			slot = i;
+	}
+	Ping_pending[slot].addr = *addr;
+	Ping_pending[slot].sent = timer_query();
+}
+
+static int ping_ms_since(fix64 sent)
+{
+	fix64 elapsed = timer_query() - sent;
+
+	if (!sent || elapsed < 0 || elapsed > PING_REPLY_WINDOW)
+		return -1;
+	return max(1, (int)((elapsed * 1000) >> 16));
+}
+
+// one sample per request: a duplicate reply mustn't count the wait twice
+static int ping_take_sample(struct _sockaddr *addr)
+{
+	int i, ms;
+
+	for (i = 0; i < PING_SLOTS; i++)
+	{
+		if (!Ping_pending[i].sent || !is_same_addr(&Ping_pending[i].addr, addr))
+			continue;
+		ms = ping_ms_since(Ping_pending[i].sent);
+		Ping_pending[i].sent = 0;
+		if (ms > 0)
+			return ms;
+	}
+	return ping_ms_since(Ping_broadcast_sent);
+}
+
+// rises slowly, falls at once: one hitch on our side shouldn't paint a host red
+static short ping_smooth(short previous, int sample)
+{
+	if (sample <= 0)
+		return previous;
+	if (previous <= 0 || sample < previous)
+		return min(sample, 9999);
+	return min((previous * 3 + sample) / 4, 9999);
+}
 
 void net_udp_request_game_info(struct _sockaddr game_addr, int lite)
 {
@@ -3775,10 +3847,10 @@ void net_udp_request_game_info(struct _sockaddr game_addr, int lite)
 	{
 		PUT_INTEL_SHORT(buf + 11, MULTI_PROTO_VERSION);
 	}
+	else if (is_same_addr(&game_addr, &GBcast) || is_lan_multicast(&game_addr))
+		Ping_broadcast_sent = timer_query();
 	else
-	{
-		s_lite_req_sent_time = timer_query();
-	}
+		ping_note_send(&game_addr);
 
 	dxx_sendto (UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&game_addr, sizeof(struct _sockaddr));
 }
@@ -3861,11 +3933,8 @@ static void net_udp_read_lite_rules(UDP_netgame_info_lite *g, const ubyte *data)
 	g->has_rules = 1;
 }
 
-// Sends a lite-info request straight to one host, bypassing the LAN
-// broadcast address and the shared s_lite_req_sent_time timestamp that
-// tracks it -- so a reply can be matched to the specific entry it's for,
-// giving a tracker-relayed game a real RTT instead of "time since we asked
-// the tracker" (which is normally near-instant and reads as 0ms).
+// Sends a lite-info request straight to one host, so a tracker-listed game
+// gets a real RTT instead of the tracker's.
 static void net_udp_ping_probe(struct _sockaddr addr)
 {
 	ubyte buf[UPID_GAME_INFO_REQ_SIZE];
@@ -3876,6 +3945,7 @@ static void net_udp_ping_probe(struct _sockaddr addr)
 	PUT_INTEL_SHORT(buf + 7, DXX_VERSION_MINORi);
 	PUT_INTEL_SHORT(buf + 9, DXX_VERSION_MICROi);
 
+	ping_note_send(&addr);
 	dxx_sendto(UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&addr, sizeof(struct _sockaddr));
 }
 
@@ -4250,10 +4320,34 @@ static void net_udp_lite_copy_rules(UDP_netgame_info_lite *dst, const UDP_netgam
 
 // A NAT'd host never answers; without this its probe stays pending forever.
 #define LITE_PROBE_TIMEOUT (F1_0*3)
+#define LITE_DIRECT_FRESH (F1_0*15)
+
+// SNG: a host behind our own router can't be reached at the public address the
+// tracker gives (no hairpin NAT); asking the LAN on its port finds it directly
+static void net_udp_lan_probe(struct _sockaddr addr)
+{
+#ifndef IPv6
+	struct _sockaddr lan = GBcast;
+	ubyte buf[UPID_GAME_INFO_REQ_SIZE];
+
+	lan.sin_port = addr.sin_port;
+	buf[0] = UPID_GAME_INFO_LITE_REQ;
+	memcpy(&(buf[1]), UDP_REQ_ID, 4);
+	PUT_INTEL_SHORT(buf + 5, DXX_VERSION_MAJORi);
+	PUT_INTEL_SHORT(buf + 7, DXX_VERSION_MINORi);
+	PUT_INTEL_SHORT(buf + 9, DXX_VERSION_MICROi);
+	Ping_broadcast_sent = timer_query();
+	dxx_sendto(UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&lan, sizeof(lan));
+#else
+	(void)addr;
+#endif
+}
 
 static void net_udp_lite_probe(UDP_netgame_info_lite *game, struct _sockaddr addr)
 {
 	net_udp_ping_probe(addr);
+	if (!game->direct_at)
+		net_udp_lan_probe(addr);
 	game->ping_probe_sent = timer_query();
 }
 
@@ -4261,15 +4355,18 @@ static void net_udp_lite_keep_direct_info(UDP_netgame_info_lite *recv_game, cons
 {
 	if (!via_tracker)
 	{
-		if (prev->ping_probe_sent)
-			recv_game->host_ping = f2i(fixmul(timer_query() - prev->ping_probe_sent, i2f(1000)));
-		else
-			recv_game->host_ping = f2i(fixmul(timer_query() - s_lite_req_sent_time, i2f(1000)));
+		recv_game->host_ping = ping_smooth(prev->host_ping, ping_take_sample(&recv_game->game_addr));
 		recv_game->ping_probe_sent = 0;
+		recv_game->direct_at = timer_query();
 		return;
 	}
 
 	recv_game->host_ping = prev->host_ping;
+	if (prev->direct_at && timer_query() < prev->direct_at + LITE_DIRECT_FRESH)
+	{
+		recv_game->game_addr = prev->game_addr;		// the address that answers beats the one the tracker saw
+		recv_game->direct_at = prev->direct_at;
+	}
 	if (prev->has_rules && !recv_game->has_rules)
 		net_udp_lite_copy_rules(recv_game, prev);
 	if (prev->ping_probe_sent && timer_query() < prev->ping_probe_sent + LITE_PROBE_TIMEOUT)
@@ -4329,11 +4426,10 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		else if (via_tracker)
 			net_udp_lite_probe(&recv_game, game_addr);
 		else
-			recv_game.host_ping = f2i(fixmul(timer_query() - s_lite_req_sent_time, i2f(1000)));
-		if (recv_game.host_ping < 0)
-			recv_game.host_ping = 0;
-		if (recv_game.host_ping > 9999)
-			recv_game.host_ping = 9999;
+		{
+			recv_game.host_ping = ping_smooth(0, ping_take_sample(&game_addr));
+			recv_game.direct_at = timer_query();
+		}
 
 		memcpy(&Active_udp_games[i], &recv_game, sizeof(UDP_netgame_info_lite));
 		
@@ -5698,6 +5794,15 @@ static void race_bot_fill_text(char *buf, size_t bufsz, int fill)
 // net_udp_setup_game()'s loop.
 static int net_udp_setup_reopen_at = -1;
 
+// SNG: the tracker tells sessions apart by this id. d_rand() seeded with
+// time-since-launch gave a freshly started server 0 every time.
+static int new_game_id(void)
+{
+	unsigned int id = (unsigned int)time(NULL) * 2654435761u ^ (unsigned int)timer_query();
+
+	return id ? (int)id : 1;
+}
+
 int net_udp_start_game(void);
 
 int net_udp_game_param_handler( newmenu *menu, d_event *event, param_opt *opt )
@@ -6946,7 +7051,7 @@ int net_udp_start_game(void)
 	udp_dns_filladdr(UDP_MCASTv6_ADDR, UDP_PORT_DEFAULT, &GMcast_v6);
 #endif
 	d_srand( (fix)timer_query() );
-	Netgame.protocol.udp.GameID=d_rand();
+	Netgame.protocol.udp.GameID = new_game_id();
 
 	N_players = 0;
 

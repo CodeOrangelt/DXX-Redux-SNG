@@ -58,6 +58,7 @@ add_executable (d1x-redux
     songs.c
     state.c
     survival.c
+    duelbot.c
     switch.c
     terrain.c
     texmerge.c
@@ -104,6 +105,8 @@ if(UDP)
         # Nuklear-based hosting/advanced-options UI (nk_ui.c) needs a GL
         # context to draw into -- only available in OpenGL builds.
         target_sources(d1x-redux PRIVATE nk_ui.c shotimg.c menu_logo_data.c menu_lava_data.c menu_backdrop_data.c)
+    else()
+        target_sources(d1x-redux PRIVATE nk_ui_stubs.c)
     endif()
     if(SLIKENET)
         target_sources(d1x-redux PRIVATE slk_bridge.cpp)

@@ -37,6 +37,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "ai.h"
 #include "weapon.h"
 #include "fireball.h"
+#include "duelbot.h"
 #include "collide.h"
 #include "newmenu.h"
 #include "gameseq.h"
@@ -204,6 +205,7 @@ object *object_create_explosion_sub(object *objp, short segnum, vms_vector * pos
 									}
 
 									// Explosions CAN be friendly fire.
+									duelbot_blast_hit(objp);
 									apply_damage_to_player(obj0p, killer, damage, 1);
 								}
 							}

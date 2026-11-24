@@ -200,6 +200,7 @@ typedef struct UDP_netgame_info_lite
 	short                           host_ping;   // SNG: our own RTT (ms) to the host -- local only, like game_addr above, not sent on the wire
 	ubyte                           has_rules;   // SNG: local only -- packet carried the rules summary below
 	fix64                           ping_probe_sent; // SNG: local only -- when we unicast-probed this host directly for a real ping, 0 if none outstanding
+	fix64                           direct_at;   // SNG: local only -- last reply straight from the host; game_addr is then its own, not the tracker's
 
 	// SNG: rest of the "Game Rules" summary (net_udp_show_game_rules(),
 	// shown after joining or from the in-game Pause screen) -- broadcast so

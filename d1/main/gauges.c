@@ -3447,7 +3447,9 @@ int maybe_show_observers(int startY) {
 		return startY;
 	}
 
-	if (Netgame.numobservers == 0 && !Netgame.host_is_obs) {
+	int show_host = Netgame.host_is_obs && Netgame.host_is_obs != HOST_OBS_SERVER;
+
+	if (Netgame.numobservers == 0 && !show_host) {
 		return startY;
 	}
 
@@ -3460,7 +3462,7 @@ int maybe_show_observers(int startY) {
 		}
 	}
 
-	if (Netgame.host_is_obs) {
+	if (show_host) {
 		height += LINE_SPACING;
 	}
 
@@ -3482,7 +3484,7 @@ int maybe_show_observers(int startY) {
 	gr_printf(x, y, "Observers:");
 	y += LINE_SPACING;
 
-	if (Netgame.host_is_obs) {
+	if (show_host) {
 		gr_get_string_size(Players[0].callsign, &w, &h, &aw);
 		x = grd_curcanv->cv_bitmap.bm_w - w - 5;
 

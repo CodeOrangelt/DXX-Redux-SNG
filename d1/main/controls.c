@@ -19,6 +19,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #include <stdlib.h>
 #include "key.h"
+#include "duelbot.h"
 #include "joy.h"
 #include "timer.h"
 #include "dxxerror.h"
@@ -41,6 +42,9 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 void read_flying_controls( object * obj )
 {
 	Assert(FrameTime > 0); 		//Get MATT if hit this!
+
+	if (duelbot_piloting(obj))
+		return;		// the bench autopilot has the stick
 
 #ifdef NETWORK
 	// Menu takes priority: while the shop blocks input, kconfig_read_

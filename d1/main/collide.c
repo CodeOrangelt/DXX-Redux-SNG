@@ -72,6 +72,7 @@ extern int Turkey_target;
 #include "editor/editor.h"
 #endif
 #include "collide.h"
+#include "duelbot.h"
 #include "multibot.h"
 
 #define WALL_DAMAGE_SCALE (128) // Was 32 before 8:55 am on Thursday, September 15, changed by MK, walls were hurting me more than robots!
@@ -288,8 +289,9 @@ void collide_player_and_wall( object * player, fix hitspeed, short hitseg, short
 {
 	fix damage;
 
-	if (player->id != Player_num) // Execute only for local player
+	if (player->id != Player_num && !duelbot_is_bot(player)) // local player, or the duel bot opening doors
 		return;
+	duelbot_hit_wall(player, hitspeed, hitseg, hitwall);
 
     if (is_observer()) { return; }
 
@@ -1384,6 +1386,9 @@ void do_shield_warnings() {
 
 void apply_damage_to_player(object *player, object *killer, fix damage, ubyte possibly_friendly)
 {
+	if (duelbot_take_damage(player, killer, damage))
+		return;
+
 	if (Player_is_dead)
 		return;
 
@@ -1595,6 +1600,7 @@ void collide_player_and_weapon( object * player, object * weapon, vms_vector *co
 				#endif
 			}
 
+			duelbot_weapon_hit(killer, player, damage, weapon);
 			apply_damage_to_player( player, killer, damage, 1);
 
 		}
@@ -1710,6 +1716,15 @@ extern int Network_got_powerup; // HACK!!!
 
 void collide_player_and_powerup( object * player, object * powerup, vms_vector *collision_point ) {
 	if (object_is_observer(player)) {
+		return;
+	}
+
+	if (duelbot_is_bot(player)) {
+		if (duelbot_pickup(player, powerup) && !((Game_mode & GM_MULTI) && powerup_is_static(powerup->id))) {
+			powerup->flags |= OF_SHOULD_BE_DEAD;
+			if (Game_mode & GM_MULTI)
+				multi_send_remobj(powerup-Objects);
+		}
 		return;
 	}
 

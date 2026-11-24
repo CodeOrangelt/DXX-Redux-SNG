@@ -195,5 +195,6 @@ extern int arcade_announce_seconds_left(void);
 extern int Arcade_announce_spid;		// -1 when nothing is announced
 extern fix64 Arcade_announce_drop_time;	// GameTime64 the countdown reaches zero
 
+int powerup_is_static(int id);	// SNG: Static Powerups netgame option
 #endif /* _POWERUP_H */
 

@@ -36,6 +36,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "text.h"
 #include "menu.h"
 #include "newmenu.h"
+#include "duelbot.h"
 #include "gamefont.h"
 #include "iff.h"
 #include "pcx.h"
@@ -2076,6 +2077,13 @@ newmenu *newmenu_do4( char * title, char * subtitle, int nitems, newmenu_item * 
 }
 
 
+// SNG: nobody is there to press OK on a dedicated server
+static int headless_popup(const char *text)
+{
+	con_printf(CON_URGENT, "popup: %s\n", text);
+	return 0;
+}
+
 int nm_messagebox1( char *title, int (*subfunction)(newmenu *menu, d_event *event, void *userdata), void *userdata, int nchoices, ... )
 {
 	int i;
@@ -2100,6 +2108,8 @@ int nm_messagebox1( char *title, int (*subfunction)(newmenu *menu, d_event *even
 
 	Assert(strlen(nm_text) < MESSAGEBOX_TEXT_SIZE);
 
+	if (duelbot_dedicated())
+		return headless_popup(nm_text);
 	return newmenu_do1_nk( title, nm_text, nchoices, nm_message_items, subfunction, userdata, 0 );
 }
 
@@ -2127,6 +2137,8 @@ int nm_messagebox( char *title, int nchoices, ... )
 
 	Assert(strlen(nm_text) < MESSAGEBOX_TEXT_SIZE );
 
+	if (duelbot_dedicated())
+		return headless_popup(nm_text);
 	return newmenu_do1_nk( title, nm_text, nchoices, nm_message_items, NULL, NULL, 0 );
 }
 

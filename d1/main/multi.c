@@ -22,6 +22,7 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include <time.h>
 
 #include "game.h"
+#include "duelbot.h"
 #include "multi.h"
 #include "survival.h"
 #include "object.h"
@@ -1249,6 +1250,8 @@ void multi_compute_kill(int killer, int killed)
 	killed_pnum = Objects[killed].id;
 
 	Assert ((killed_pnum >= 0) && (killed_pnum < N_players));
+
+	duelbot_note_kill((killer_type == OBJ_PLAYER || killer_type == OBJ_GHOST) ? Objects[killer].id : -1, killed_pnum);
 
 	if (Game_mode & GM_TEAM)
 		sprintf(killed_name, "%s (%s)", Players[killed_pnum].callsign, Netgame.team_name[get_team(killed_pnum)]);
@@ -2815,6 +2818,12 @@ multi_do_remobj(const ubyte *buf)
 
 }
 
+// SNG: a slot the host simulates; there is no machine behind it to talk to
+int multi_cpu_slot(int pnum)
+{
+	return (Game_mode & GM_MULTI) && pnum >= 0 && pnum < MAX_PLAYERS && ((Netgame.CpuSlots >> pnum) & 1);
+}
+
 void multi_disconnect_player(int pnum)
 {
 	int i, n = 0;
@@ -2823,6 +2832,10 @@ void multi_disconnect_player(int pnum)
 		return;
 	if (Players[pnum].connected == CONNECT_DISCONNECTED)
 		return;
+
+	// on every machine, so a human who takes the slot next is a human everywhere
+	Netgame.CpuSlots &= ~(1 << pnum);
+	duelbot_release_slot(pnum);
 
 	if (Players[pnum].connected == CONNECT_PLAYING)
 	{
@@ -4264,10 +4277,16 @@ void multi_send_fire(int laser_gun, int laser_level, int laser_flags, int laser_
 {
 	if(is_observer()) { return; }
 
+	multi_send_fire_for(Player_num, laser_gun, laser_level, laser_flags, laser_fired, laser_track);
+}
+
+// SNG: the host speaks for its CPU players with their own player number
+void multi_send_fire_for(int pnum, int laser_gun, int laser_level, int laser_flags, int laser_fired, short laser_track)
+{
 	multi_do_protocol_frame(1, 0); // provoke positional update if possible
 
 	multibuf[0] = (char)MULTI_FIRE;
-	multibuf[1] = (char)Player_num;
+	multibuf[1] = (char)pnum;
 	multibuf[2] = (char)laser_gun;
 	multibuf[3] = (char)laser_level;
 	multibuf[4] = (char)laser_flags;
@@ -4275,7 +4294,7 @@ void multi_send_fire(int laser_gun, int laser_level, int laser_flags, int laser_
 	PUT_INTEL_SHORT(multibuf+6, laser_track);
 
 	/* CED sniperpackets */
-	object* ownship = Objects + Players[Player_num].objnum;
+	object* ownship = Objects + Players[pnum].objnum;
 	PUT_INTEL_INT(multibuf+8 , ownship->orient.fvec.x);
 	PUT_INTEL_INT(multibuf+12, ownship->orient.fvec.y);
 	PUT_INTEL_INT(multibuf+16, ownship->orient.fvec.z);
@@ -4345,6 +4364,11 @@ multi_send_player_explode(char type)
 {
 	if(is_observer()) { return; }
 
+	multi_send_player_explode_for(Player_num, type);
+}
+
+void multi_send_player_explode_for(int pnum, char type)
+{
 	int count = 0;
 	int i;
 
@@ -4355,32 +4379,32 @@ multi_send_player_explode(char type)
 		Network_send_objnum = -1;
 	}
 
-	multi_send_position(Players[Player_num].objnum);
+	multi_send_position_for(pnum, Players[pnum].objnum);
 
 	multibuf[count++] = type;
-	multibuf[count++] = Player_num;
-	multibuf[count++] = (char)Players[Player_num].primary_weapon_flags;
-	multibuf[count++] = (char)Players[Player_num].secondary_weapon_flags;
-	multibuf[count++] = (char)Players[Player_num].laser_level;
-	multibuf[count++] = (char)Players[Player_num].secondary_ammo[HOMING_INDEX];
+	multibuf[count++] = pnum;
+	multibuf[count++] = (char)Players[pnum].primary_weapon_flags;
+	multibuf[count++] = (char)Players[pnum].secondary_weapon_flags;
+	multibuf[count++] = (char)Players[pnum].laser_level;
+	multibuf[count++] = (char)Players[pnum].secondary_ammo[HOMING_INDEX];
 	if(Netgame.RespawnConcs) {
-		multibuf[count++] = (char)RespawningConcussions[Player_num];
+		multibuf[count++] = (char)RespawningConcussions[pnum];
 	} else {
-		multibuf[count++] = (char)Players[Player_num].secondary_ammo[CONCUSSION_INDEX];
+		multibuf[count++] = (char)Players[pnum].secondary_ammo[CONCUSSION_INDEX];
 	}
-	multibuf[count++] = (char)Players[Player_num].secondary_ammo[SMART_INDEX];
-	multibuf[count++] = (char)Players[Player_num].secondary_ammo[MEGA_INDEX];
-	multibuf[count++] = (char)Players[Player_num].secondary_ammo[PROXIMITY_INDEX];
+	multibuf[count++] = (char)Players[pnum].secondary_ammo[SMART_INDEX];
+	multibuf[count++] = (char)Players[pnum].secondary_ammo[MEGA_INDEX];
+	multibuf[count++] = (char)Players[pnum].secondary_ammo[PROXIMITY_INDEX];
 	if( (Netgame.GaussAmmoStyle == GAUSS_STYLE_STEADY_RECHARGING) ||
 		(Netgame.GaussAmmoStyle == GAUSS_STYLE_STEADY_RESPAWNING) )
 	{
-		PUT_INTEL_SHORT(multibuf+count, (short)(VulcanAmmoBoxesOnBoard[Player_num]) );
+		PUT_INTEL_SHORT(multibuf+count, (short)(VulcanAmmoBoxesOnBoard[pnum]) );
 		count += 2;
 	} else {
-		PUT_INTEL_SHORT(multibuf+count, Players[Player_num].primary_ammo[VULCAN_INDEX] );
+		PUT_INTEL_SHORT(multibuf+count, Players[pnum].primary_ammo[VULCAN_INDEX] );
 		count += 2;
 	}
-	PUT_INTEL_INT(multibuf+count, Players[Player_num].flags );
+	PUT_INTEL_INT(multibuf+count, Players[pnum].flags );
 	count += 4;
 
 	multibuf[count++] = Net_create_loc;
@@ -4412,10 +4436,10 @@ multi_send_player_explode(char type)
 	}
 
 	multi_send_data(multibuf, message_length[MULTI_PLAYER_EXPLODE], 2);
-	if (Players[Player_num].flags & PLAYER_FLAGS_CLOAKED)
-		multi_send_decloak();
+	if (Players[pnum].flags & PLAYER_FLAGS_CLOAKED)
+		multi_send_decloak_for(pnum);
 
-	multi_strip_robots(Player_num);
+	multi_strip_robots(pnum);
 }
 
 extern int Proximity_dropped;
@@ -4577,6 +4601,22 @@ void multi_powcap_adjust_remote_cap(int pnum)
 		PowerupsInMine[POW_CLOAK]++;
 }
 
+// SNG: chat on behalf of a CPU the host runs; the host shows it itself,
+// since its own broadcasts never come back to it
+void multi_send_message_for(int pnum, const char *text)
+{
+	int loc = 0;
+
+	multibuf[loc] = (char)MULTI_MESSAGE;		loc += 1;
+	multibuf[loc] = (char)pnum;			loc += 1;
+	strncpy((char *)multibuf + loc, text, MAX_MESSAGE_LEN);	loc += MAX_MESSAGE_LEN;
+	multibuf[loc - 1] = '\0';
+	multi_send_data(multibuf, loc, 0);
+	udp_tracker_send_message((ubyte)pnum, (const char *)multibuf + 2);	// CPU taunts show on the tracker too
+	HUD_init_message(HM_MULTI, "%s: %s", Players[pnum].callsign, (char *)multibuf + 2);
+	con_printf(CON_NORMAL, "Gamelog: %s: %s\n", Players[pnum].callsign, (char *)multibuf + 2);
+}
+
 void
 multi_send_message(void)
 {
@@ -4621,14 +4661,19 @@ multi_send_reappear()
 {
 	if(is_observer()) { return; }
 
-	multi_send_position(Players[Player_num].objnum);
-	
+	multi_send_reappear_for(Player_num);
+}
+
+void multi_send_reappear_for(int pnum)
+{
+	multi_send_position_for(pnum, Players[pnum].objnum);
+
 	multibuf[0] = (char)MULTI_REAPPEAR;
-	multibuf[1] = (char)Player_num;
-	PUT_INTEL_SHORT(multibuf+2, Players[Player_num].objnum);
+	multibuf[1] = (char)pnum;
+	PUT_INTEL_SHORT(multibuf+2, Players[pnum].objnum);
 
 	multi_send_data(multibuf, 4, 2);
-	PKilledFlags[Player_num]=0;
+	PKilledFlags[pnum]=0;
 }
 
 void
@@ -4636,13 +4681,18 @@ multi_send_position(int objnum)
 {
 	if(is_observer()) { return; }
 
+	multi_send_position_for(Player_num, objnum);
+}
+
+void multi_send_position_for(int pnum, int objnum)
+{
 #ifdef WORDS_BIGENDIAN
 	shortpos sp;
 #endif
 	int count=0;
 
 	multibuf[count++] = (char)MULTI_POSITION;
-	multibuf[count++] = (char)Player_num;
+	multibuf[count++] = (char)pnum;
 #ifndef WORDS_BIGENDIAN
 	create_shortpos((shortpos *)(multibuf+count), Objects+objnum,0);
 	count += sizeof(shortpos);
@@ -4672,18 +4722,22 @@ multi_send_kill(int objnum)
 
 	// I died, tell the world.
 
-	int killer_objnum;
-	int count = 0;
-
 	Assert(Objects[objnum].id == Player_num);
-	killer_objnum = Players[Player_num].killer_objnum;
+	multi_send_kill_for(Player_num, Players[Player_num].killer_objnum);
+}
+
+// SNG: also the host announcing a CPU player's death, as its machine
+void multi_send_kill_for(int pnum, int killer_objnum)
+{
+	int objnum = Players[pnum].objnum;
+	int count = 0;
 
 	if (multi_i_am_master())
 		multibuf[count] = (char)MULTI_KILL_HOST;
 	else
 		multibuf[count] = (char)MULTI_KILL_CLIENT;
 							count += 1;
-	multibuf[count] = Player_num;			count += 1;
+	multibuf[count] = pnum;			count += 1;
 
 	if (killer_objnum > -1)
 	{
@@ -4717,7 +4771,7 @@ multi_send_kill(int objnum)
 		multi_send_data_direct((ubyte*)multibuf, count, multi_who_is_master(), 2); // I am just a client so I'll only send my kill but not compute it, yet. I'll get response from host so I can compute it correctly
 
 	if (Game_mode & GM_MULTI_ROBOTS)
-		multi_strip_robots(Player_num);
+		multi_strip_robots(pnum);
 
 	if (Game_mode & GM_BOUNTY && multi_i_am_master()) // update in case if needed... we could attach this to this packet but... meh...
 		multi_send_bounty();
@@ -4807,8 +4861,13 @@ multi_send_cloak(void)
 	// Broadcast a change in our pflags (made to support cloaking)
 	if(is_observer()) { return; }
 
+	multi_send_cloak_for(Player_num);
+}
+
+void multi_send_cloak_for(int pnum)
+{
 	multibuf[0] = MULTI_CLOAK;
-	multibuf[1] = (char)Player_num;
+	multibuf[1] = (char)pnum;
 
 	if(Netgame.RetroProtocol) {
 		multi_send_data(multibuf, 2, 1);
@@ -4816,7 +4875,7 @@ multi_send_cloak(void)
 	multi_send_data(multibuf, 2, 2);
 
 	if (Game_mode & GM_MULTI_ROBOTS)
-		multi_strip_robots(Player_num);
+		multi_strip_robots(pnum);
 }
 
 void
@@ -4825,8 +4884,13 @@ multi_send_decloak(void)
 	// Broadcast a change in our pflags (made to support cloaking)
 	if(is_observer()) { return; }
 
+	multi_send_decloak_for(Player_num);
+}
+
+void multi_send_decloak_for(int pnum)
+{
 	multibuf[0] = MULTI_DECLOAK;
-	multibuf[1] = (char)Player_num;
+	multibuf[1] = (char)pnum;
 
 	if(Netgame.RetroProtocol) {
 		multi_send_data(multibuf, 2, 1);

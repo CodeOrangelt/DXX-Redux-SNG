@@ -247,7 +247,7 @@ int Laser_create_new( vms_vector * direction, vms_vector * position, int segnum,
 		if (weapon_type == FUSION_ID) {
 			int	fusion_scale;
 
-			if (Game_mode & GM_MULTI)
+			if (Game_mode & (GM_MULTI | GM_DUEL))
 				fusion_scale = 2;
 			else
 				fusion_scale = 4;
@@ -260,7 +260,7 @@ int Laser_create_new( vms_vector * direction, vms_vector * position, int segnum,
 				obj->ctype.laser_info.multiplier = F1_0*fusion_scale;
 
 			//	Fusion damage was boosted by mk on 3/27 (for reg 1.1 release), but we only want it to apply to single player games.
-			if (Game_mode & GM_MULTI)
+			if (Game_mode & (GM_MULTI | GM_DUEL))
 				obj->ctype.laser_info.multiplier /= 2;
 		}
 		// This original code was never executed since the LASER_ID constant referred to a robot weapon
@@ -567,8 +567,8 @@ int find_homing_object(vms_vector *curpos, object *tracker)
 	}
 
 	//	Find an object to track based on game mode (eg, whether in network play) and who fired it.
-	if (Game_mode & GM_MULTI) {
-		//	In network mode.
+	if (Game_mode & (GM_MULTI | GM_DUEL)) {
+		//	In network mode, or a duel: ships track ships.
 		if (tracker->ctype.laser_info.parent_type == OBJ_PLAYER) {
 			//	It's fired by a player, so if robots present, track robot, else track player.
 			if (Game_mode & GM_MULTI_COOP)

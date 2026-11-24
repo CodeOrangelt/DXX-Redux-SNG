@@ -1125,3 +1125,24 @@ void create_new_mission(void)
 	strcpy(Level_names[0], "GAMESAVE.LVL");
 }
 #endif
+
+// SNG: the mission a DXMA download unpacked, found by its folder or file stem
+int find_mission_by_stem(const char *stem, char *filename, int len)
+{
+	mle *list = build_mission_list(1);
+	size_t n = strlen(stem);
+	int i, found = 0;
+
+	for (i = 0; i < num_missions && !found; i++)
+	{
+		const char *path = list[i].path;
+
+		if (!d_strnicmp(path, stem, n) && (path[n] == '/' || path[n] == '\0'))
+		{
+			snprintf(filename, len, "%s", list[i].filename);
+			found = 1;
+		}
+	}
+	free_mission_list(list);
+	return found;
+}

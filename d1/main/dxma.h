@@ -63,6 +63,7 @@ int dxma_download_mission(int index);
 // As above; confirm == 0 skips the "Download from DXMA" prompt, for callers
 // that already asked (or the player opted into auto-download).
 int dxma_download_mission_ex(int index, int confirm);
+int dxma_download_stem(int index, char *out, size_t outsz);
 
 // Opens the mission browser menu (id/title/author, sorted, searchable).
 void dxma_missions_menu(void);

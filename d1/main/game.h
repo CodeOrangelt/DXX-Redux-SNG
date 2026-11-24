@@ -74,6 +74,7 @@ extern int ft_preference;
 #define GM_OBSERVER     1024    // You are observing this game
 #define GM_TURKEY_SHOOT 2048    // Turkey shoot game mode
 #define GM_ARCADE       4096    // Arcade game mode - random "super powers" spawn around the mine
+#define GM_DUEL         8192    // SNG: local 1v1 against the CPU duel bot
 
 #define NDL 5       // Number of difficulty levels.
 
