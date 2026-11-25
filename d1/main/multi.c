@@ -4510,24 +4510,6 @@ void multi_powcap_cap_objects()
 	}
 
 
-	Players[Player_num].secondary_ammo[2]/=4;
-
-	for (index=0;index<MAX_SECONDARY_WEAPONS;index++)
-	{
-		type=Secondary_weapon_to_powerup[index];
-
-		if ((Players[Player_num].secondary_ammo[index]+PowerupsInMine[(int)type])>MaxPowerupsAllowed[(int)type])
-		{
-			if (MaxPowerupsAllowed[(int)type]-PowerupsInMine[(int)type]<0)
-				Players[Player_num].secondary_ammo[index]=0;
-			else
-				Players[Player_num].secondary_ammo[index]=(MaxPowerupsAllowed[(int)type]-PowerupsInMine[(int)type]);
-			con_printf(CON_VERBOSE,"Hey! I killed secondary type %d because PIM=%d MPA=%d\n",type,PowerupsInMine[(int)type],MaxPowerupsAllowed[(int)type]);
-		}
-	}
-
-	Players[Player_num].secondary_ammo[2]*=4;
-
 	if (Players[Player_num].flags & PLAYER_FLAGS_QUAD_LASERS)
 		if (PowerupsInMine[POW_QUAD_FIRE]+1 > MaxPowerupsAllowed[POW_QUAD_FIRE])
 			Players[Player_num].flags&=(~PLAYER_FLAGS_QUAD_LASERS);

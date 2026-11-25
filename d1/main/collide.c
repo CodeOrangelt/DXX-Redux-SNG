@@ -1180,7 +1180,10 @@ void drop_missile_1_or_4(object *playerobj,int missile_index, ubyte force)
 }
 
 void drop_player_eggs_remote(object *playerobj, ubyte remote);
+void multi_powcap_adjust_remote_cap(int pnum);
+
 void drop_player_eggs(object *playerobj) {
+	multi_powcap_adjust_remote_cap(playerobj->id);	// SNG: count our own spew, as every other machine does
 	drop_player_eggs_remote(playerobj, 0); 
 }
 

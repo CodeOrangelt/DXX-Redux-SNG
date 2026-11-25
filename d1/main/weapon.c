@@ -549,6 +549,18 @@ void arcade_add_secondary(int weapon_index, int count)
 //called when one of these weapons is picked up
 //when you pick up a secondary, you always get the weapon & ammo for it
 //	Returns true if powerup picked up, else returns false.
+extern char PowerupsInMine[], MaxPowerupsAllowed[];
+
+// SNG: restock only what the mine is missing, so a held stack stays in the
+// budget and can drop on death instead of being capped away
+static int mine_short_after_pickup(int weapon_index, int count)
+{
+	int type = Secondary_weapon_to_powerup[weapon_index];
+	int units_taken = weapon_index == PROXIMITY_INDEX ? 1 : count;
+
+	return PowerupsInMine[type] - units_taken < MaxPowerupsAllowed[type];
+}
+
 int pick_up_secondary(int weapon_index,int count)
 {
 	int max;
@@ -575,13 +587,8 @@ int pick_up_secondary(int weapon_index,int count)
 		RespawningConcussions[Player_num] += num_picked_up;
 	}
 
-	// SNG: restock the mine as soon as ammo is taken, rather than waiting for
-	// whoever picked it up to fire it all off - previously this only
-	// re-armed on pickup overflow (and for concussions, per shot fired via
-	// RespawningConcussions), so a player who just sat on a stack stalled
-	// the supply for everyone else. One replacement per pickup event, not
-	// per unit picked up.
-	if (!(Game_mode & GM_ARCADE)) {
+	// SNG: restock on pickup, so sitting on a stack can't stall the supply
+	if (!(Game_mode & GM_ARCADE) && mine_short_after_pickup(weapon_index, count)) {
 		switch (weapon_index) {
 			case HOMING_INDEX:
 				maybe_drop_net_powerup(POW_HOMING_AMMO_1);
