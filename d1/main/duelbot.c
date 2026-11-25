@@ -660,7 +660,7 @@ static int can_see(const duel_bot *b, const object *bot, const object *enemy);
 // else keep hunting the one it remembers; else go looking for the nearest
 static object *choose_target(duel_bot *b, const object *bot)
 {
-	int p, seen = -1, near = -1;
+	int p, seen = -1, nearest = -1;
 	fix seen_dist = 0, near_dist = 0;
 
 	if (b->target >= 0 && targetable(b, b->target) && can_see(b, bot, live_player_object(b->target)))
@@ -675,8 +675,8 @@ static object *choose_target(duel_bot *b, const object *bot)
 			continue;
 		ship = live_player_object(p);
 		dist = vm_vec_dist((vms_vector *)&bot->pos, &ship->pos);
-		if (near < 0 || dist < near_dist)
-			near = p, near_dist = dist;
+		if (nearest < 0 || dist < near_dist)
+			nearest = p, near_dist = dist;
 		if (can_see(b, bot, ship) && (seen < 0 || dist < seen_dist))
 			seen = p, seen_dist = dist;
 	}
@@ -684,7 +684,7 @@ static object *choose_target(duel_bot *b, const object *bot)
 	if (seen >= 0)
 		b->target = seen;
 	else if (b->target < 0 || !targetable(b, b->target))
-		b->target = near;
+		b->target = nearest;
 
 	return b->target >= 0 ? live_player_object(b->target) : NULL;
 }
@@ -5089,14 +5089,13 @@ static void run_pilot(void)
 
 #define MATCH_POINTS		20
 #define MATCH_MARGIN		2
-#define DEDICATED_IDLE_RESTART	(F1_0*60*30)
+#define DEDICATED_IDLE_RESTART	(F1_0*60*2)	// back to the forming lobby
 #define MATCH_ABANDON_DELAY	(F1_0*3)
 #define MATCH_RESTART_DELAY	(F1_0*10)	// time to read the result before the restart
 
 static int Match_points = MATCH_POINTS;
 static int Match_margin = MATCH_MARGIN;	// free-for-all: first to the goal wins
 static fix64 Match_restart_at;
-static void advance_rotation(void);
 static fix64 Idle_since;
 static int Dedicated_humans;
 #define DEDICATED_FPS		60
@@ -5276,7 +5275,6 @@ static void dedicated_frame(void)
 		return;
 
 	journal_close();
-	advance_rotation();
 	multi_leave_game();
 	exit(0);
 }
@@ -5507,16 +5505,10 @@ static int load_rotation_map(int *level)
 			continue;
 		}
 		con_printf(CON_URGENT, "DEDICATED: rotation map %d/%d: %s\n", pos % count + 1, count, why);
-		write_int_file(ROTATION_POS_FILE, pos % count);
+		write_int_file(ROTATION_POS_FILE, pos % count + 1);	// advance now: a map that dies loading can't wedge the server
 		return 1;
 	}
 	return 0;
-}
-
-static void advance_rotation(void)
-{
-	if (rotation_line(-1, NULL, 0))
-		write_int_file(ROTATION_POS_FILE, read_int_file(ROTATION_POS_FILE) + 1);
 }
 
 // the rotation, else the saved map, else Logic, else the built-in mission
@@ -5545,6 +5537,8 @@ void duelbot_frame(void)
 		bench_frame();
 	if (Dedicated)
 		dedicated_frame();
+	if (duelbot_idle_server())
+		return;		// nobody here: CPUs hold still instead of farming suicides
 	if (duelbot_piloting(ConsoleObject))
 		run_pilot();
 
