@@ -34,4 +34,14 @@ int nk_ui_bind_frame(const void *id, const char *title, const char *hint,
 	return NK_UI_BIND_CLOSE;
 }
 
+int nk_ui_singleplayer_setup(void)
+{
+	return 0;
+}
+
+void newmenu_offer_pages(const char *title, const char *const *names, int count, int active, int *next)
+{
+	(void)title; (void)names; (void)count; (void)active; (void)next;
+}
+
 #endif
