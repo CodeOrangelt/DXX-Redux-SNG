@@ -3976,6 +3976,19 @@ static void net_udp_ping_probe(struct _sockaddr addr)
 	dxx_sendto(UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&addr, sizeof(struct _sockaddr));
 }
 
+// SNG: a forming dedicated lobby advertises the CPUs that will take seats
+static int lobby_cpu_slots(void)
+{
+	if (!Auto_host_lobby || Netgame.game_status != NETSTAT_STARTING)
+		return 0;
+	return max(0, min((int)Netgame.CpuCount, Netgame.max_numplayers - N_players));
+}
+
+static int lobby_is_cpu_slot(int slot)
+{
+	return slot >= N_players && slot < N_players + lobby_cpu_slots();
+}
+
 void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte send_to_observers, uint player_token)
 {
 	//static fix64 last_full_req_time = 0;
@@ -4024,7 +4037,7 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 			}
 		}
 		buf[len] = tmpvar;								len++;
-		buf[len] = max(1, Netgame.numconnected - !!Netgame.host_is_obs);	len++;	// SNG: a watching host is no seat; 0 delists
+		buf[len] = max(1, Netgame.numconnected - !!Netgame.host_is_obs) + lobby_cpu_slots();	len++;	// SNG: a watching host is no seat; 0 delists
 		buf[len] = Netgame.max_numplayers - !!Netgame.host_is_obs;		len++;
 		buf[len] = Netgame.game_flags;							len++;
 
@@ -4090,8 +4103,16 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		int to_player = -1; 
 		for (i = 0; i < MAX_PLAYERS+4; i++)
 		{
-			memcpy(&buf[len], Netgame.players[i].callsign, CALLSIGN_LEN+1); 	len += CALLSIGN_LEN+1;
-			buf[len] = Netgame.players[i].connected;				len++;
+			if (info_upid == UPID_GAME_INFO && lobby_is_cpu_slot(i))
+			{
+				snprintf((char *)&buf[len], CALLSIGN_LEN+1, "CPU%d", i % 10);	len += CALLSIGN_LEN+1;
+				buf[len] = CONNECT_PLAYING;					len++;
+			}
+			else
+			{
+				memcpy(&buf[len], Netgame.players[i].callsign, CALLSIGN_LEN+1); 	len += CALLSIGN_LEN+1;
+				buf[len] = Netgame.players[i].connected;			len++;
+			}
 			buf[len] = Netgame.players[i].rank;					len++;
 			buf[len] = Netgame.players[i].color;                 len++; 
 			buf[len] = Netgame.players[i].missilecolor;				len++;
@@ -4128,9 +4149,9 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 			}
 		}
 		buf[len] = tmpvar;								len++;
-		buf[len] = Netgame.numplayers;							len++;
+		buf[len] = Netgame.numplayers + (info_upid == UPID_GAME_INFO ? lobby_cpu_slots() : 0);	len++;
 		buf[len] = Netgame.max_numplayers;						len++;
-		buf[len] = Netgame.numconnected;						len++;
+		buf[len] = Netgame.numconnected + (info_upid == UPID_GAME_INFO ? lobby_cpu_slots() : 0);	len++;
 		buf[len] = Netgame.game_flags;							len++;
 		buf[len] = Netgame.team_vector;							len++;
 		PUT_INTEL_INT(buf + len, Netgame.AllowedItems);					len += 4;
