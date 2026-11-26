@@ -24,7 +24,7 @@ build_app() {
 
     # Copy executable and libraris
     cp ../${builddir}/${name}.exe ${outdir}/
-    strip ${outdir}/${name}.exe
+    strip ${outdir}/${name}.exe 2>/dev/null || llvm-strip ${outdir}/${name}.exe
     
     # Copy in .dlls the old fashioned way. This assumes all the needed DLLs are 
     # ones from the mingw32/mingw64 installation
