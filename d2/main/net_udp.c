@@ -35,6 +35,7 @@
 #include "gameseq.h"
 #include "fireball.h"
 #include "duelbot.h"
+#include <SDL.h>
 #include "net_udp.h"
 #include "dxma.h"
 #include "game.h"
@@ -226,6 +227,7 @@ static int UDP_Socket[3] = { -1, -1, -1 };
 static int Solo_survival = 0;
 static int Auto_host = 0;		// headless CPU test host: no lobby, no UPnP
 static int Auto_host_watches;	// dedicated server: the host only observes
+static int Auto_host_lobby;	// dedicated server: form until a human joins
 static int human_seats(void);
 static char UDP_MyPort[6] = "";
 
@@ -6524,6 +6526,7 @@ int net_udp_dedicated_host(int level, int port, const char *name, int listed, in
 
 	Auto_host = 1;
 	Auto_host_watches = !host_plays;
+	Auto_host_lobby = 1;
 	return net_udp_start_game();
 }
 
@@ -7036,6 +7039,76 @@ static int net_udp_solo_roster(void)
 	return 1;
 }
 
+// SNG: a dedicated server waits here, listed as forming, so no level time
+// passes (no suicides, no powerup pile-up) until someone comes to play
+#define LOBBY_POLL_USEC		5000
+#define LOBBY_FILL_WAIT		(F1_0*15)	// let a few more join an FFA before it starts
+
+static int lobby_humans(void)
+{
+	return N_players - 1;
+}
+
+static int lobby_wanted_humans(void)
+{
+	return Auto_host_watches ? 2 : 1;
+}
+
+static int lobby_ready(fix64 *first_join_at)
+{
+	if (lobby_humans() < lobby_wanted_humans())
+	{
+		*first_join_at = 0;
+		return 0;
+	}
+	if (N_players >= human_seats())
+		return 1;
+	if (!*first_join_at)
+		*first_join_at = timer_query();
+	return timer_query() - *first_join_at >= LOBBY_FILL_WAIT;
+}
+
+static int net_udp_dedicated_lobby(void)
+{
+	fix64 first_join_at = 0;
+	int i;
+
+#ifdef USE_TRACKER
+	if (Netgame.Tracker)
+		udp_tracker_register();
+#endif
+	con_printf(CON_URGENT, "DEDICATED: forming, waiting for players\n");
+	while (!lobby_ready(&first_join_at))
+	{
+		if (SDL_QuitRequested())
+			exit(0);	// systemd stop: no game loop here to take the quit
+		timer_delay_usec(LOBBY_POLL_USEC);
+		timer_update();
+#ifdef USE_TRACKER
+		net_udp_punch_host_frame(timer_query());
+#endif
+		net_udp_listen();
+	}
+	con_printf(CON_URGENT, "DEDICATED: starting with %d players\n", lobby_humans());
+
+	Host_is_obs = 0;
+	for (i = 0; i < N_players; i++)
+		Players[i].connected = CONNECT_PLAYING;
+	if (Auto_host_watches)
+	{
+		Netgame.host_is_obs = HOST_OBS_SERVER;
+		Host_is_obs = 1;
+		Game_mode |= GM_OBSERVER;
+		Current_obs_player = 0;
+	}
+	for (i = N_players; i < MAX_PLAYERS; i++)
+	{
+		memset(Netgame.players[i].callsign, 0, CALLSIGN_LEN+1);
+		Netgame.players[i].rank = 0;
+	}
+	return 1;
+}
+
 int
 net_udp_select_players(void)
 {
@@ -7047,6 +7120,8 @@ net_udp_select_players(void)
 
 	net_udp_add_player( &UDP_Seq );
 
+	if (Auto_host_lobby)
+		return net_udp_dedicated_lobby();
 	if (Solo_survival || Auto_host)
 		return net_udp_solo_roster();
 
