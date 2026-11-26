@@ -5263,7 +5263,7 @@ void net_udp_set_power (void)
 		m[i].type = NM_TYPE_CHECK; m[i].text = multi_allow_powerup_text[i]; m[i].value = (Netgame.AllowedItems >> i) & 1;
 	}
 
-	newmenu_do1( NULL, "Objects to allow", MULTI_ALLOW_POWERUP_MAX, m, NULL, NULL, 0 );
+	newmenu_do1_nk( NULL, "Objects to allow", MULTI_ALLOW_POWERUP_MAX, m, NULL, NULL, 0 );
 
 	Netgame.AllowedItems &= ~NETFLAG_DOPOWERUP;
 	for (i = 0; i < MULTI_ALLOW_POWERUP_MAX; i++)
@@ -5321,7 +5321,7 @@ void net_udp_race_advanced_options(int *allowed_items, int item_chance[RACE_NUM_
 		m[opt].min_value = 0; m[opt].max_value = 20; opt++;
 	}
 
-	newmenu_do1( NULL, "Advanced Race Options", opt, m, net_udp_race_options_handler, NULL, 0 );
+	newmenu_do1_nk( NULL, "Advanced Race Options", opt, m, net_udp_race_options_handler, NULL, 0 );
 
 	*allowed_items = 0;
 	for (i = 0; i < RACE_NUM_ITEM_SLOTS; i++)
@@ -5366,7 +5366,7 @@ void net_udp_spawn_with_weapons_menu(void)
 	opt_mercury = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Mercury Missile";  m[opt].value = Netgame.MercurySpawn; opt++;
 	opt_earthshaker = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Earthshaker Missile";  m[opt].value = Netgame.EarthshakerSpawn; opt++;
 
-	newmenu_do1( NULL, "You will spawn with the weapons you select", opt, m, menu_spawn_with_weapons_handler, NULL, 0 );
+	newmenu_do1_nk( NULL, "You will spawn with the weapons you select", opt, m, menu_spawn_with_weapons_handler, NULL, 0 );
 
 	Netgame.FusionSpawn = m[opt_fusion].value;
 	Netgame.VulcanSpawn = m[opt_vulcan].value;
@@ -5421,7 +5421,7 @@ void net_udp_sng_toggles_menu(void)
 	opt_quietfan = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Quiet Fan"; m[opt].value = Netgame.QuietFan; opt++;
 
-	newmenu_do1( NULL, "SNG Toggles", opt, m, menu_sng_toggles_handler, NULL, 0 );
+	newmenu_do1_nk( NULL, "SNG Toggles", opt, m, menu_sng_toggles_handler, NULL, 0 );
 
 	Netgame.WeaponStun = m[opt_weaponstun].value;
 	Netgame.PurpleFlash = m[opt_purpleflash].value;
@@ -5458,7 +5458,7 @@ void net_udp_staticpowerupsmenu(void)
 	opt_phoenix = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Phoenix"; m[opt].value = Netgame.StaticPhoenix; opt++;
 	opt_omega = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Omega"; m[opt].value = Netgame.StaticOmega; opt++;
 
-	newmenu_do1( NULL, "These Weapons will always be there for anyone to pick up once", opt, m, menu_static_powerups_handler, NULL, 0 );
+	newmenu_do1_nk( NULL, "These Weapons will always be there for anyone to pick up once", opt, m, menu_static_powerups_handler, NULL, 0 );
 
 	Netgame.StaticPowerups = m[opt_all].value;
 	Netgame.StaticFusion = m[opt_fusion].value;
@@ -5654,7 +5654,7 @@ void net_udp_more_game_options ()
 	Assert(opt <= SDL_arraysize(m));
 
 menu:
-	i = newmenu_do1( NULL, "Advanced netgame options", opt, m, net_udp_more_options_handler, NULL, 0 );
+	i = newmenu_do1_nk( NULL, "Advanced netgame options", opt, m, net_udp_more_options_handler, NULL, 0 );
 
 	Netgame.control_invul_time = m[opt_cinvul].value*5*F1_0*60;
 

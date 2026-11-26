@@ -5216,7 +5216,7 @@ void net_udp_set_power (void)
 		m[i].type = NM_TYPE_CHECK; m[i].text = multi_allow_powerup_text[i]; m[i].value = (Netgame.AllowedItems >> i) & 1;
 	}
 
-	newmenu_do1( NULL, "Objects to allow", MULTI_ALLOW_POWERUP_MAX, m, NULL, NULL, 0 );
+	newmenu_do1_nk( NULL, "Objects to allow", MULTI_ALLOW_POWERUP_MAX, m, NULL, NULL, 0 );
 
 	Netgame.AllowedItems &= ~NETFLAG_DOPOWERUP;
 	for (i = 0; i < MULTI_ALLOW_POWERUP_MAX; i++)
@@ -5245,7 +5245,7 @@ void net_udp_spawn_with_weapons_menu(void)
 	m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Megas";  m[opt].value = Netgame.MegasSpawn; opt++;
 	m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Bombs";  m[opt].value = Netgame.BombsSpawn; opt++;
 
-	i = newmenu_do1( NULL, "You will spawn with the weapons you select", opt, m, menu_spawn_with_weapons_handler, NULL, 0 );
+	i = newmenu_do1_nk( NULL, "You will spawn with the weapons you select", opt, m, menu_spawn_with_weapons_handler, NULL, 0 );
 
 	Netgame.FusionSpawn = m[0].value;
 	Netgame.VulcanSpawn = m[1].value;
@@ -5280,7 +5280,7 @@ void net_udp_staticpowerupsmenu(void)
 	m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Bombs"; m[opt].value = Netgame.StaticBombs; opt++;
 	m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Missiles"; m[opt].value = Netgame.StaticMissiles; opt++;
 	
-	i = newmenu_do1( NULL, "These Weapons will not move, or drop", opt, m, menu_staticpowerups_handler, NULL, 0 );
+	i = newmenu_do1_nk( NULL, "These Weapons will not move, or drop", opt, m, menu_staticpowerups_handler, NULL, 0 );
 
 	Netgame.StaticPowerups = m[0].value;
 	Netgame.StaticFusion = m[3].value;
@@ -5646,7 +5646,7 @@ void net_udp_more_game_options ()
 	Assert(opt <= SDL_arraysize(m));
 
 menu:
-	i = newmenu_do1( NULL, "Advanced netgame options", opt, m, net_udp_more_options_handler, NULL, 0 );
+	i = newmenu_do1_nk( NULL, "Advanced netgame options", opt, m, net_udp_more_options_handler, NULL, 0 );
 
 	Netgame.control_invul_time = m[opt_cinvul].value*5*F1_0*60;
 
