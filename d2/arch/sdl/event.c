@@ -27,12 +27,6 @@ extern void mouse_cursor_autohide();
 static int initialised=0;
 
 // SNG: gamepads drive menus by posing as the keyboard
-#define PAD_BUTTON_ACCEPT	0
-#define PAD_BUTTON_BACK		1
-#define PAD_BUTTON_PREV_TAB	4
-#define PAD_BUTTON_NEXT_TAB	5
-#define PAD_BUTTON_SELECT	6
-#define PAD_BUTTON_START	7
 #define PAD_AXIS_DEADZONE	16000
 #define PAD_DIRECTIONS		4
 
@@ -53,20 +47,23 @@ static void pad_key_event(SDL_Event *out, int sym, int down)
 	out->key.keysym.sym = sym;
 }
 
+#define PAD_BUTTON_ACCEPT	0
+#define PAD_BUTTON_BACK		1
+#define PAD_BUTTON_PREV_TAB	4
+#define PAD_BUTTON_NEXT_TAB	5
+#define PAD_BUTTON_SELECT	6
+
 static int pad_button_sym(int button)
 {
+	if (button == GameCfg.PadPause)
+		return SDLK_RETURN;	// the game-menu button accepts in menus
 	switch (button)
 	{
-		case PAD_BUTTON_ACCEPT:
-		case PAD_BUTTON_START:
-			return SDLK_RETURN;
+		case PAD_BUTTON_ACCEPT:		return SDLK_RETURN;
 		case PAD_BUTTON_BACK:
-		case PAD_BUTTON_SELECT:
-			return SDLK_ESCAPE;
-		case PAD_BUTTON_PREV_TAB:
-			return SDLK_PAGEUP;
-		case PAD_BUTTON_NEXT_TAB:
-			return SDLK_PAGEDOWN;
+		case PAD_BUTTON_SELECT:		return SDLK_ESCAPE;
+		case PAD_BUTTON_PREV_TAB:	return SDLK_PAGEUP;
+		case PAD_BUTTON_NEXT_TAB:	return SDLK_PAGEDOWN;
 	}
 	return 0;
 }
@@ -178,10 +175,51 @@ int event_pad_repeat(SDL_Event *out)
 	return 0;
 }
 
+static int pad_capture = -2;	// -2 off, -1 waiting, else the button caught
+
+// The next pad button is reported here instead of acting, for binding.
+void event_pad_capture_begin(void)
+{
+	pad_capture = -1;
+}
+
+int event_pad_captured(void)
+{
+	int button = pad_capture;
+
+	if (button >= 0)
+		pad_capture = -2;
+	return button;
+}
+
+void event_pad_capture_end(void)
+{
+	pad_capture = -2;
+}
+
 // 0: pad input with no menu meaning, to drop
 int event_pad_as_key(SDL_Event *event)
 {
+	if (pad_capture != -2 && pad_event(event))
+	{
+		if (pad_capture == -1 && event->type == SDL_JOYBUTTONDOWN)
+			pad_capture = event->jbutton.button;
+		return 0;
+	}
 	return !pad_event(event) || pad_to_key(event);
+}
+
+// In play only the game-menu button is the menus': it acts as Esc.
+static int pad_pause_in_game(window *front, SDL_Event *event)
+{
+	int button = GameCfg.PadPause;
+
+	if (front != Game_wind || !front || GameArg.CtlNoJoystick || button < 0)
+		return 0;
+	if ((event->type != SDL_JOYBUTTONDOWN && event->type != SDL_JOYBUTTONUP) || event->jbutton.button != button)
+		return 0;
+	pad_key_event(event, SDLK_ESCAPE, event->type == SDL_JOYBUTTONDOWN);
+	return 1;
 }
 
 void event_poll()
@@ -204,6 +242,7 @@ void event_poll()
 	{
 		if (pad_drives_menus(wind) && !event_pad_as_key(&event))
 			continue;
+		pad_pause_in_game(wind, &event);
 #ifdef USE_NK_UI
 		if (nk_menu_input)
 			nk_ui_feed_event(&event);

@@ -68,10 +68,12 @@ typedef struct Cfg
 	int UiPanelWidth;	// SNG: menu panel width, percent of stock
 	int UiFitMenus;	// SNG: shrink a menu taller than the screen instead of scrolling
 	int UiTabs;	// SNG: menu sections as tabs across the top instead of fold-outs
+	int PadPause;	// SNG: pad button that opens the game menu (Esc), -1 none; not per pilot
 	char MenuBackground[MENU_BACKGROUND_LEN];	// SNG: screenshot file in SCRNS_DIR, empty = stock
 } __pack__ Cfg;
 
 extern struct Cfg GameCfg;
+#define PAD_PAUSE_DEFAULT 7	// Start on an Xbox-style pad
 
 //#ifdef USE_SDLMIXER
 //#define EXT_MUSIC_ON (GameCfg.SndEnableRedbook || GameCfg.JukeboxOn)

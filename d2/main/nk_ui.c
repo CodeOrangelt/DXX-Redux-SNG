@@ -6895,6 +6895,73 @@ static void nk_ui_build_menu_size(struct nk_context *ctx, void *userdata)
 		*running = 0;
 }
 
+// ==============================
+// Controller menu buttons: kept in descent.cfg, not the pilot file
+// ==============================
+
+#define PAD_BUTTON_NAMES 11
+static const char *const Xbox_button_names[PAD_BUTTON_NAMES] = { "A", "B", "X", "Y", "LB", "RB", "Back", "Start", "Guide", "L-Stick", "R-Stick" };
+
+static void nk_ui_pad_button_name(char *out, size_t size, int button)
+{
+	if (button < 0)
+		snprintf(out, size, "--");
+	else if (nk_ui_pad_style() == PAD_STYLE_XBOX && button < PAD_BUTTON_NAMES)
+		snprintf(out, size, "%s  (button %d)", Xbox_button_names[button], button);
+	else
+		snprintf(out, size, "Button %d", button);
+}
+
+static int s_pad_binding;	// waiting for the game-menu button
+
+static void nk_ui_build_pad_buttons(struct nk_context *ctx, void *userdata)
+{
+	static const float split[] = { 0.36f, 0.40f, 0.24f };
+	int *running = (int *)userdata;
+	int caught = event_pad_captured();
+	char text[40];
+
+	if (s_pad_binding && caught >= 0)
+	{
+		GameCfg.PadPause = caught;
+		s_pad_binding = 0;
+	}
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
+	if (nk_button_label(ctx, "Done"))
+		*running = 0;
+	if (nk_button_label(ctx, "Restore default"))
+		GameCfg.PadPause = PAD_PAUSE_DEFAULT;
+	nk_layout_row(ctx, NK_DYNAMIC, NK_UI_ROW_HEIGHT, 3, split);
+	nk_label(ctx, "Game menu (Esc)", NK_TEXT_LEFT);
+	if (s_pad_binding)
+		snprintf(text, sizeof(text), "Press a button...");
+	else
+		nk_ui_pad_button_name(text, sizeof(text), GameCfg.PadPause);
+	nk_label(ctx, text, NK_TEXT_CENTERED);
+	if (nk_button_label(ctx, s_pad_binding ? "Cancel" : "Change"))
+	{
+		s_pad_binding = !s_pad_binding;
+		if (s_pad_binding)
+			event_pad_capture_begin();
+		else
+			event_pad_capture_end();
+	}
+}
+
+void nk_ui_pad_buttons_menu(void)
+{
+	int running = 1;
+
+	nk_ui_init_once();
+	s_pad_binding = 0;
+	while (running)
+		if (!nk_ui_frame("Controller", nk_vec2(0.5f, 0.3f), nk_ui_build_pad_buttons, &running))
+			break;
+	event_pad_capture_end();
+	s_pad_binding = 0;
+	WriteConfigFile();
+}
+
 void nk_ui_menu_size(void)
 {
 	int running = 1;
