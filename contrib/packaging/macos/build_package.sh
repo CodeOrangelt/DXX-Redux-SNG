@@ -37,6 +37,7 @@ build_app() {
     mkdir -p $contents/Resources
     mkdir -p $contents/libs
     cp -p $builddir/$name $contents/MacOS
+    strip -x $contents/MacOS/$name	# before codesign, which strip would void
     cp -p $srcdir/arch/cocoa/Info.plist $contents
     cp -p $srcdir/arch/cocoa/${name}.icns $contents/Resources
     echo -n "APPL${appltag}" > $contents/PkgInfo

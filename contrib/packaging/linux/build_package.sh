@@ -60,6 +60,7 @@ build_appimage() {
         exit 1
     fi
     cp build${dir}/main/${exename} ${appdir}/usr/bin/${name}
+    strip ${appdir}/usr/bin/${name}
 
     # Hi-res add-on, D1 only (see the download above).
     if [ "${dir}" = "d1" ] && [ -f d1xr-hires.dxa ]; then
