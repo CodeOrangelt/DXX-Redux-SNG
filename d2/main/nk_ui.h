@@ -102,6 +102,7 @@ int nk_ui_scale_preset_count(void);
 int nk_ui_scale_preset(int index);
 int nk_ui_scale_nearest_preset(int percent);
 void nk_ui_menu_size(void);
+void nk_ui_reticle_menu(void);
 
 // Presents the panels built this frame; see nk_ui.c.
 void nk_ui_flush(void);

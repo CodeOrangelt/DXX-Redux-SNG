@@ -101,6 +101,7 @@ extern span weapon_window_left[],weapon_window_left_hires[],weapon_window_right[
 #define WinBoxRight (HIRESMODE?weapon_window_right_hires:weapon_window_right)
 
 // defines for the reticle(s)
+grs_bitmap *gauges_classic_reticle_part(int part, int *dx, int *dy, int *w, int *h);
 #define RET_TYPE_CLASSIC        0
 #define RET_TYPE_CLASSIC_REBOOT 1
 #define RET_TYPE_NONE           2
@@ -110,6 +111,24 @@ extern span weapon_window_left[],weapon_window_left_hires[],weapon_window_right[
 #define RET_TYPE_CROSS_V1       6
 #define RET_TYPE_CROSS_V2       7
 #define RET_TYPE_ANGLE          8
+// SNG: shape-list reticles, drawn the same in game and in the menu preview
+#define RET_TYPE_CHEVRON        9
+#define RET_TYPE_BRACKETS       10
+#define RET_TYPE_DIAMOND        11
+#define RET_TYPE_RING_DOT       12
+#define RET_TYPE_TRIPOD         13
+#define RET_TYPE_GAP_CROSS_DOT  14
+#define RET_TYPE_HALO           15
+#define RET_TYPE_COUNT          16
+
+enum { RET_PRIM_LINE, RET_PRIM_CIRCLE, RET_PRIM_DISK };
+#define RET_PRIM_MAX 16
+struct reticle_prim
+{
+	int kind;
+	float x0, y0, x1, y1;	// a circle or disk uses (x0, y0) and radius x1
+};
+int reticle_shape(int type, float size, struct reticle_prim *out);
 
 #define RET_COLOR_DEFAULT_R     0
 #define RET_COLOR_DEFAULT_G     32

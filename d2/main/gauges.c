@@ -3728,6 +3728,96 @@ static const xy primary_offsets[4] = 	{ {-30,14}, {-16,6},	{-15,6}, {-8, 2} };
 static const xy secondary_offsets[4] =	{ {-24,2},	{-12,0}, {-12,1}, {-6,-2} };
 
 //draw the reticle
+static int ret_line(struct reticle_prim *p, int n, float x0, float y0, float x1, float y1)
+{
+	p[n].kind = RET_PRIM_LINE;
+	p[n].x0 = x0; p[n].y0 = y0; p[n].x1 = x1; p[n].y1 = y1;
+	return n + 1;
+}
+
+static int ret_round(struct reticle_prim *p, int n, int kind, float x, float y, float r)
+{
+	p[n].kind = kind;
+	p[n].x0 = x; p[n].y0 = y; p[n].x1 = r; p[n].y1 = 0;
+	return n + 1;
+}
+
+#define RET_SIN60 0.866f
+
+// SNG: the newer reticles as primitives around (0,0), `size` across
+int reticle_shape(int type, float size, struct reticle_prim *p)
+{
+	float h = size / 2, f = size / 5, g = size / 8;
+	int n = 0;
+
+	switch (type)
+	{
+		case RET_TYPE_CHEVRON:
+			n = ret_line(p, n, -h, h * 0.6f, 0, 0);
+			n = ret_line(p, n, 0, 0, h, h * 0.6f);
+			n = ret_round(p, n, RET_PRIM_DISK, 0, -f, g / 2);
+			break;
+		case RET_TYPE_BRACKETS:
+			n = ret_line(p, n, -h, -h, -h + f, -h);
+			n = ret_line(p, n, -h, -h, -h, -h + f);
+			n = ret_line(p, n, h, -h, h - f, -h);
+			n = ret_line(p, n, h, -h, h, -h + f);
+			n = ret_line(p, n, -h, h, -h + f, h);
+			n = ret_line(p, n, -h, h, -h, h - f);
+			n = ret_line(p, n, h, h, h - f, h);
+			n = ret_line(p, n, h, h, h, h - f);
+			n = ret_round(p, n, RET_PRIM_DISK, 0, 0, g / 2);
+			break;
+		case RET_TYPE_DIAMOND:
+			n = ret_line(p, n, 0, -h, h, 0);
+			n = ret_line(p, n, h, 0, 0, h);
+			n = ret_line(p, n, 0, h, -h, 0);
+			n = ret_line(p, n, -h, 0, 0, -h);
+			n = ret_round(p, n, RET_PRIM_DISK, 0, 0, g / 2);
+			break;
+		case RET_TYPE_RING_DOT:
+			n = ret_round(p, n, RET_PRIM_CIRCLE, 0, 0, h);
+			n = ret_round(p, n, RET_PRIM_DISK, 0, 0, g / 2);
+			break;
+		case RET_TYPE_TRIPOD:
+			n = ret_line(p, n, 0, -h, 0, -f);
+			n = ret_line(p, n, -h * RET_SIN60, h / 2, -f * RET_SIN60, f / 2);
+			n = ret_line(p, n, h * RET_SIN60, h / 2, f * RET_SIN60, f / 2);
+			break;
+		case RET_TYPE_GAP_CROSS_DOT:
+			n = ret_line(p, n, 0, -h, 0, -f);
+			n = ret_line(p, n, 0, h, 0, f);
+			n = ret_line(p, n, -h, 0, -f, 0);
+			n = ret_line(p, n, h, 0, f, 0);
+			n = ret_round(p, n, RET_PRIM_DISK, 0, 0, g / 2);
+			break;
+		case RET_TYPE_HALO:
+			n = ret_round(p, n, RET_PRIM_CIRCLE, 0, 0, h);
+			n = ret_line(p, n, 0, -h - f, 0, -h + g);
+			n = ret_line(p, n, 0, h + f, 0, h - g);
+			n = ret_line(p, n, -h - f, 0, -h + g, 0);
+			n = ret_line(p, n, h + f, 0, h - g, 0);
+			break;
+	}
+	return n;
+}
+
+static void show_reticle_shape(int type, int x, int y, int size)
+{
+	struct reticle_prim p[RET_PRIM_MAX];
+	int i, n = reticle_shape(type, (float)size, p);
+
+	for (i = 0; i < n; i++)
+	{
+		if (p[i].kind == RET_PRIM_LINE)
+			gr_uline(fl2f(x + p[i].x0), fl2f(y + p[i].y0), fl2f(x + p[i].x1), fl2f(y + p[i].y1));
+		else if (p[i].kind == RET_PRIM_CIRCLE)
+			gr_ucircle(fl2f(x + p[i].x0), fl2f(y + p[i].y0), fl2f(p[i].x1));
+		else
+			gr_disk(fl2f(x + p[i].x0), fl2f(y + p[i].y0), fl2f(max(p[i].x1, 1.0f)));
+	}
+}
+
 void show_reticle(int reticle_type, int secondary_display)
 {
 	int pnum = get_pnum_for_hud();
@@ -3870,9 +3960,34 @@ void show_reticle(int reticle_type, int secondary_display)
 		case RET_TYPE_NONE:
 			break;
 		default:
+			show_reticle_shape(reticle_type, x, y, size);
 			break;
 	}
 	gr_settransblend(GR_FADE_OFF, GR_BLEND_NORMAL);
+}
+
+// SNG: one piece of the classic reticle, ready to fire, for the menu preview:
+// its bitmap (paged in and uploaded) and where it sits around the centre
+grs_bitmap *gauges_classic_reticle_part(int part, int *dx, int *dy, int *w, int *h)
+{
+	static const int base[3] = { RETICLE_CROSS + 1, RETICLE_PRIMARY + 1, RETICLE_SECONDARY + 1 };
+	const xy *offsets[3] = { cross_offsets, primary_offsets, secondary_offsets };
+	int ofs = HIRESMODE ? 0 : 2;
+	grs_bitmap *bm;
+
+	if (part < 0 || part > 2)
+		return NULL;
+	PAGE_IN_GAUGE(base[part]);
+	bm = &GameBitmaps[GET_GAUGE_INDEX(base[part])];
+#ifdef OGL
+	if (!bm->gltexture)
+		ogl_loadbmtexture_f(bm, 0);
+#endif
+	*dx = HUD_SCALE_X_AR(offsets[part][ofs].x);
+	*dy = HUD_SCALE_Y_AR(offsets[part][ofs].y);
+	*w = HUD_SCALE_X_AR(bm->bm_w);
+	*h = HUD_SCALE_Y_AR(bm->bm_h);
+	return bm;
 }
 
 void show_mousefs_indicator(int mx, int my, int mz, int x, int y, int size)
