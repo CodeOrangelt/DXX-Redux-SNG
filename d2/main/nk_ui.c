@@ -93,6 +93,7 @@ static void nk_ui_note(const char *text, float extra_rows);
 #include "shotimg.h"
 #include "vers_id.h"
 #include "physfsx.h"
+#include "duelbot.h"
 
 // Declared in mouse.h. Without touching this, the cursor-autohide timer in
 // mouse_cursor_autohide() (driven by event_poll(), which we bypass with our
@@ -1932,7 +1933,7 @@ void nk_ui_advanced_options(void)
 	X(PrimaryDupFactor) X(SecondaryDupFactor) X(SecondaryCapFactor) X(obs_delay) X(obs_min) \
 	X(HomingUpdateRate) X(RemoteHitSpark) X(AllowCustomModelsTextures) X(ReducedFlash) X(DisableFOVChange) \
 	X(WeaponStun) X(PurpleFlash) X(VulcanShake) X(FusionShake) X(FastDoor) X(QuietFan) \
-	X(DarkSmartBlobs) X(SmallerSpawn) \
+	X(DarkSmartBlobs) X(SmallerSpawn) X(CpuCount) X(CpuSkill) \
 	X(StaticPowerups) X(StaticFusion) X(StaticPlasma) X(StaticVulcan) X(StaticSpread) X(StaticLasers) \
 	X(FusionSpawn) X(VulcanSpawn) X(LasersSpawn) X(PlasmaSpawn) X(SpreadSpawn) X(SmartsSpawn) X(HomersSpawn) X(BombsSpawn) X(MegasSpawn)
 
@@ -2265,13 +2266,34 @@ static void nk_ui_build_hosting(struct nk_context *ctx, void *userdata)
 		nk_tree_pop(ctx);
 	}
 
-	if (nk_tree_push(ctx, NK_TREE_TAB, "Players & Observers", NK_MINIMIZED))
+	if (nk_tree_push(ctx, NK_TREE_TAB, "Players/CPUs & Observers", NK_MINIMIZED))
 	{
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	v = Netgame.max_numplayers;
-	nk_labelf(ctx, NK_TEXT_LEFT, "Maximum players: %d", Netgame.max_numplayers);
+	if (Netgame.CpuCount)
+		nk_labelf(ctx, NK_TEXT_LEFT, "Maximum players: %d (%d human + %d CPU)", Netgame.max_numplayers, Netgame.max_numplayers - Netgame.CpuCount, Netgame.CpuCount);
+	else
+		nk_labelf(ctx, NK_TEXT_LEFT, "Maximum players: %d", Netgame.max_numplayers);
 	nk_slider_int(ctx, 2, &v, numplayers_limit, 1);
 	Netgame.max_numplayers = (ubyte)v;
+
+	// SNG: CPUs take seats at start; a human joining a full game bumps one
+	if (Netgame.CpuCount > Netgame.max_numplayers - 1)
+		Netgame.CpuCount = Netgame.max_numplayers - 1;
+	if (Netgame.gamemode == NETGAME_COOPERATIVE || Netgame.gamemode == NETGAME_SURVIVAL || Netgame.gamemode == NETGAME_RACE)
+		Netgame.CpuCount = 0;	// race fills its own field with race bots
+	v = Netgame.CpuCount;
+	nk_labelf(ctx, NK_TEXT_LEFT, "CPU players: %d", Netgame.CpuCount);
+	nk_slider_int(ctx, 0, &v, Netgame.max_numplayers - 1, 1);
+	Netgame.CpuCount = (ubyte)v;
+
+	if (Netgame.CpuCount)
+	{
+		v = Netgame.CpuSkill;
+		nk_labelf(ctx, NK_TEXT_LEFT, "CPU skill: %s", duelbot_tier_name(Netgame.CpuSkill));
+		nk_slider_int(ctx, 0, &v, DUEL_TIERS - 1, 1);
+		Netgame.CpuSkill = (ubyte)v;
+	}
 
 	v = Netgame.max_numobservers;
 	nk_labelf(ctx, NK_TEXT_LEFT, "Maximum observers: %d", Netgame.max_numobservers);

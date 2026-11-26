@@ -34,6 +34,7 @@
 #include "player.h"
 #include "gameseq.h"
 #include "fireball.h"
+#include "duelbot.h"
 #include "net_udp.h"
 #include "dxma.h"
 #include "game.h"
@@ -223,6 +224,9 @@ int num_active_udp_changed = 0;
 static int UDP_Socket[3] = { -1, -1, -1 };
 // SNG: Play-menu Survival -- a netgame no one else can see or join
 static int Solo_survival = 0;
+static int Auto_host = 0;		// headless CPU test host: no lobby, no UPnP
+static int Auto_host_watches;	// dedicated server: the host only observes
+static int human_seats(void);
 static char UDP_MyPort[6] = "";
 
 // Accessor for the Nuklear-based advanced-options UI (nk_ui.c), which lives
@@ -735,11 +739,8 @@ int udp_receive_packet(int socknum, ubyte *text, int len, struct _sockaddr *send
 /* Tracker initialization */
 int udp_tracker_init()
 {
-	int tracker_port = d_rand() % 0xffff;
+	int tracker_port = 0;	// the OS picks: two servers on one box must not collide
 	int i;
-
-	while (tracker_port <= 1024)
-		tracker_port = d_rand() % 0xffff;
 
 	memset( TrackerSockets, 0, sizeof( TrackerSockets ) );
 	TrackerCount = 0;
@@ -748,6 +749,9 @@ int udp_tracker_init()
 		iTrackerVerified[i] = 0;
 		TrackerHudWarned[i] = 0;
 	}
+
+	if (duelbot_benching())
+		return 0;
 
 	// Open the socket
 	udp_open_socket( 2, tracker_port );
@@ -2915,6 +2919,14 @@ void net_udp_welcome_player(UDP_sequence_packet *their)
 					multi_disconnect_player(give_up);
 			}
 
+			// A human outranks a CPU for a seat, the same way.
+			{
+				int give_up = duelbot_drop_one();
+
+				if (give_up > 0)
+					multi_disconnect_player(give_up);
+			}
+
 			for (i = 0; i < Netgame.numplayers; i++)
 				if (Netgame.players[i].connected)
 					activeplayers++;
@@ -3514,6 +3526,11 @@ void net_udp_add_player(UDP_sequence_packet *p)
 	{
 		return;		// too many of em
 	}
+	if (Network_status == NETSTAT_STARTING && N_players >= human_seats())
+	{
+		net_udp_dump_player(p->player.protocol.udp.addr, p->token, DUMP_FULL);
+		return;		// the rest are CPU seats
+	}
 
 	ClipRank (&p->player.rank);
 	memcpy( Netgame.players[N_players].callsign, p->player.callsign, CALLSIGN_LEN+1 );
@@ -3707,7 +3724,7 @@ void net_udp_send_endlevel_packet(void)
 		}
 
 		for (i = 1; i < MAX_PLAYERS; i++)
-			if (Players[i].connected != CONNECT_DISCONNECTED && !race_player_is_bot(i))
+			if (Players[i].connected != CONNECT_DISCONNECTED && !race_player_is_bot(i) && !multi_cpu_slot(i))
 				dxx_sendto (UDP_Socket[0], buf, len, 0, (struct sockaddr *)&Netgame.players[i].protocol.udp.addr, sizeof(struct _sockaddr));
 
 		forward_to_observers(buf, len, 1);
@@ -3997,8 +4014,8 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 			}
 		}
 		buf[len] = tmpvar;								len++;
-		buf[len] = Netgame.numconnected;						len++;
-		buf[len] = Netgame.max_numplayers;						len++;
+		buf[len] = max(1, Netgame.numconnected - !!Netgame.host_is_obs);	len++;	// SNG: a watching host is no seat; 0 delists
+		buf[len] = Netgame.max_numplayers - !!Netgame.host_is_obs;		len++;
 		buf[len] = Netgame.game_flags;							len++;
 
 		{
@@ -4219,6 +4236,9 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.RaceBotSlots;						len++;
 		buf[len] = Netgame.team_color[0];						len++;
 		buf[len] = Netgame.team_color[1];						len++;
+		buf[len] = Netgame.CpuCount;							len++;
+		buf[len] = Netgame.CpuSlots;							len++;
+		buf[len] = Netgame.CpuSkill;							len++;
 
 		if(info_upid == UPID_SYNC) {
 			PUT_INTEL_INT(buf + len, player_tokens[to_player]); len += 4; 
@@ -4633,6 +4653,9 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		Netgame.RaceBotSlots = data[len] & ~1;					len++;
 		Netgame.team_color[0] = data[len];						len++;
 		Netgame.team_color[1] = data[len];						len++;
+		Netgame.CpuCount = data[len];							len++;
+		Netgame.CpuSlots = data[len] & ~1;						len++;	// slot 0 is the host
+		Netgame.CpuSkill = min(data[len], DUEL_TIERS - 1);			len++;
 
 		if (Netgame.host_is_obs) {
 			multi_make_player_ghost(0);
@@ -5078,6 +5101,31 @@ int net_udp_sync_poll( newmenu *menu, d_event *event, void *userdata )
 	return rval;
 }
 
+// SNG: CPUs hold their seats from the lobby on; humans get the rest
+static int human_seats(void)
+{
+	return max(1, Netgame.max_numplayers - Netgame.CpuCount);
+}
+
+static char Lobby_cpu_text[MAX_PLAYERS][45];
+
+// the rows after the humans list the CPUs that will take those seats
+static void lobby_show_cpus(newmenu_item *menus)
+{
+	int cpus = min((int)Netgame.CpuCount, Netgame.max_numplayers - N_players);
+	int i;
+
+	for (i = N_players; i < MAX_PLAYERS; i++)
+	{
+		if (i < N_players + cpus)
+			snprintf(Lobby_cpu_text[i], sizeof(Lobby_cpu_text[i]), "%d. CPU%d (%s)", i + 1, i % 10, duelbot_tier_name(Netgame.CpuSkill));
+		else
+			snprintf(Lobby_cpu_text[i], sizeof(Lobby_cpu_text[i]), "%d. ", i + 1);
+		menus[i].text = Lobby_cpu_text[i];
+		menus[i].value = i < N_players + cpus;
+	}
+}
+
 int net_udp_start_poll( newmenu *menu, d_event *event, void *userdata )
 {
 	newmenu_item *menus = newmenu_get_items(menu);
@@ -5114,8 +5162,8 @@ int net_udp_start_poll( newmenu *menu, d_event *event, void *userdata )
 		}
 	}
 
-	if ( nm > Netgame.max_numplayers ) {
-		nm_messagebox( TXT_ERROR, 1, TXT_OK, "%s %d %s", TXT_SORRY_ONLY, Netgame.max_numplayers, TXT_NETPLAYERS_IN );
+	if ( nm > human_seats() ) {
+		nm_messagebox( TXT_ERROR, 1, TXT_OK, "%s %d %s", TXT_SORRY_ONLY, human_seats(), TXT_NETPLAYERS_IN );
 		// Turn off the last player highlighted
 		for (i = N_players; i > 0; i--)
 			if (menus[i].value == 1) 
@@ -5169,6 +5217,8 @@ int net_udp_start_poll( newmenu *menu, d_event *event, void *userdata )
 		}
    }
 
+	if (Netgame.CpuCount)
+		lobby_show_cpus(menus);
 	return 0;
 }
 
@@ -6070,6 +6120,7 @@ void netgame_set_defaults()
 	Netgame.AllowPreferredColors = 0;
 	Netgame.OriginalD1Weapons = 0;
 	Netgame.HomingUpdateRate = 25;
+	Netgame.CpuSkill = NDL - 1;
 	Netgame.RemoteHitSpark = 0;
 	Netgame.AllowCustomModelsTextures = 0;
 	Netgame.ReducedFlash = 0;
@@ -6424,6 +6475,114 @@ int net_udp_setup_solo_survival(void)
 		return 1;
 
 	net_udp_close();
+	return 0;
+}
+
+// SNG: an always-open 1v1 server on RDL solo defaults. Either the host's own
+// ship is the CPU (host_plays) or the host only watches two humans.
+#define FFA_SECONDARY_DUP	2
+
+int net_udp_dedicated_host(int level, int port, const char *name, int listed, int host_plays, int skill, int extra_cpus)
+{
+	multi_protocol = MULTI_PROTO_UDP;
+	net_udp_init();
+	net_udp_reset_connection_statuses();
+	change_playernum_to(0);
+	netgame_set_defaults();
+
+	snprintf(Netgame.game_name, sizeof(Netgame.game_name), "%s", name);
+	strcpy(Netgame.mission_name, Current_mission_filename);
+	strcpy(Netgame.mission_title, Current_mission_longname);
+	Netgame.levelnum = level;
+	Netgame.gamemode = NETGAME_ANARCHY;
+	Netgame.max_numplayers = extra_cpus ? MAX_PLAYERS : host_plays ? 2 : 3;	// a watching host still takes a slot
+	Netgame.max_numobservers = MAX_OBSERVERS;
+	Netgame.game_flags &= ~NETGAME_FLAG_CLOSED;
+	Netgame.difficulty = Difficulty_level = NDL - 1;
+	Netgame.control_invul_time = i2f(30000);	// an idle server must never let the reactor wake
+	Netgame.KillGoal = 0;
+	Netgame.PlayTimeAllowed = 0;
+	Netgame.AllowedItems = NETFLAG_DOPOWERUP & ~(NETFLAG_DOCLOAK | NETFLAG_DOINVUL);
+	Netgame.SpawnStyle = SPAWN_STYLE_NO_INVUL;
+	Netgame.GaussAmmoStyle = GAUSS_STYLE_DEPLETING;
+	Netgame.PacketsPerSec = 40;
+	Netgame.RetroProtocol = 1;
+	Netgame.BrightPlayers = 1;
+	Netgame.ShowEnemyNames = 0;
+	Netgame.AllowPreferredColors = 1;
+	Netgame.HomingUpdateRate = 25;
+	Netgame.Tracker = listed;
+	Netgame.CpuCount = extra_cpus;
+	Netgame.CpuSkill = skill;
+	if (extra_cpus)
+	{
+		Netgame.StaticLasers = Netgame.StaticVulcan = Netgame.StaticSpread = 1;
+		Netgame.StaticPlasma = Netgame.StaticFusion = 1;
+		Netgame.SecondaryDupFactor = FFA_SECONDARY_DUP;
+	}
+	snprintf(UDP_MyPort, sizeof(UDP_MyPort), "%d", port);
+
+	Auto_host = 1;
+	Auto_host_watches = !host_plays;
+	return net_udp_start_game();
+}
+
+// headless CPU test host (duelbot bench): anarchy on the loaded mission, no lobby
+int net_udp_auto_host(int cpus, int level, int port)
+{
+	multi_protocol = MULTI_PROTO_UDP;
+	net_udp_init();
+	net_udp_reset_connection_statuses();
+	change_playernum_to(0);
+	netgame_set_defaults();
+
+	snprintf(Netgame.game_name, sizeof(Netgame.game_name), "CPU test");
+	strcpy(Netgame.mission_name, Current_mission_filename);
+	strcpy(Netgame.mission_title, Current_mission_longname);
+	Netgame.levelnum = level;
+	Netgame.gamemode = NETGAME_ANARCHY;
+	Netgame.max_numplayers = MAX_PLAYERS;
+	Netgame.max_numobservers = 0;
+	Netgame.game_flags &= ~NETGAME_FLAG_CLOSED;
+	Netgame.Tracker = 0;
+	Netgame.CpuCount = cpus;
+	snprintf(UDP_MyPort, sizeof(UDP_MyPort), "%d", port);
+
+	Auto_host = 1;
+	return net_udp_start_game();
+}
+
+// headless test client: joins host:port straight past the game-info menu
+int net_udp_auto_join(const char *host, int port, int my_port)
+{
+	direct_join dj;
+
+	memset(&dj, 0, sizeof(dj));
+	multi_protocol = MULTI_PROTO_UDP;
+	net_udp_init();
+	snprintf(UDP_MyPort, sizeof(UDP_MyPort), "%d", my_port);
+	if (udp_open_socket(0, my_port) != 0)
+		return 0;
+	if (udp_dns_filladdr((char *)host, port, &dj.host_addr) < 0)
+		return 0;
+
+	multi_new_game();
+	net_udp_reset_connection_statuses();
+	N_players = 0;
+	change_playernum_to(1);
+	memcpy(&Netgame.players[0].protocol.udp.addr, &dj.host_addr, sizeof(struct _sockaddr));
+	dj.start_time = timer_query();
+	dj.connecting = 2;
+
+	while (dj.connecting)
+	{
+		int joined = net_udp_game_connect(&dj);
+
+		if (joined)
+			return joined;
+		timer_update();
+	}
+
 	return 0;
 }
 
@@ -6856,6 +7015,17 @@ static int net_udp_solo_roster(void)
 	N_players = 1;
 	Host_is_obs = 0;
 	Players[0].connected = CONNECT_PLAYING;
+	if (Auto_host_watches)
+	{
+		Netgame.host_is_obs = HOST_OBS_SERVER;
+		Host_is_obs = 1;
+		Game_mode |= GM_OBSERVER;
+		Current_obs_player = 0;
+#ifdef USE_TRACKER
+		if (Netgame.Tracker)
+			udp_tracker_register();
+#endif
+	}
 
 	for (i = N_players; i < MAX_PLAYERS; i++)
 	{
@@ -6877,7 +7047,7 @@ net_udp_select_players(void)
 
 	net_udp_add_player( &UDP_Seq );
 
-	if (Solo_survival)
+	if (Solo_survival || Auto_host)
 		return net_udp_solo_roster();
 
 	for (i=0; i< MAX_PLAYERS+4; i++ ) {
@@ -6892,7 +7062,9 @@ net_udp_select_players(void)
 	else
 		sprintf( text[0], "%d. %s%-20s", 1, RankStrings[Netgame.players[Player_num].rank],Players[Player_num].callsign );
 
-	sprintf( title, "%s %d %s", TXT_TEAM_SELECT, Netgame.max_numplayers, TXT_TEAM_PRESS_ENTER );
+	sprintf( title, "%s %d %s", TXT_TEAM_SELECT, human_seats(), TXT_TEAM_PRESS_ENTER );
+	if (Netgame.CpuCount)
+		lobby_show_cpus(m);
 
 GetPlayersAgain:
 #ifdef USE_TRACKER
@@ -6937,8 +7109,8 @@ abort:
 			N_players++;
 	}
 	
-	if ( N_players > Netgame.max_numplayers) {
-		nm_messagebox( TXT_ERROR, 1, TXT_OK, "%s %d %s", TXT_SORRY_ONLY, Netgame.max_numplayers, TXT_NETPLAYERS_IN );
+	if ( N_players > human_seats()) {
+		nm_messagebox( TXT_ERROR, 1, TXT_OK, "%s %d %s", TXT_SORRY_ONLY, human_seats(), TXT_NETPLAYERS_IN );
 		N_players = save_nplayers;
 		goto GetPlayersAgain;
 	}
@@ -7014,14 +7186,14 @@ int net_udp_start_game(void)
 	if (i != 0)
 		return 0;
 	
-	if (!Solo_survival && atoi(UDP_MyPort) != UDP_PORT_DEFAULT)
+	if (!Solo_survival && !duelbot_no_lan() && atoi(UDP_MyPort) != UDP_PORT_DEFAULT)
 		i = udp_open_socket(1, UDP_PORT_DEFAULT); // Default port open for Broadcasts
 
 	if (i != 0)
 		return 0;
 
 #ifdef USE_UPNP
-	if (!Solo_survival)
+	if (!Solo_survival && (!Auto_host || Auto_host_watches))
 	{
 		// UPnP discovery is a blocking network round-trip (up to a couple
 		// seconds, more if it has to retry across several interfaces) --
@@ -7071,6 +7243,7 @@ int net_udp_start_game(void)
 
 	if(net_udp_select_players())
 	{
+		duelbot_claim_net_slots();
 		StartNewLevel(Netgame.levelnum);
 	}
 	else
@@ -7466,7 +7639,7 @@ void net_udp_timeout_check(fix64 time)
 			// silence that times a real player out is all a bot will ever
 			// produce. The host drives them locally and clients are fed
 			// their positions by the host; neither may drop them.
-			if (race_player_is_bot(i))
+			if (race_player_is_bot(i) || multi_cpu_slot(i))
 				continue;
 
 			if ((i != Player_num) && (Players[i].connected != CONNECT_DISCONNECTED))
@@ -7930,7 +8103,7 @@ void net_udp_noloss_process_queue(fix64 time)
 			// level, and the queue would eventually dump the slot by address
 			// -- which, all bot addresses being zero, would take every bot
 			// in the race down with it.
-			if (race_player_is_bot(plc))
+			if (race_player_is_bot(plc) || multi_cpu_slot(plc))	// a CPU can't ACK either
 				UDP_mdata_queue[queuec].player_ack[plc] = 1;
 
 			if (!UDP_mdata_queue[queuec].player_ack[plc])
@@ -8117,7 +8290,7 @@ void net_udp_send_mdata_direct(ubyte *data, int data_len, int pnum, int needack)
 
 	if (pnum == Player_num && multi_i_am_master())
 		forward_to_observers(buf, len, needack); 
-	else
+	else if (!multi_cpu_slot(pnum))
 		dxx_sendto (UDP_Socket[0], buf, len, 0, (struct sockaddr *)&Netgame.players[pnum].protocol.udp.addr, sizeof(struct _sockaddr));
 
 	if (needack)
@@ -8174,7 +8347,7 @@ void net_udp_send_mdata(int needack, fix64 time)
 		{
 			for (i = 1; i < MAX_PLAYERS; i++)
 			{
-				if (Players[i].connected == CONNECT_PLAYING)
+				if (Players[i].connected == CONNECT_PLAYING && !multi_cpu_slot(i))
 				{
 					dxx_sendto (UDP_Socket[0], buf, len, 0, (struct sockaddr *)&Netgame.players[i].protocol.udp.addr, sizeof(struct _sockaddr));
 					pack[i] = 0;
@@ -8260,7 +8433,7 @@ void net_udp_process_mdata (ubyte *data, int data_len, struct _sockaddr sender_a
 			
 			for (i = 1; i < MAX_PLAYERS; i++)
 			{
-				if ((i != pnum) && Players[i].connected == CONNECT_PLAYING)
+				if ((i != pnum) && Players[i].connected == CONNECT_PLAYING && !multi_cpu_slot(i))
 				{
 					dxx_sendto (UDP_Socket[0], data, data_len, 0, (struct sockaddr *)&Netgame.players[i].protocol.udp.addr, sizeof(struct _sockaddr));
 					pack[i] = 0;
@@ -8540,7 +8713,7 @@ static void net_udp_send_pdata_for(int pnum)
 		if (multi_i_am_master())
 		{
 			for (i = 1; i < MAX_PLAYERS; i++)
-				if (Players[i].connected != CONNECT_DISCONNECTED && !race_player_is_bot(i)) {
+				if (Players[i].connected != CONNECT_DISCONNECTED && !race_player_is_bot(i) && !multi_cpu_slot(i)) {
 					dxx_sendto (UDP_Socket[0], buf, len, 0, (struct sockaddr *)&Netgame.players[i].protocol.udp.addr, sizeof(struct _sockaddr));
 				}
 		}
@@ -8554,6 +8727,13 @@ static void net_udp_send_pdata_for(int pnum)
 void net_udp_send_pdata()
 {
 	int i;
+
+	// only the host knows where its CPUs are, so it reports them on its own
+	// tick -- even when the host itself is only observing
+	if (multi_i_am_master())
+		for (i = 1; i < MAX_PLAYERS; i++)
+			if (multi_cpu_slot(i))
+				net_udp_send_pdata_for(i);
 
 	if(is_observer()) { return; }
 
@@ -8790,7 +8970,7 @@ void net_udp_process_pdata ( ubyte *data, int data_len, struct _sockaddr sender_
 			{
 				for (i = 1; i < MAX_PLAYERS; i++)
 				{
-					if (i != pd.Player_num && Players[i].connected != CONNECT_DISCONNECTED) // not to sender or disconnected players - right.
+					if (i != pd.Player_num && Players[i].connected != CONNECT_DISCONNECTED && !multi_cpu_slot(i)) // not to sender, disconnected players or CPUs
 						dxx_sendto (UDP_Socket[0], data, data_len, 0, (struct sockaddr *)&Netgame.players[i].protocol.udp.addr, sizeof(struct _sockaddr));
 				}
 			}
@@ -9176,7 +9356,7 @@ static void net_udp_slk_start(int game_port)
 {
 	int slk_port = game_port ? game_port + SLK_PORT_OFFSET : 0;
 
-	if (Solo_survival)
+	if (Solo_survival || duelbot_benching())
 		return;
 	slk_bridge_start(slk_port, GameArg.MplSlkFacilitatorAddr, GameArg.MplSlkFacilitatorPort);
 }
@@ -9255,7 +9435,7 @@ static void net_udp_slk_frame(fix64 time)
 	{
 		if (i == Player_num || !Players[i].connected)
 			continue;
-		if (race_player_is_bot(i))
+		if (race_player_is_bot(i) || multi_cpu_slot(i))
 			continue;
 		if (is_observer() && i != multi_who_is_master())
 			continue;
@@ -9409,7 +9589,7 @@ static void net_udp_report_transports(fix64 time)
 	{
 		struct sockaddr_in *peer = net_udp_slk_player_addr(i);
 
-		if (i == Player_num || !Players[i].connected || race_player_is_bot(i))
+		if (i == Player_num || !Players[i].connected || race_player_is_bot(i) || multi_cpu_slot(i))
 			continue;
 
 		if (slk_bridge_is_connected(peer))
@@ -9428,7 +9608,7 @@ void net_udp_send_to_player(ubyte* data, int len, int to_player) {
 	// address is a zeroed sockaddr. Without this every caller would push a
 	// packet per tick into that hole, and clients would try to hole-punch a
 	// route to a peer that does not exist.
-	if (race_player_is_bot(to_player))
+	if (race_player_is_bot(to_player) || multi_cpu_slot(to_player))
 		return;
 
 	if(connection_statuses[to_player].type == CONNT_DIRECT) {
@@ -9526,7 +9706,7 @@ void net_udp_p2p_ping_frame(fix64 time)
 		if(i == Player_num) continue;
 		if(! Players[i].connected) continue;
 		// Never hole-punch a bot: there is no machine to reach.
-		if(race_player_is_bot(i)) continue;
+		if(race_player_is_bot(i) || multi_cpu_slot(i)) continue;
 
 		if(is_observer() && !multi_i_am_master() && i > 0) { return; }
 
@@ -9579,7 +9759,7 @@ void net_udp_ping_frame(fix64 time)
 			if (Players[i].connected == CONNECT_DISCONNECTED)
 				continue;
 
-			if (race_player_is_bot(i))
+			if (race_player_is_bot(i) || multi_cpu_slot(i))
 				continue;		// no peer to measure a round trip to
 			dxx_sendto (UDP_Socket[0], buf, sizeof(buf), 0, (struct sockaddr *)&Netgame.players[i].protocol.udp.addr, sizeof(struct _sockaddr));
 		}

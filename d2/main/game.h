@@ -99,6 +99,7 @@ extern int ft_preference;
 #define GM_MULTI        38      // You are in some type of multiplayer game
 #define GM_OBSERVER     4096    // You are observing this game
 #define GM_RACE         8192    // Race mode for network play
+#define GM_DUEL         16384   // SNG: local 1v1 against the CPU duel bot
 
 #define NDL 5       // Number of difficulty levels.
 

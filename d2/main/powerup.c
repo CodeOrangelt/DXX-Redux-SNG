@@ -248,6 +248,24 @@ int red_key_seg;
 #define STATIC_COLLECTED_HELIX   (1<<6)
 #define STATIC_COLLECTED_PHOENIX (1<<7)
 #define STATIC_COLLECTED_OMEGA   (1<<8)
+// SNG: a static weapon stays in the level for everyone; only who has it changes
+int powerup_is_static(int id)
+{
+	switch (id)
+	{
+		case POW_LASER:			return Netgame.StaticPowerups || Netgame.StaticLasers;
+		case POW_VULCAN_WEAPON:		return Netgame.StaticPowerups || Netgame.StaticVulcan;
+		case POW_SPREADFIRE_WEAPON:	return Netgame.StaticPowerups || Netgame.StaticSpread;
+		case POW_PLASMA_WEAPON:		return Netgame.StaticPowerups || Netgame.StaticPlasma;
+		case POW_FUSION_WEAPON:		return Netgame.StaticPowerups || Netgame.StaticFusion;
+		case POW_GAUSS_WEAPON:		return Netgame.StaticPowerups || Netgame.StaticGauss;
+		case POW_HELIX_WEAPON:		return Netgame.StaticPowerups || Netgame.StaticHelix;
+		case POW_PHOENIX_WEAPON:	return Netgame.StaticPowerups || Netgame.StaticPhoenix;
+		case POW_OMEGA_WEAPON:		return Netgame.StaticPowerups || Netgame.StaticOmega;
+		default:			return 0;
+	}
+}
+
 static unsigned int StaticPowerupsCollected = 0;
 
 void reset_static_powerups_collected(void)

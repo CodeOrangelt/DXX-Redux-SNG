@@ -46,6 +46,7 @@ char copyright[] = "DESCENT II  COPYRIGHT (C) 1994-1996 PARALLAX SOFTWARE CORPOR
 #include "bm.h"
 #include "inferno.h"
 #include "dxxerror.h"
+#include "duelbot.h"
 #include "game.h"
 #include "segment.h"		//for Side_to_verts
 #include "u_mem.h"
@@ -499,6 +500,7 @@ int main(int argc, char *argv[])
 	{
 		Game_mode = GM_GAME_OVER;
 		DoMenu();
+		duelbot_bench_start();
 	}
 
 	setjmp(LeaveEvents);

@@ -979,7 +979,7 @@ int object_is_trackable(int track_goal, object *tracker, fix *dot)
 //	--------------------------------------------------------------------------------------------
 int call_find_homing_object_complete(object *tracker, vms_vector *curpos)
 {
-	if (Game_mode & GM_MULTI) {
+	if (Game_mode & (GM_MULTI | GM_DUEL)) {	// in a duel, ships track ships
 		if (tracker->ctype.laser_info.parent_type == OBJ_PLAYER) {
 			//	It's fired by a player, so if robots present, track robot, else track player.
 			if (Game_mode & GM_MULTI_COOP)
@@ -1012,7 +1012,7 @@ int find_homing_object(vms_vector *curpos, object *tracker)
 
 	//	Find an object to track based on game mode (eg, whether in network play) and who fired it.
 
-	if (Game_mode & GM_MULTI)
+	if (Game_mode & (GM_MULTI | GM_DUEL))
 		return call_find_homing_object_complete(tracker, curpos);
 	else {
 		int	cur_min_trackable_dot;

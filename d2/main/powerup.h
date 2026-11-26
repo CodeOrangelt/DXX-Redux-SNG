@@ -133,5 +133,6 @@ extern int red_key_seg;
 
 // SNG: Static Powerups - resets the local player's per-life "already collected" tracker
 extern void reset_static_powerups_collected(void);
+int powerup_is_static(int id);	// SNG: Static Powerups netgame option
 
 #endif /* _POWERUP_H */

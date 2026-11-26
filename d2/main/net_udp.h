@@ -21,6 +21,10 @@ typedef struct direct_join
 	ubyte join_as_obs;
 } direct_join;
 
+int net_udp_auto_host(int cpus, int level, int port);
+int net_udp_dedicated_host(int level, int port, const char *name, int listed, int host_plays, int skill, int extra_cpus);
+int net_udp_auto_join(const char *host, int port, int my_port);
+
 int net_udp_game_connect(direct_join *dj);
 void net_udp_listen(void);
 

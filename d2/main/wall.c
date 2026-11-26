@@ -25,6 +25,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "pstypes.h"
 #include "gr.h"
 #include "wall.h"
+#include "duelbot.h"
 #include "switch.h"
 #include "inferno.h"
 #include "segment.h"
@@ -1076,7 +1077,7 @@ int wall_hit_process(segment *seg, int side, fix damage, int playernum, object *
 		return WHP_BLASTABLE;
 	}
 
-	if (playernum != Player_num)	//return if was robot fire
+	if (playernum != Player_num && !(obj && duelbot_is_bot(obj)))	//return if was robot fire
 		return WHP_NOT_SPECIAL;
 
 	Assert( playernum > -1 );

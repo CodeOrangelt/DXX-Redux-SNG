@@ -23,6 +23,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 
 #include "pstypes.h"
 #include "key.h"
+#include "duelbot.h"
 #include "joy.h"
 #include "timer.h"
 #include "dxxerror.h"
@@ -60,6 +61,9 @@ void read_flying_controls( object * obj )
 	fix	forward_thrust_time;
 
 	Assert(FrameTime > 0); 		//Get MATT if hit this!
+
+	if (duelbot_piloting(obj))
+		return;		// the bench autopilot has the stick
 
 // this section commented and moved to the bottom by WraithX
 //	if (Player_is_dead) {

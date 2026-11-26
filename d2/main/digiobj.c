@@ -23,6 +23,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "timer.h"
 #include "joy.h"
 #include "digi.h"
+#include "duelbot.h"
 #include "sounds.h"
 #include "args.h"
 #include "key.h"
@@ -341,6 +342,7 @@ int digi_link_sound_to_object3( int org_soundnum, short objnum, int forever, fix
 	object * objp;
 	int soundnum;
 
+	duelbot_hear_object(objnum, max_distance);	// SNG: CPUs listen too
 	soundnum = digi_xlat_sound(org_soundnum);
 
 	if ( max_volume < 0 ) return -1;
@@ -428,6 +430,7 @@ int digi_link_sound_to_pos2( int org_soundnum, short segnum, short sidenum, vms_
 	int i, volume, pan;
 	int soundnum;
 
+	duelbot_hear_pos(segnum, pos, max_distance);	// SNG: CPUs listen too
 	soundnum = digi_xlat_sound(org_soundnum);
 
 	if ( max_volume < 0 ) return -1;

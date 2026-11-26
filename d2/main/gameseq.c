@@ -68,6 +68,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "sounds.h"
 #include "args.h"
 #include "gameseq.h"
+#include "duelbot.h"
 #include "gamefont.h"
 #include "newmenu.h"
 #include "endlevel.h"
@@ -1039,6 +1040,11 @@ void StartNewGame(int start_level)
 	if (Race_sp_pending)
 		Game_mode |= GM_RACE;
 
+	if (Duel_pending)
+		Game_mode |= GM_DUEL;
+	Duel_pending = 0;
+	duelbot_new_match();
+
 	Next_level_num = 0;
 
 	InitPlayerObject();				//make sure player's object set up
@@ -1930,6 +1936,7 @@ void StartNewLevelSub(int level_num, int page_in_textures, int secret_flag)
 
 	copy_defaults_to_robot_all();
 	init_controlcen_for_level();
+	duelbot_level_start();
 
 	reset_respawnable_bots();
 
@@ -2007,7 +2014,7 @@ void ShowLevelIntro(int level_num)
 {
 	//if shareware, show a briefing?
 
-	if (!(Game_mode & GM_MULTI)) {
+	if (!(Game_mode & (GM_MULTI | GM_DUEL))) {
 		int i;
 
 		ubyte save_pal[sizeof(gr_palette)];

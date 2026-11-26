@@ -28,6 +28,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "gr.h"
 #include "inferno.h"
 #include "game.h"
+#include "duelbot.h"
 #include "key.h"
 #include "object.h"
 #include "physics.h"
@@ -414,6 +415,23 @@ static void update_frame_time(fix last_frametime)
 		FrameTime = MAX_FRAME_TIME;
 }
 
+// SNG: an empty server runs slow to stay cool, but still answers the network
+// at once, or the browser's ping would read the frame time
+#define IDLE_LISTEN_USEC	2000
+
+static void idle_server_wait(int64_t until_usec, int64_t *now_usec)
+{
+	if (!duelbot_idle_server())
+		return;
+	while (*now_usec + IDLE_LISTEN_USEC < until_usec)
+	{
+		timer_delay_usec(IDLE_LISTEN_USEC);
+		net_udp_listen();
+		timer_update();
+		*now_usec = timer_query_usec();
+	}
+}
+
 void calc_frame_time()
 {
 	int64_t timer_value_usec, next_timer_value_usec;
@@ -422,6 +440,9 @@ void calc_frame_time()
 	int req_time_usec_rem;
 	fix last_frametime = FrameTime;
 	int fps = GameCfg.VSync ? MAXIMUM_FPS : PlayerCfg.maxFps;
+
+	if (duelbot_bench_frame_time())
+		return;
 
 	if (fps == FPS_UNLIMITED)
 	{
@@ -448,7 +469,8 @@ void calc_frame_time()
 	if (timer_value_usec < next_timer_value_usec) {
 		// coarse sleep, then spin out the last half millisecond
 		if (GameArg.SysUseNiceFPS && next_timer_value_usec - timer_value_usec > 1000) {
-			timer_delay_usec(next_timer_value_usec - timer_value_usec - 500);
+			idle_server_wait(next_timer_value_usec - 500, &timer_value_usec);
+			timer_delay_usec(max(next_timer_value_usec - timer_value_usec - 500, 0));
 			timer_update();
 			timer_value_usec = timer_query_usec();
 		}
@@ -1279,7 +1301,7 @@ int game_handler(window *wind, d_event *event, void *data)
 				GameProcessFrame();
 			}
 
-			if (!Automap_active)		// efficiency hack
+			if (!Automap_active && !duelbot_headless())		// efficiency hack
 			{
 				if (force_cockpit_redraw) {			//screen need redrawing?
 					init_cockpit();
@@ -1554,6 +1576,8 @@ void GameProcessFrame(void)
 		fuelcen_update_all();
 
 		do_ai_frame_all();
+
+		duelbot_frame();
 
 		if (allowed_to_fire_laser())
 			FireLaser();				// Fire Laser!

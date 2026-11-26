@@ -77,6 +77,7 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "editor/editor.h"
 #endif
 #include "collide.h"
+#include "duelbot.h"
 #include "escort.h"
 #include "multibot.h"
 
@@ -328,8 +329,9 @@ void collide_player_and_wall( object * playerobj, fix hitspeed, short hitseg, sh
 	char ForceFieldHit=0;
 	int tmap_num,tmap_num2;
 
-	if (playerobj->id != Player_num) // Execute only for local player
+	if (playerobj->id != Player_num && !duelbot_is_bot(playerobj)) // local player, or the duel bot opening doors
 		return;
+	duelbot_hit_wall(playerobj, hitspeed, hitseg, hitwall);
 
 	if (is_observer()) { return; }
 
@@ -342,7 +344,8 @@ void collide_player_and_wall( object * playerobj, fix hitspeed, short hitseg, sh
 	if (TmapInfo[tmap_num].flags & TMI_FORCE_FIELD) {
 		vms_vector force;
 
-		PALETTE_FLASH_ADD(0, 0, 60);	//flash blue
+		if (playerobj == ConsoleObject)	// SNG: a CPU's bump isn't ours to see
+			PALETTE_FLASH_ADD(0, 0, 60);	//flash blue
 
 		//knock player around
 		force.x = 40*(d_rand() - 16384);
@@ -2245,6 +2248,8 @@ void apply_damage_to_player(object *playerobj, object *killer, fix damage, ubyte
 	// take hits while the human is waiting to respawn.
 	if (race_bot_take_damage(playerobj, killer, damage))
 		return;
+	if (duelbot_take_damage(playerobj, killer, damage))
+		return;
 
 	if (Player_is_dead)
 		return;
@@ -2493,6 +2498,7 @@ void collide_player_and_weapon( object * playerobj, object * weapon, vms_vector 
 				#endif
 			}
 
+			duelbot_weapon_hit(killer, playerobj, damage, weapon);
 			apply_damage_to_player( playerobj, killer, damage, 1);
 
 		}
@@ -2610,6 +2616,15 @@ extern int Network_got_powerup; // HACK!!!
 
 void collide_player_and_powerup( object * playerobj, object * powerup, vms_vector *collision_point ) {
 	if (object_is_observer(playerobj)) {
+		return;
+	}
+
+	if (duelbot_is_bot(playerobj)) {
+		if (duelbot_pickup(playerobj, powerup) && !((Game_mode & GM_MULTI) && powerup_is_static(powerup->id))) {
+			powerup->flags |= OF_SHOULD_BE_DEAD;
+			if (Game_mode & GM_MULTI)
+				multi_send_remobj(powerup-Objects);
+		}
 		return;
 	}
 

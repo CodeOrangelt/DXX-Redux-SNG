@@ -26,6 +26,8 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "powerup.h"
 #include "race.h"
 
+#define HOST_OBS_SERVER 2
+
 #ifdef USE_UDP
 #ifdef _WIN32
 #ifdef _WIN32_WINNT
@@ -61,7 +63,7 @@ extern int multi_protocol; // set and determinate used protocol
 #define MULTI_PROTO_UDP 1 // UDP protocol
 
 // What version of the multiplayer protocol is this? Increment each time something drastic changes in Multiplayer without the version number changes. Can be reset to 0 each time the version of the game changes
-#define MULTI_PROTO_VERSION 30015 // + Nuklear hosting/advanced-options UI, SmallerSpawn/NewSpawnAlgorithm, lite game-info rules summary/ping/SNG-toggles
+#define MULTI_PROTO_VERSION 30016 // + Nuklear hosting/advanced-options UI, SmallerSpawn/NewSpawnAlgorithm, lite game-info rules summary/ping/SNG-toggles + CPU players
 
 // PROTOCOL VARIABLES AND DEFINES - END
 
@@ -287,10 +289,19 @@ void multi_send_sng_flags(void);
 void multi_do_sng_flags(const ubyte *buf);
 void multi_disable_spawn_weapon_powerups(void);
 void multi_send_fire(int laser_gun, int laser_level, int laser_flags, int laser_fired, short laser_track);
+void multi_send_fire_for(int pnum, int laser_gun, int laser_level, int laser_flags, int laser_fired, short laser_track);
+void multi_send_player_explode_for(int pnum, char type);
+void multi_send_position_for(int pnum, int objnum);
+void multi_send_reappear_for(int pnum);
+void multi_send_kill_for(int pnum, int killer_objnum);
+void multi_send_cloak_for(int pnum);
+void multi_send_decloak_for(int pnum);
+int multi_cpu_slot(int pnum);
 void multi_send_destroy_controlcen(int objnum, int player);
 void multi_send_endlevel_start(int);
 void multi_send_player_explode(char type);
 void multi_send_message(void);
+void multi_send_message_for(int pnum, const char *text);
 void multi_send_obs_message(void);
 void multi_send_position(int objnum);
 void multi_send_reappear();
@@ -548,7 +559,7 @@ typedef struct netgame_info
 	ubyte   					obs_delay;
 	ubyte						obs_min;
 	ubyte						SmallerSpawn;
-	ubyte						host_is_obs;
+	ubyte						host_is_obs;	// SNG: HOST_OBS_SERVER marks a dedicated server, kept off the observer list
 	ubyte   					numconnected;
 	ubyte   					game_flags;
 	ubyte   					team_vector;
@@ -647,6 +658,9 @@ typedef struct netgame_info
 	ubyte						RaceBotSlots;		// race mode: bitmask of player slots the host is driving as bots
 	ubyte						team_color[2];
 	ubyte						NewSpawnAlgorithm;
+	ubyte						CpuCount;	// SNG: CPU players the host adds at start
+	ubyte						CpuSlots;	// SNG: bitmask of slots the host drives as CPUs
+	ubyte						CpuSkill;	// SNG: 0 trainee .. NDL-1 insane
 } __pack__ netgame_info;
 
 extern int Host_is_obs; // Reminder for host only that they are an observer.  Do not set for other players or observers.

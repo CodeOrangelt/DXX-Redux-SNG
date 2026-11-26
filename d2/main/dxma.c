@@ -1620,3 +1620,17 @@ void dxma_missions_menu(void)
 	newmenu_dotiny_nk("DXMA MISSIONS", NULL, n_items, m, 1, dxma_menu_handler, NULL);
 	InitialSelection = 3;
 }
+
+// SNG: the folder (zip) or file stem a download lands under in MISSION_DIR
+int dxma_download_stem(int index, char *out, size_t outsz)
+{
+	const dxma_mission *m = dxma_get(index);
+	char *dot;
+
+	if (!m || !dxma_safe_basename(m->direct_download_url[0] ? m->direct_download_url : m->download_url, out, outsz))
+		return 0;
+	dot = strrchr(out, '.');
+	if (dot)
+		*dot = '\0';
+	return 1;
+}
