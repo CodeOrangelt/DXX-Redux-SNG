@@ -4208,6 +4208,7 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 		buf[len] = Netgame.WeaponStun; len++;
 		buf[len] = Netgame.PurpleFlash; len++;
 		buf[len] = Netgame.VulcanShake; len++;
+		buf[len] = Netgame.GaussOverheat; len++;
 		buf[len] = Netgame.FusionShake; len++;
 		buf[len] = Netgame.FastDoor; len++;
 		buf[len] = Netgame.QuietFan; len++;
@@ -4614,6 +4615,7 @@ int net_udp_process_game_info(ubyte *data, int data_len, struct _sockaddr game_a
 		Netgame.WeaponStun = data[len]; len++;
 		Netgame.PurpleFlash = data[len]; len++;
 		Netgame.VulcanShake = data[len]; len++;
+		Netgame.GaussOverheat = data[len]; len++;
 		Netgame.FusionShake = data[len]; len++;
 		Netgame.FastDoor = data[len]; len++;
 		Netgame.QuietFan = data[len]; len++;
@@ -5401,8 +5403,8 @@ static int menu_sng_toggles_handler( newmenu *menu, d_event *event, void *userda
 void net_udp_sng_toggles_menu(void)
 {
 	int opt=0;
-	int opt_weaponstun, opt_purpleflash, opt_vulcanshake, opt_fusionshake, opt_fasterdoor, opt_dark_smarts, opt_quietfan;
-	newmenu_item m[7];
+	int opt_weaponstun, opt_purpleflash, opt_vulcanshake, opt_gaussheat, opt_fusionshake, opt_fasterdoor, opt_dark_smarts, opt_quietfan;
+	newmenu_item m[8];
 
 	opt_weaponstun = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "No Weapon Stun";  m[opt].value = Netgame.WeaponStun; opt++;
@@ -5412,6 +5414,9 @@ void net_udp_sng_toggles_menu(void)
 
 	opt_vulcanshake = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Vulcan Overheat";  m[opt].value = Netgame.VulcanShake; opt++;
+
+	opt_gaussheat = opt;
+	m[opt].type = NM_TYPE_CHECK; m[opt].text = "Gauss Overheat";  m[opt].value = Netgame.GaussOverheat; opt++;
 
 	opt_fusionshake = opt;
 	m[opt].type = NM_TYPE_CHECK; m[opt].text = "No Fusion Shake";  m[opt].value = Netgame.FusionShake; opt++;
@@ -5430,6 +5435,7 @@ void net_udp_sng_toggles_menu(void)
 	Netgame.WeaponStun = m[opt_weaponstun].value;
 	Netgame.PurpleFlash = m[opt_purpleflash].value;
 	Netgame.VulcanShake = m[opt_vulcanshake].value;
+	Netgame.GaussOverheat = m[opt_gaussheat].value;
 	Netgame.FusionShake = m[opt_fusionshake].value;
 	Netgame.FastDoor = m[opt_fasterdoor].value;
 	Netgame.DarkSmartBlobs = m[opt_dark_smarts].value;
@@ -6142,6 +6148,7 @@ void netgame_set_defaults()
 	Netgame.WeaponStun = 0;
 	Netgame.PurpleFlash = 0;
 	Netgame.VulcanShake = 0;
+	Netgame.GaussOverheat = 0;
 	Netgame.FusionShake = 0;
 	Netgame.FastDoor = 0;
 	Netgame.QuietFan = 0;

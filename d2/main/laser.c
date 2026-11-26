@@ -1701,6 +1701,52 @@ void Laser_do_weapon_sequence(object *obj, int doHomerFrame, fix idealHomerFrame
 
 fix64	Last_laser_fired_time = 0;
 
+// SNG: Gauss Overheat. Sustained fire heats the gun from 0 to full in
+// GAUSS_HEAT_FULL_SECS, stretching the gap between shots up to
+// GAUSS_HEAT_SLOWEST times; any pause sheds heat at GAUSS_HEAT_COOL_SECS
+// for a full cool-down.
+#define GAUSS_HEAT_FULL_SECS	5
+#define GAUSS_HEAT_COOL_SECS	3
+#define GAUSS_HEAT_SLOWEST	2
+#define GAUSS_HEAT_SHAKE	8	// rotvel kick divisor, as Vulcan Overheat's
+#define GAUSS_HEAT_RED_MAX	4	// palette red added per shot at full heat
+
+static fix Gauss_heat;
+static fix64 Gauss_last_shot;
+
+static int gauss_overheat_on(void)
+{
+	return (Game_mode & GM_MULTI) && Netgame.GaussOverheat;
+}
+
+// the base wait, stretched by heat
+static fix gauss_heated_wait(fix wait)
+{
+	return fixmul(wait, F1_0 + Gauss_heat * (GAUSS_HEAT_SLOWEST - 1));
+}
+
+// called once per gauss shot, before the next wait is set
+static void gauss_heat_shot(fix wait)
+{
+	fix idle = (fix)(GameTime64 - Gauss_last_shot) - gauss_heated_wait(wait);
+	vms_vector kick;
+
+	if (idle > 0)
+		Gauss_heat -= fixdiv(idle, i2f(GAUSS_HEAT_COOL_SECS));
+	if (Gauss_heat < 0)
+		Gauss_heat = 0;
+	Gauss_heat += fixdiv(gauss_heated_wait(wait), i2f(GAUSS_HEAT_FULL_SECS));
+	if (Gauss_heat > F1_0)
+		Gauss_heat = F1_0;
+	Gauss_last_shot = GameTime64;
+
+	ConsoleObject->mtype.phys_info.rotvel.x += (d_rand() - 16384) / GAUSS_HEAT_SHAKE;
+	ConsoleObject->mtype.phys_info.rotvel.y += (d_rand() - 16384) / GAUSS_HEAT_SHAKE;
+	make_random_vector(&kick);
+	bump_one_object(ConsoleObject, &kick, 10);
+	PALETTE_FLASH_ADD(1 + f2i(Gauss_heat * GAUSS_HEAT_RED_MAX), 0, 0);
+}
+
 extern int Player_fired_laser_this_frame;
 
 //	--------------------------------------------------------------------------------------------------
@@ -1749,10 +1795,15 @@ void do_laser_firing_player(void)
 
                         Last_laser_fired_time = GameTime64;
 
-			if (!cheats.rapidfire)
-				Next_laser_fire_time = GameTime64 + Weapon_info[weapon_index].fire_wait - fire_frame_overhead;
-			else
+			if (cheats.rapidfire)
 				Next_laser_fire_time = GameTime64 + (F1_0/25) - fire_frame_overhead;
+			else if (Players[Player_num].primary_weapon == GAUSS_INDEX && gauss_overheat_on())
+			{
+				gauss_heat_shot(Weapon_info[weapon_index].fire_wait);
+				Next_laser_fire_time = GameTime64 + gauss_heated_wait(Weapon_info[weapon_index].fire_wait) - fire_frame_overhead;
+			}
+			else
+				Next_laser_fire_time = GameTime64 + Weapon_info[weapon_index].fire_wait - fire_frame_overhead;
 
 			laser_level = Players[Player_num].laser_level;
 

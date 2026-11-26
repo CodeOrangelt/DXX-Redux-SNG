@@ -2821,6 +2821,7 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		nk_ui_checkbox_ubyte(ctx, "No Weapon Stun", &Netgame.WeaponStun);
 		nk_ui_checkbox_ubyte(ctx, "No Fusion Flash", &Netgame.PurpleFlash);
 		nk_ui_checkbox_ubyte(ctx, "Vulcan Overheat", &Netgame.VulcanShake);
+		nk_ui_checkbox_ubyte(ctx, "Gauss Overheat", &Netgame.GaussOverheat);
 		nk_ui_checkbox_ubyte(ctx, "No Fusion Shake", &Netgame.FusionShake);
 		nk_ui_checkbox_ubyte(ctx, "Fast Doors", &Netgame.FastDoor);
 		nk_ui_checkbox_ubyte(ctx, "Dark Smart Blobs", &Netgame.DarkSmartBlobs);
@@ -2923,7 +2924,7 @@ void nk_ui_advanced_options(void)
 	X(LowVulcan) X(AllowPreferredColors) X(AllowColoredLighting) X(FairColors) X(BlackAndWhitePyros) \
 	X(PrimaryDupFactor) X(SecondaryDupFactor) X(SecondaryCapFactor) X(obs_delay) X(obs_min) \
 	X(HomingUpdateRate) X(RemoteHitSpark) X(AllowCustomModelsTextures) X(ReducedFlash) X(DisableFOVChange) \
-	X(WeaponStun) X(PurpleFlash) X(VulcanShake) X(FusionShake) X(FastDoor) X(QuietFan) \
+	X(WeaponStun) X(PurpleFlash) X(VulcanShake) X(GaussOverheat) X(FusionShake) X(FastDoor) X(QuietFan) \
 	X(DarkSmartBlobs) X(SmallerSpawn) X(CpuCount) X(CpuSkill) \
 	X(StaticPowerups) X(StaticFusion) X(StaticPlasma) X(StaticVulcan) X(StaticSpread) X(StaticLasers) \
 	X(StaticGauss) X(StaticHelix) X(StaticPhoenix) X(StaticOmega) \
