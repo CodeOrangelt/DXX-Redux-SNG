@@ -1651,11 +1651,28 @@ static int newmenu_item_is_selectable_nk(newmenu *menu, int index)
 	nk_ui_set_fixed_sections(menu->nk_fixed_sections);
 	// A heading that folds a section is the one text row worth landing on.
 	if (menu->items[index].type == NM_TYPE_TEXT)
-		selectable = nk_ui_is_collapsible_head(menu->items, menu->nitems, index);
+		selectable = nk_ui_is_collapsible_head(menu->items, menu->nitems, index) &&
+			!nk_ui_tabs_active(menu->items, menu->nitems);
 	else
 		selectable = !nk_ui_item_is_folded(menu->items, menu->nitems, index, menu->nk_collapsed);
 	nk_ui_set_fixed_sections(0);
 	return selectable;
+}
+
+static void newmenu_step_nk(newmenu *menu, int direction);
+
+// tab mode: open the next tab and land on its first item
+static void newmenu_switch_tab_nk(newmenu *menu, int direction)
+{
+	int head;
+
+	if (!menu->nk_has_sections || !nk_ui_tabs_active(menu->items, menu->nitems))
+		return;
+	head = nk_ui_next_tab(menu->items, menu->nitems, &menu->nk_collapsed, direction);
+	if (head < 0)
+		return;
+	menu->citem = head;
+	newmenu_step_nk(menu, 1);
 }
 
 void newmenu_set_fixed_sections(newmenu *menu)
@@ -1872,6 +1889,10 @@ static int newmenu_key_command_nk(newmenu *menu, d_event *event)
 	{
 		case KEY_ESC:
 			window_close(menu->wind);
+			break;
+		case KEY_TAB:
+		case KEY_TAB + KEY_SHIFTED:
+			newmenu_switch_tab_nk(menu, key == KEY_TAB ? 1 : -1);
 			break;
 		case KEY_UP:
 		case KEY_PAD8:

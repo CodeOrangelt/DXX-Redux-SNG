@@ -44,6 +44,9 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "text.h"
 #include "rbaudio.h"
 #include "multi.h"
+#ifdef USE_UDP
+#include "net_udp.h"
+#endif
 #include "kmatrix.h"
 #include "gauges.h"
 #include "pcx.h"
@@ -266,6 +269,12 @@ int kmatrix_handler(window *wind, d_event *event, kmatrix_screen *km)
 			k = event_key_get(event);
 			switch( k )
 			{
+				case KEY_ENTER:
+				case KEY_SPACEBAR:
+					if (net_udp_solo() && !km->playing)
+						km->end_time = timer_query();	// nobody else to wait for
+					return 1;
+
 				case KEY_ESC:
 					if (km->network)
 					{

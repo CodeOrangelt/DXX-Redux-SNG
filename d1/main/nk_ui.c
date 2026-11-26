@@ -529,6 +529,29 @@ static void nk_ui_handle_event(SDL_Event *evt)
 // straight to &Netgame.SomeField via a cast would let it write past the
 // field into whatever's next in the struct. Always go through a same-sized
 // nk_bool temporary and copy the result back explicitly instead.
+// Nuklear only drags from the knob and loses the grab mid-drag; here the whole
+// bar is grabbable and the value tracks the pointer directly.
+static nk_bool nk_ui_slider_int(struct nk_context *ctx, int lo, int *val, int hi, int step)
+{
+	struct nk_input *in = &ctx->input;
+	struct nk_rect bar = nk_widget_bounds(ctx);
+	int before = *val, held;
+	float pad, ratio;
+
+	held = nk_input_is_mouse_down(in, NK_BUTTON_LEFT) &&
+		nk_input_has_mouse_click_down_in_rect(in, NK_BUTTON_LEFT, bar, nk_true);
+	nk_slider_int(ctx, lo, val, hi, step);
+	if (!held || hi <= lo || step <= 0)
+		return *val != before;
+
+	pad = ctx->style.slider.padding.x;
+	ratio = (in->mouse.pos.x - (bar.x + pad)) / NK_MAX(bar.w - 2.0f * pad, 1.0f);
+	ratio = NK_CLAMP(0.0f, ratio, 1.0f);
+	*val = lo + (int)(ratio * (hi - lo) / step + 0.5f) * step;
+	*val = NK_CLAMP(lo, *val, hi);
+	return *val != before;
+}
+
 static void nk_ui_checkbox_ubyte(struct nk_context *ctx, const char *label, ubyte *field)
 {
 	nk_bool val = *field ? nk_true : nk_false;
@@ -541,7 +564,7 @@ static void nk_ui_ubyte_slider_step(struct nk_context *ctx, const char *label_fm
 	int v = *field;
 
 	nk_labelf(ctx, NK_TEXT_LEFT, label_fmt, v);
-	nk_slider_int(ctx, lo, &v, hi, step);
+	nk_ui_slider_int(ctx, lo, &v, hi, step);
 	*field = (ubyte)v;
 }
 
@@ -1069,6 +1092,82 @@ static void nk_ui_sync_context(void)
 	seen = ogl_context_generation;
 }
 
+static const int Scale_presets[] = { 75, 100, 150, 200 };	// GUI 1..4
+#define NUM_SCALE_PRESETS ((int)(sizeof(Scale_presets) / sizeof(Scale_presets[0])))
+
+int nk_ui_scale_preset_count(void)
+{
+	return NUM_SCALE_PRESETS;
+}
+
+int nk_ui_scale_preset(int index)
+{
+	return Scale_presets[max(0, min(index, NUM_SCALE_PRESETS - 1))];
+}
+
+int nk_ui_scale_nearest_preset(int percent)
+{
+	int i, best = 0;
+
+	for (i = 1; i < NUM_SCALE_PRESETS; i++)
+		if (abs(Scale_presets[i] - percent) < abs(Scale_presets[best] - percent))
+			best = i;
+	return best;
+}
+
+#define UI_TEXT_MIN	70
+#define UI_TEXT_MAX	150
+#define UI_ROWS_MIN	50
+#define UI_ROWS_MAX	200
+#define UI_WIDTH_MIN	70
+#define UI_WIDTH_MAX	150
+#define UI_STOCK	100
+
+static int clamp_pct(int value, int lo, int hi)
+{
+	return max(lo, min(value, hi));
+}
+
+static float nk_ui_text_factor(void)
+{
+	return clamp_pct(GameCfg.UiTextScale, UI_TEXT_MIN, UI_TEXT_MAX) / 100.0f;
+}
+
+static float nk_ui_row_factor(void)
+{
+	return clamp_pct(GameCfg.UiRowSpacing, UI_ROWS_MIN, UI_ROWS_MAX) / 100.0f;
+}
+
+static float nk_ui_width_factor(void)
+{
+	return clamp_pct(GameCfg.UiPanelWidth, UI_WIDTH_MIN, UI_WIDTH_MAX) / 100.0f;
+}
+
+static int nk_ui_scale_percent(void)
+{
+	return max(NK_UI_SCALE_MIN, min(GameCfg.UiScale, NK_UI_SCALE_MAX));
+}
+
+// Shrink applied on top of the player's scale so the front menu fits the
+// screen without scrolling. Lists (tables) never use it: they scroll.
+#define NK_UI_FIT_MIN		0.4f
+#define NK_UI_FIT_SLACK		1.1f	// room needed before growing back, so it can't flicker
+static float s_fit_scale = 1.0f;
+
+static float nk_ui_scale(void)
+{
+	return nk_ui_scale_percent() / 100.0f * s_fit_scale;
+}
+
+static int nk_ui_scale_key(void)
+{
+	return (int)(nk_ui_scale() * 1000.0f + 0.5f) * 1000000 +
+		clamp_pct(GameCfg.UiTextScale, UI_TEXT_MIN, UI_TEXT_MAX) * 1000 +
+		clamp_pct(GameCfg.UiRowSpacing, UI_ROWS_MIN, UI_ROWS_MAX);
+}
+
+static int s_baked_scale = 0;
+
 static void nk_ui_sync_fonts(void)
 {
 	grs_font *body = GAME_FONT, *head = MEDIUM1_FONT, *title = HUGE_FONT;
@@ -1086,7 +1185,8 @@ static void nk_ui_sync_fonts(void)
 	nk_ui_sync_context();
 	textures_lost = s_body_font.ready && !glIsTexture(s_body_font.tex);
 
-	if (s_body_font.ready && !textures_lost && body == s_baked_body_src && screen_h == s_baked_screen_h)
+	if (s_body_font.ready && !textures_lost && body == s_baked_body_src && screen_h == s_baked_screen_h &&
+		s_baked_scale == nk_ui_scale_key())
 		return;
 
 	// Re-baking frees the font textures, and a panel already built into the
@@ -1103,7 +1203,7 @@ static void nk_ui_sync_fonts(void)
 	base_h = head->ft_h * head_scale;
 	// The boost is fractional, so the atlas stays at 1x and only the draw
 	// size grows; the body still sizes off the unboosted height.
-	head_h = (int)(base_h * NK_UI_HEAD_BOOST + 0.5f);
+	head_h = (int)(base_h * NK_UI_HEAD_BOOST * nk_ui_scale() * nk_ui_text_factor() + 0.5f);
 
 	body_scale = max(1, (int)(base_h * NK_UI_BODY_TO_HEAD / body->ft_h + 0.5f));
 	// A body no smaller than the heading over it is not a body.
@@ -1111,7 +1211,7 @@ static void nk_ui_sync_fonts(void)
 		body_scale--;
 	if (!nk_ui_bake_font(&s_body_font, body, 1))
 		return;
-	body_h = (int)(body->ft_h * body_scale * NK_UI_BODY_BOOST + 0.5f);
+	body_h = (int)(body->ft_h * body_scale * NK_UI_BODY_BOOST * nk_ui_scale() * nk_ui_text_factor() + 0.5f);
 	s_body_font.scale = (float)body_h / body->ft_h;
 	s_body_font.handle.height = (float)body_h;
 	nk_ui_bake_white_texture();
@@ -1132,10 +1232,11 @@ static void nk_ui_sync_fonts(void)
 
 	s_baked_body_src = body;
 	s_baked_screen_h = screen_h;
+	s_baked_scale = nk_ui_scale_key();
 	// Rows must clear the heading font too: headings and navigation menus
 	// are drawn in it, at the same row height as everything else.
-	s_row_h = body_h + body_h / NK_UI_ROW_PAD_DIVISOR;
-	s_row_h = max(s_row_h, head_h + head_h / NK_UI_HEAD_ROW_PAD_DIVISOR);
+	s_row_h = body_h + (int)(body_h / NK_UI_ROW_PAD_DIVISOR * nk_ui_row_factor());
+	s_row_h = max(s_row_h, head_h + (int)(head_h / NK_UI_HEAD_ROW_PAD_DIVISOR * nk_ui_row_factor()));
 	nk_style_set_font(s_ctx, &s_body_font.handle);
 	nk_ui_apply_theme(s_ctx);
 	s_chrome_h = nk_ui_panel_chrome_height();
@@ -1268,18 +1369,75 @@ static int nk_ui_take_enter(void)
 
 static float s_modal_need = 0.0f;
 
+// Corner grip: drag a panel's bottom-right corner to resize the whole UI.
+// The new size is saved when the button comes up.
+static int s_grip_dragging;
+static int s_grip_start_scale;
+static float s_grip_start_reach;
+
+static float nk_ui_reach(const struct nk_input *in, struct nk_rect panel)
+{
+	float dx = in->mouse.pos.x - (panel.x + panel.w * 0.5f);
+	float dy = in->mouse.pos.y - (panel.y + panel.h * 0.5f);
+
+	return NK_MAX((float)sqrt(dx * dx + dy * dy), 1.0f);
+}
+
+static void nk_ui_draw_grip(struct nk_context *ctx, struct nk_rect grip)
+{
+	struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+	struct nk_color color = s_grip_dragging ? NK_UI_ACCENT : NK_UI_ACCENT_DIM;
+
+	nk_push_scissor(canvas, nk_rect(-8192.0f, -8192.0f, 16384.0f, 16384.0f));
+	nk_fill_triangle(canvas, grip.x + grip.w, grip.y, grip.x + grip.w, grip.y + grip.h,
+		grip.x, grip.y + grip.h, color);
+}
+
+static void nk_ui_scale_grip(struct nk_context *ctx)
+{
+	struct nk_input *in = &ctx->input;
+	struct nk_rect panel = nk_window_get_bounds(ctx);
+	float size = (float)s_row_h * 0.75f;
+	struct nk_rect grip = nk_rect(panel.x + panel.w - size, panel.y + panel.h - size, size, size);
+	int percent;
+
+	if (!s_grip_dragging && nk_input_is_mouse_down(in, NK_BUTTON_LEFT) &&
+		nk_input_has_mouse_click_down_in_rect(in, NK_BUTTON_LEFT, grip, nk_true))
+	{
+		s_grip_dragging = 1;
+		s_grip_start_scale = nk_ui_scale_percent();
+		s_grip_start_reach = nk_ui_reach(in, panel);
+	}
+	if (s_grip_dragging && !nk_input_is_mouse_down(in, NK_BUTTON_LEFT))
+	{
+		s_grip_dragging = 0;
+		WriteConfigFile();
+	}
+	if (s_grip_dragging)
+	{
+		percent = (int)(s_grip_start_scale * nk_ui_reach(in, panel) / s_grip_start_reach + 0.5f);
+		percent = max(NK_UI_SCALE_MIN, min(percent, NK_UI_SCALE_MAX));
+		if (abs(percent - GameCfg.UiScale) >= 2)
+			GameCfg.UiScale = percent;
+		// the window must not move while its corner is the handle
+		in->mouse.buttons[NK_BUTTON_LEFT].clicked_pos = in->mouse.pos;
+	}
+	nk_ui_draw_grip(ctx, grip);
+}
+
 static int nk_ui_frame(const char *title, struct nk_vec2 size_frac, void (*build)(struct nk_context *ctx, void *userdata), void *userdata)
 {
 	SDL_Event evt;
 	int width = grd_curscreen->sc_w, height = grd_curscreen->sc_h;
 	int layout_w = nk_ui_layout_width(grd_curscreen->sc_w, grd_curscreen->sc_h);
 	struct nk_rect bounds;
-	float panel_w;
+	float panel_w, panel_h;
 	int title_wraps;
 	nk_flags win_flags = NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE | NK_WINDOW_SCROLL_AUTO_HIDE;
 
 	// This loop bypasses event_process(); the join retry and timeout read the clock.
 	timer_update();
+	s_fit_scale = 1.0f;		// full screens scroll their own panes; only menus shrink to fit
 	nk_ui_sync_fonts();
 	mouse_cursor_autohide();
 
@@ -1309,7 +1467,7 @@ static int nk_ui_frame(const char *title, struct nk_vec2 size_frac, void (*build
 
 	nk_ui_draw_underlying_windows();
 
-	panel_w = max(layout_w * size_frac.x, (float)(s_row_h * NK_UI_MODAL_MIN_WIDTH_ROWS));
+	panel_w = max(layout_w * size_frac.x * nk_ui_scale() * nk_ui_width_factor(), (float)(s_row_h * NK_UI_MODAL_MIN_WIDTH_ROWS));
 	panel_w = max(panel_w, s_modal_need + s_ctx->style.window.padding.x * 2 + s_ctx->style.window.border * 2 + s_row_h * NK_UI_SCROLLBAR_ROWS);
 	if (s_title_font.ready)
 		panel_w = max(panel_w, nk_ui_text_width(&s_title_font, title) / s_title_font.scale + s_ctx->style.window.padding.x * 4);
@@ -1318,8 +1476,8 @@ static int nk_ui_frame(const char *title, struct nk_vec2 size_frac, void (*build
 		> panel_w - s_ctx->style.window.padding.x * 2 - s_row_h * NK_UI_SCROLLBAR_ROWS;
 	if (title_wraps)
 		win_flags &= ~NK_WINDOW_TITLE;
-	bounds = nk_rect((width - panel_w) * 0.5f, height * (1.0f - size_frac.y) * 0.5f,
-		panel_w, height * size_frac.y);
+	panel_h = min(height * size_frac.y * nk_ui_scale(), height * NK_UI_MAX_SCREEN_FRAC);
+	bounds = nk_rect((width - panel_w) * 0.5f, (height - panel_h) * 0.5f, panel_w, panel_h);
 	nk_ui_claim_panel(title);
 	if (nk_ui_begin_panel(title, title_wraps ? "" : title, bounds, win_flags))
 	{
@@ -1335,6 +1493,7 @@ static int nk_ui_frame(const char *title, struct nk_vec2 size_frac, void (*build
 		build(s_ctx, userdata);
 		s_modal_need = s_widest_label;
 		nk_ui_apply_manual_scroll(scroll_x, scroll_y_before, 1);
+		nk_ui_scale_grip(s_ctx);
 	}
 	nk_end(s_ctx);
 	nk_window_set_focus(s_ctx, title);
@@ -1415,7 +1574,7 @@ static void nk_ui_build_spawn_with_weapons(struct nk_context *ctx, void *userdat
 
 	v = Netgame.LasersSpawn;
 	nk_labelf(ctx, NK_TEXT_LEFT, "Quad Laser Level: %d", Netgame.LasersSpawn);
-	nk_slider_int(ctx, 0, &v, 4, 1);
+	nk_ui_slider_int(ctx, 0, &v, 4, 1);
 	Netgame.LasersSpawn = (ubyte)v;
 
 	nk_ui_checkbox_ubyte(ctx, "Homers", &Netgame.HomersSpawn);
@@ -1690,15 +1849,15 @@ static void nk_ui_build_arcade_rules(struct nk_context *ctx)
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT);
 	nk_ui_push_accent_toggle_text(ctx);
-	nk_ui_checkbox_ubyte(ctx, "    Team Anarchy (off = FFA)", &Netgame.ArcadeTeams);
-
 	nk_label(ctx, "    Powers That Can Drop", NK_TEXT_LEFT);
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
 	for (i = 0; i < NUM_ARCADE_SUPERPOWERS; i++)
 	{
 		char label[48];
-		snprintf(label, sizeof(label), "        %s", arcade_superpower_menu_name(i));
+		snprintf(label, sizeof(label), "    %s", arcade_superpower_menu_name(i));
 		nk_ui_checkbox_ubyte(ctx, label, &Netgame.ArcadeEnabled[i]);
 	}
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	nk_ui_pop_accent_toggle_text(ctx);
 
 	nk_ui_ubyte_slider_step(ctx, "    Drop Every (s): %d", &Netgame.ArcadeInterval, 5, 60, 5);
@@ -1723,7 +1882,7 @@ static void nk_ui_build_survival_rules(struct nk_context *ctx)
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT);
 	nk_labelf(ctx, NK_TEXT_LEFT, "    Difficulty: %s", MENU_DIFFICULTY_TEXT(v));
-	nk_slider_int(ctx, 0, &v, NDL - 1, 1);
+	nk_ui_slider_int(ctx, 0, &v, NDL - 1, 1);
 	nk_style_pop_color(ctx);
 	Netgame.difficulty = (ubyte)v;
 }
@@ -1741,7 +1900,7 @@ static void nk_ui_build_koth_rules(struct nk_context *ctx)
 		nk_label(ctx, "    Score Goal: Unlimited", NK_TEXT_LEFT);
 	else
 		nk_labelf(ctx, NK_TEXT_LEFT, "    Score Goal: %d", Netgame.ScoreGoal * 1000);
-	nk_slider_int(ctx, 0, &v, 10, 1);
+	nk_ui_slider_int(ctx, 0, &v, 10, 1);
 	nk_ui_ubyte_slider_step(ctx, "    Capture Rate (pts/sec): %d", &Netgame.PointCaptureRate, 50, 500, 25);
 	nk_style_pop_color(ctx);
 	Netgame.ScoreGoal = v;
@@ -1754,20 +1913,93 @@ static void nk_ui_build_lms_rules(struct nk_context *ctx)
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT);
 	nk_labelf(ctx, NK_TEXT_LEFT, "    Starting Shields: %d", v * 100);
-	nk_slider_int(ctx, 5, &v, 40, 5);
+	nk_ui_slider_int(ctx, 5, &v, 40, 5);
 	nk_style_pop_color(ctx);
 	Netgame.DeathmatchShields = (ubyte)v;
 }
 
-// Renders one game mode's radio row, plain and identical whether selected
-// or not -- no layout change, no extra widgets, no hint text. The settings
-// for the active mode (if any) render directly below, with no header, the
-// moment the mode becomes active (see the NETGAME_* blocks in
-// nk_ui_build_hosting).
-static int nk_ui_gamemode_option(struct nk_context *ctx, const char *name, int active)
+enum
 {
-	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	return nk_option_label(ctx, name, active);
+	MODE_TEAMS = 1,
+	MODE_CPUS = 2,		// CPUs know this mode's objective
+};
+
+struct nk_ui_mode
+{
+	const char *group;	// starts a new heading in the picker
+	const char *name;
+	const char *blurb;
+	ubyte gamemode;
+	ubyte ctf, koth, lms, arcade_teams;
+	ubyte flags;
+	void (*rules)(struct nk_context *ctx);
+};
+
+// SNG: King of the Hill, Last Man Standing and Team Arcade are netgame
+// toggles on the wire; the picker presents them as modes of their own.
+static const struct nk_ui_mode Host_modes[] = {
+	{ "Free-for-all", "Anarchy", "Everyone for themselves. Most kills wins.",
+	  NETGAME_ANARCHY, 0, 0, 0, 0, MODE_CPUS, NULL },
+	{ NULL, "King of the Hill", "Hold an energy center to score points.",
+	  NETGAME_ANARCHY, 0, 1, 0, 0, MODE_CPUS, nk_ui_build_koth_rules },
+	{ NULL, "Last Man Standing", "Big shields, one life. Last ship flying wins.",
+	  NETGAME_ANARCHY, 0, 0, 1, 0, MODE_CPUS, nk_ui_build_lms_rules },
+	{ NULL, "Bounty", "Only kills on or by the bounty target count.",
+	  NETGAME_BOUNTY, 0, 0, 0, 0, MODE_CPUS, NULL },
+	{ "Team", "Team Anarchy", "Red against blue. Team kills count against you.",
+	  NETGAME_TEAM_ANARCHY, 0, 0, 0, 0, MODE_TEAMS | MODE_CPUS, NULL },
+	{ NULL, "Capture the Flag", "Take their flag back to your own base.",
+	  NETGAME_TEAM_ANARCHY, 1, 0, 0, 0, MODE_TEAMS | MODE_CPUS, NULL },
+	{ NULL, "Turkey Shoot", "One cloaking turkey against every hunter.",
+	  NETGAME_TURKEY_SHOOT, 0, 0, 0, 0, MODE_CPUS, nk_ui_build_turkey_rules },
+	{ "Arcade", "Arcade", "Free-for-all with super powers dropping in.",
+	  NETGAME_ARCADE, 0, 0, 0, 0, MODE_CPUS, nk_ui_build_arcade_rules },
+	{ NULL, "Team Arcade", "Team Anarchy with super powers dropping in.",
+	  NETGAME_ARCADE, 0, 0, 0, 1, MODE_TEAMS | MODE_CPUS, nk_ui_build_arcade_rules },
+	{ "Co-op", "Cooperative", "Clear the level together.",
+	  NETGAME_COOPERATIVE, 0, 0, 0, 0, MODE_TEAMS | MODE_CPUS, NULL },
+	{ NULL, "Survival", "Hold out against waves of robots together.",
+	  NETGAME_SURVIVAL, 0, 0, 0, 0, MODE_CPUS, nk_ui_build_survival_rules },
+};
+
+#define NUM_HOST_MODES (sizeof(Host_modes) / sizeof(Host_modes[0]))
+
+static int nk_ui_mode_matches(const struct nk_ui_mode *m)
+{
+	if (Netgame.gamemode != m->gamemode)
+		return 0;
+	if (m->gamemode == NETGAME_ARCADE)
+		return !Netgame.ArcadeTeams == !m->arcade_teams;
+	return !Netgame.CTF == !m->ctf && !Netgame.PointCapture == !m->koth &&
+		!Netgame.Deathmatch == !m->lms;
+}
+
+// -1: a preset or old config holds a mode the picker no longer offers
+static int nk_ui_current_mode(void)
+{
+	int i;
+
+	for (i = 0; i < NUM_HOST_MODES; i++)
+		if (nk_ui_mode_matches(&Host_modes[i]))
+			return i;
+	return -1;
+}
+
+static void nk_ui_select_mode(const struct nk_ui_mode *m)
+{
+	Netgame.gamemode = m->gamemode;
+	Netgame.CTF = m->ctf;
+	Netgame.PointCapture = m->koth;
+	Netgame.Deathmatch = m->lms;
+	if (m->gamemode == NETGAME_ARCADE)
+		Netgame.ArcadeTeams = m->arcade_teams;
+}
+
+static int nk_ui_mode_allows_cpus(void)
+{
+	int current = nk_ui_current_mode();
+
+	return current >= 0 && (Host_modes[current].flags & MODE_CPUS);
 }
 
 static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
@@ -1788,22 +2020,22 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 
 		v = Netgame.difficulty;
 		nk_labelf(ctx, NK_TEXT_LEFT, "Difficulty: %s", MENU_DIFFICULTY_TEXT(v));
-		nk_slider_int(ctx, 0, &v, NDL - 1, 1);
+		nk_ui_slider_int(ctx, 0, &v, NDL - 1, 1);
 		Netgame.difficulty = (ubyte)v;
 
 		v = Netgame.control_invul_time / 5 / F1_0 / 60;
 		nk_labelf(ctx, NK_TEXT_LEFT, "Reactor Life: %d min", Netgame.control_invul_time / F1_0 / 60);
-		nk_slider_int(ctx, 0, &v, 10, 1);
+		nk_ui_slider_int(ctx, 0, &v, 10, 1);
 		Netgame.control_invul_time = v * 5 * F1_0 * 60;
 
 		v = Netgame.PlayTimeAllowed;
 		nk_labelf(ctx, NK_TEXT_LEFT, "Max time: %d min", Netgame.PlayTimeAllowed * 5);
-		nk_slider_int(ctx, 0, &v, 10, 1);
+		nk_ui_slider_int(ctx, 0, &v, 10, 1);
 		Netgame.PlayTimeAllowed = v;
 
 		v = Netgame.KillGoal;
 		nk_labelf(ctx, NK_TEXT_LEFT, "Kill Goal: %d kills", Netgame.KillGoal * 5);
-		nk_slider_int(ctx, 0, &v, 10, 1);
+		nk_ui_slider_int(ctx, 0, &v, 10, 1);
 		Netgame.KillGoal = v;
 
 		nk_tree_pop(ctx);
@@ -1819,7 +2051,7 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 			nk_label(ctx, "Extra Primaries: None", NK_TEXT_LEFT);
 		else
 			nk_labelf(ctx, NK_TEXT_LEFT, "Extra Primaries: x%d", Netgame.PrimaryDupFactor);
-		nk_slider_int(ctx, 0, &v, 7, 1);
+		nk_ui_slider_int(ctx, 0, &v, 7, 1);
 		Netgame.PrimaryDupFactor = (ubyte)(v + 1);
 
 		v = Netgame.SecondaryDupFactor - 1;
@@ -1827,12 +2059,12 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 			nk_label(ctx, "Extra Secondaries: None", NK_TEXT_LEFT);
 		else
 			nk_labelf(ctx, NK_TEXT_LEFT, "Extra Secondaries: x%d", Netgame.SecondaryDupFactor);
-		nk_slider_int(ctx, 0, &v, 7, 1);
+		nk_ui_slider_int(ctx, 0, &v, 7, 1);
 		Netgame.SecondaryDupFactor = (ubyte)(v + 1);
 
 		v = Netgame.SecondaryCapFactor;
 		nk_labelf(ctx, NK_TEXT_LEFT, "Cap Secondaries: %s", Netgame.SecondaryCapFactor == 0 ? "Uncapped" : (Netgame.SecondaryCapFactor == 1 ? "Max Six" : "Max Two"));
-		nk_slider_int(ctx, 0, &v, 2, 1);
+		nk_ui_slider_int(ctx, 0, &v, 2, 1);
 		Netgame.SecondaryCapFactor = (ubyte)v;
 
 		nk_ui_checkbox_ubyte(ctx, "Low Vulcan Ammo (333)", &Netgame.LowVulcan);
@@ -1894,11 +2126,12 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		{
 			int v = max(0, Netgame.HomingUpdateRate - 20);
 			nk_labelf(ctx, NK_TEXT_LEFT, "Homing Update Rate: %d", Netgame.HomingUpdateRate);
-			nk_slider_int(ctx, 0, &v, 10, 1);
+			nk_ui_slider_int(ctx, 0, &v, 10, 1);
 			Netgame.HomingUpdateRate = (ubyte)(v + 20);
 		}
 
-		nk_ui_checkbox_ubyte(ctx, "Only Show Confirmed Hit Sparks", &Netgame.RemoteHitSpark);
+		if (!net_udp_solo())		// hit confirmation from other machines
+			nk_ui_checkbox_ubyte(ctx, "Only Show Confirmed Hit Sparks", &Netgame.RemoteHitSpark);
 		nk_ui_checkbox_ubyte(ctx, "Allow Custom Models/Textures", &Netgame.AllowCustomModelsTextures);
 		nk_ui_checkbox_ubyte(ctx, "Reduced Flash Effects", &Netgame.ReducedFlash);
 		nk_ui_checkbox_ubyte(ctx, "Lock FOV to Vanilla", &Netgame.DisableFOVChange);
@@ -1920,7 +2153,7 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		nk_tree_pop(ctx);
 	}
 
-	if (nk_tree_push(ctx, NK_TREE_TAB, "Network Settings", NK_MINIMIZED))
+	if (!net_udp_solo() && nk_tree_push(ctx, NK_TREE_TAB, "Network Settings", NK_MINIMIZED))
 	{
 		int v;
 		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
@@ -2208,166 +2441,225 @@ static void nk_ui_save_preset(void)
 
 struct hosting_ui_state
 {
+	int solo;		// Singleplayer: offline against CPUs
 	int running;
 	int started;
 	int start_requested;
 	char slevel[12];
 };
 
-static void nk_ui_build_hosting(struct nk_context *ctx, void *userdata)
+static void nk_ui_section(struct nk_context *ctx, const char *title)
 {
-	struct hosting_ui_state *st = (struct hosting_ui_state *)userdata;
-	int numplayers_limit;
-	int v;
-
-	numplayers_limit = Netgame.gamemode == NETGAME_COOPERATIVE ? 4 : Netgame.max_numobservers ? 7 : 8;
-	if (Netgame.max_numplayers > numplayers_limit)
-		Netgame.max_numplayers = numplayers_limit;
-	if (Netgame.max_numplayers < 2)
-		Netgame.max_numplayers = 2;
-
-	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
-	if (nk_button_label(ctx, "Cancel"))
-		st->running = 0;
-	if (nk_button_label(ctx, "Start Game") || nk_ui_take_enter())
-	{
-		if ((Netgame.levelnum < Last_secret_level) || (Netgame.levelnum > Last_level) || (Netgame.levelnum == 0))
-		{
-			// Level out of range -- old menu popped a blocking messagebox here;
-			// just reset silently and let the player notice/re-enter it.
-			Netgame.levelnum = 1;
-			strcpy(st->slevel, "1");
-		}
-		else
-			st->start_requested = 1;
-	}
-
-	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
-	if (nk_button_label(ctx, "Load Preset"))
-		nk_ui_defer(nk_ui_load_preset);
-	if (nk_button_label(ctx, "Save Preset"))
-		nk_ui_defer(nk_ui_save_preset);
-
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	nk_label(ctx, TXT_DESCRIPTION, NK_TEXT_LEFT);
-	nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, Netgame.game_name, NETGAME_NAME_LEN + 1, nk_filter_default);
+	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT);
+	nk_label(ctx, title, NK_TEXT_LEFT);
+	nk_style_pop_color(ctx);
+}
 
+static void nk_ui_build_host_header(struct nk_context *ctx, struct hosting_ui_state *st)
+{
+	static const float widths[] = { 0.12f, 0.48f, 0.2f, 0.2f };
+	static const float solo_widths[] = { 0.6f, 0.2f, 0.2f };
+	char level_label[32];
+
+	snprintf(level_label, sizeof(level_label), "%s (1-%d)", TXT_LEVEL_, Last_level);
+	if (st->solo)
 	{
-		char level_label[48];
-		snprintf(level_label, sizeof(level_label), "%s (1-%d)", TXT_LEVEL_, Last_level);
-		nk_label(ctx, level_label, NK_TEXT_LEFT);
+		nk_layout_row(ctx, NK_DYNAMIC, NK_UI_ROW_HEIGHT, 3, solo_widths);
+		nk_label(ctx, Netgame.mission_title, NK_TEXT_LEFT);
 	}
+	else
+	{
+		nk_layout_row(ctx, NK_DYNAMIC, NK_UI_ROW_HEIGHT, 4, widths);
+		nk_label(ctx, "Name", NK_TEXT_LEFT);
+		nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, Netgame.game_name, NETGAME_NAME_LEN + 1, nk_filter_default);
+	}
+	nk_label(ctx, level_label, NK_TEXT_RIGHT);
 	nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, st->slevel, sizeof(st->slevel), nk_filter_decimal);
 	Netgame.levelnum = atoi(st->slevel);
+}
 
-	if (nk_tree_push(ctx, NK_TREE_TAB, "Game Mode", NK_MINIMIZED))
+static void nk_ui_build_mode_list(struct nk_context *ctx, int current)
+{
+	int i;
+
+	for (i = 0; i < NUM_HOST_MODES; i++)
 	{
-		int active;
+		const struct nk_ui_mode *m = &Host_modes[i];
+		nk_bool selected = i == current;
 
-		active = Netgame.gamemode == NETGAME_ANARCHY || Netgame.gamemode == 0;
-		if (nk_ui_gamemode_option(ctx, TXT_ANARCHY, active)) { Netgame.gamemode = NETGAME_ANARCHY; }
-		nk_ui_checkbox_ubyte(ctx, "    King of the Hill", &Netgame.PointCapture);
-		if (Netgame.PointCapture)
-			nk_ui_build_koth_rules(ctx);
-		nk_ui_checkbox_ubyte(ctx, "    Last Man Standing", &Netgame.Deathmatch);
-		if (Netgame.Deathmatch)
-			nk_ui_build_lms_rules(ctx);
-
-		active = Netgame.gamemode == NETGAME_TEAM_ANARCHY && !Netgame.CTF;
-		if (nk_ui_gamemode_option(ctx, TXT_TEAM_ANARCHY, active)) { Netgame.gamemode = NETGAME_TEAM_ANARCHY; Netgame.CTF = 0; }
-		if (active)
-			nk_ui_build_team_rules(ctx);
-
-		active = Netgame.gamemode == NETGAME_TEAM_ANARCHY && Netgame.CTF;
-		if (nk_ui_gamemode_option(ctx, "Capture the Flag", active)) { Netgame.gamemode = NETGAME_TEAM_ANARCHY; Netgame.CTF = 1; }
-
-		active = Netgame.gamemode == NETGAME_ROBOT_ANARCHY;
-		if (nk_ui_gamemode_option(ctx, TXT_ANARCHY_W_ROBOTS, active)) { Netgame.gamemode = NETGAME_ROBOT_ANARCHY; }
-
-		active = Netgame.gamemode == NETGAME_COOPERATIVE;
-		if (nk_ui_gamemode_option(ctx, TXT_COOPERATIVE, active)) { Netgame.gamemode = NETGAME_COOPERATIVE; }
-		if (active)
-			nk_ui_build_team_rules(ctx);
-
-		active = Netgame.gamemode == NETGAME_BOUNTY;
-		if (nk_ui_gamemode_option(ctx, "Bounty", active)) { Netgame.gamemode = NETGAME_BOUNTY; }
-
-		active = Netgame.gamemode == NETGAME_TURKEY_SHOOT;
-		if (nk_ui_gamemode_option(ctx, "Turkey Shoot", active)) { Netgame.gamemode = NETGAME_TURKEY_SHOOT; }
-		if (active)
-			nk_ui_build_turkey_rules(ctx);
-
-		active = Netgame.gamemode == NETGAME_ARCADE;
-		if (nk_ui_gamemode_option(ctx, "Arcade", active)) { Netgame.gamemode = NETGAME_ARCADE; Netgame.CTF = 0; }
-		if (active)
-			nk_ui_build_arcade_rules(ctx);
-
-		active = Netgame.gamemode == NETGAME_SURVIVAL;
-		if (nk_ui_gamemode_option(ctx, "Survival", active)) { Netgame.gamemode = NETGAME_SURVIVAL; Netgame.CTF = 0; }
-		if (active)
-			nk_ui_build_survival_rules(ctx);
-
-		nk_tree_pop(ctx);
-	}
-
-	if (nk_tree_push(ctx, NK_TREE_TAB, "Access", NK_MINIMIZED))
-	{
-		int closed = (Netgame.game_flags & NETGAME_FLAG_CLOSED) ? 1 : 0;
-		int restricted = Netgame.RefusePlayers ? 1 : 0;
-		int open = (!closed && !restricted) ? 1 : 0;
-
+		if (m->group)
+			nk_ui_section(ctx, m->group);
 		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-		if (nk_option_label(ctx, "Open game", open)) { Netgame.game_flags &= ~NETGAME_FLAG_CLOSED; Netgame.RefusePlayers = 0; }
-		if (nk_option_label(ctx, TXT_CLOSED_GAME, closed)) { Netgame.game_flags |= NETGAME_FLAG_CLOSED; Netgame.RefusePlayers = 0; }
-		if (nk_option_label(ctx, "Restricted Game", restricted)) { Netgame.game_flags &= ~NETGAME_FLAG_CLOSED; Netgame.RefusePlayers = 1; }
-		nk_tree_pop(ctx);
+		if (nk_selectable_label(ctx, m->name, NK_TEXT_LEFT, &selected) && selected)
+			nk_ui_select_mode(m);
 	}
+}
 
-	if (nk_tree_push(ctx, NK_TREE_TAB, "Players/CPUs & Observers", NK_MINIMIZED))
-	{
+static void nk_ui_build_players(struct nk_context *ctx)
+{
+	int limit = Netgame.gamemode == NETGAME_COOPERATIVE ? 4 : Netgame.max_numobservers ? 7 : 8;
+	int v;
+
+	Netgame.max_numplayers = max(2, min(Netgame.max_numplayers, limit));
+	nk_ui_section(ctx, "PLAYERS");
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	v = Netgame.max_numplayers;
-	if (Netgame.CpuCount)
-		nk_labelf(ctx, NK_TEXT_LEFT, "Maximum players: %d (%d human + %d CPU)", Netgame.max_numplayers, Netgame.max_numplayers - Netgame.CpuCount, Netgame.CpuCount);
-	else
-		nk_labelf(ctx, NK_TEXT_LEFT, "Maximum players: %d", Netgame.max_numplayers);
-	nk_slider_int(ctx, 2, &v, numplayers_limit, 1);
+	nk_labelf(ctx, NK_TEXT_LEFT, "Maximum players: %d", Netgame.max_numplayers);
+	nk_ui_slider_int(ctx, 2, &v, limit, 1);
 	Netgame.max_numplayers = (ubyte)v;
 
 	// SNG: CPUs take seats at start; a human joining a full game bumps one
-	if (Netgame.CpuCount > Netgame.max_numplayers - 1)
-		Netgame.CpuCount = Netgame.max_numplayers - 1;
-	if (Netgame.gamemode == NETGAME_COOPERATIVE || Netgame.gamemode == NETGAME_SURVIVAL)
+	Netgame.CpuCount = min(Netgame.CpuCount, Netgame.max_numplayers - 1);
+	if (!nk_ui_mode_allows_cpus())
+	{
 		Netgame.CpuCount = 0;
-	v = Netgame.CpuCount;
-	nk_labelf(ctx, NK_TEXT_LEFT, "CPU players: %d", Netgame.CpuCount);
-	nk_slider_int(ctx, 0, &v, Netgame.max_numplayers - 1, 1);
-	Netgame.CpuCount = (ubyte)v;
-
+		nk_label(ctx, "CPU players: not available in this mode yet", NK_TEXT_LEFT);
+	}
+	else
+	{
+		v = Netgame.CpuCount;
+		nk_labelf(ctx, NK_TEXT_LEFT, "CPU players: %d", Netgame.CpuCount);
+		nk_ui_slider_int(ctx, 0, &v, Netgame.max_numplayers - 1, 1);
+		Netgame.CpuCount = (ubyte)v;
+	}
 	if (Netgame.CpuCount)
 	{
 		v = Netgame.CpuSkill;
 		nk_labelf(ctx, NK_TEXT_LEFT, "CPU skill: %s", duelbot_tier_name(Netgame.CpuSkill));
-		nk_slider_int(ctx, 0, &v, DUEL_TIERS - 1, 1);
+		nk_ui_slider_int(ctx, 0, &v, DUEL_TIERS - 1, 1);
 		Netgame.CpuSkill = (ubyte)v;
 	}
 
 	v = Netgame.max_numobservers;
 	nk_labelf(ctx, NK_TEXT_LEFT, "Maximum observers: %d", Netgame.max_numobservers);
-	nk_slider_int(ctx, 0, &v, MAX_OBSERVERS, 2);
+	nk_ui_slider_int(ctx, 0, &v, MAX_OBSERVERS, 2);
 	Netgame.max_numobservers = (ubyte)v;
-
+	if (!Netgame.max_numobservers)
+		return;
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
 	nk_ui_checkbox_ubyte(ctx, "Broadcast delay", &Netgame.obs_delay);
-	nk_ui_checkbox_ubyte(ctx, "Minimal Observer Info", &Netgame.obs_min);
-		nk_tree_pop(ctx);
-	}
-
-	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	if (nk_button_label(ctx, "Advanced options"))
-		nk_ui_defer(nk_ui_advanced_options);
+	nk_ui_checkbox_ubyte(ctx, "Minimal observer info", &Netgame.obs_min);
 }
 
-int nk_ui_hosting_setup(void)
+#define SOLO_COOP_CPUS	3	// co-op caps a game at four ships
+
+// Singleplayer: you plus however many CPUs; the seat count follows
+static void nk_ui_build_cpu_opponents(struct nk_context *ctx)
+{
+	int coop = Netgame.gamemode == NETGAME_COOPERATIVE || Netgame.gamemode == NETGAME_SURVIVAL;
+	int most = coop ? SOLO_COOP_CPUS : MAX_PLAYERS - 1;
+	int v = min((int)Netgame.CpuCount, most);
+
+	nk_ui_section(ctx, coop ? "CPU PARTNERS" : "CPU OPPONENTS");
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_labelf(ctx, NK_TEXT_LEFT, "CPU players: %d", v);
+	nk_ui_slider_int(ctx, 0, &v, most, 1);
+	Netgame.CpuCount = (ubyte)v;
+	Netgame.max_numplayers = (ubyte)(v + 1);
+	if (!v)
+		return;
+	v = Netgame.CpuSkill;
+	nk_labelf(ctx, NK_TEXT_LEFT, "CPU skill: %s", duelbot_tier_name(Netgame.CpuSkill));
+	nk_ui_slider_int(ctx, 0, &v, DUEL_TIERS - 1, 1);
+	Netgame.CpuSkill = (ubyte)v;
+}
+
+static void nk_ui_build_access(struct nk_context *ctx)
+{
+	int closed = (Netgame.game_flags & NETGAME_FLAG_CLOSED) != 0;
+	int restricted = Netgame.RefusePlayers != 0;
+
+	nk_ui_section(ctx, "ACCESS");
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 3);
+	if (nk_option_label(ctx, "Open", !closed && !restricted)) { Netgame.game_flags &= ~NETGAME_FLAG_CLOSED; Netgame.RefusePlayers = 0; }
+	if (nk_option_label(ctx, "Closed", closed)) { Netgame.game_flags |= NETGAME_FLAG_CLOSED; Netgame.RefusePlayers = 0; }
+	if (nk_option_label(ctx, "Restricted", restricted)) { Netgame.game_flags &= ~NETGAME_FLAG_CLOSED; Netgame.RefusePlayers = 1; }
+}
+
+static void nk_ui_build_mode_panel(struct nk_context *ctx, int current)
+{
+	const struct nk_ui_mode *m;
+
+	if (current < 0)
+	{
+		nk_ui_section(ctx, "Pick a game mode on the left.");
+		return;
+	}
+	m = &Host_modes[current];
+	nk_ui_section(ctx, m->name);
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_label(ctx, m->blurb, NK_TEXT_LEFT);
+	if (m->flags & MODE_TEAMS)
+		nk_ui_build_team_rules(ctx);
+	if (m->rules)
+		m->rules(ctx);
+}
+
+static void nk_ui_try_start(struct hosting_ui_state *st)
+{
+	if (Netgame.levelnum < Last_secret_level || Netgame.levelnum > Last_level || !Netgame.levelnum)
+	{
+		Netgame.levelnum = 1;
+		strcpy(st->slevel, "1");
+		return;
+	}
+	st->start_requested = 1;
+}
+
+static void nk_ui_build_host_buttons(struct nk_context *ctx, struct hosting_ui_state *st)
+{
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 5);
+	if (nk_button_label(ctx, "Load Preset"))
+		nk_ui_defer(nk_ui_load_preset);
+	if (nk_button_label(ctx, "Save Preset"))
+		nk_ui_defer(nk_ui_save_preset);
+	if (nk_button_label(ctx, "Advanced..."))
+		nk_ui_defer(nk_ui_advanced_options);
+	if (nk_button_label(ctx, "Cancel"))
+		st->running = 0;
+	if (nk_button_label(ctx, "Start Game") || nk_ui_take_enter())
+		nk_ui_try_start(st);
+}
+
+#define HOST_LIST_WIDTH		0.3f
+#define HOST_FIXED_ROWS		2	// header and buttons
+#define HOST_MIN_PANE_ROWS	4
+
+static void nk_ui_build_hosting(struct nk_context *ctx, void *userdata)
+{
+	struct hosting_ui_state *st = (struct hosting_ui_state *)userdata;
+	float row = NK_UI_ROW_HEIGHT + ctx->style.window.spacing.y;
+	float pane_h = nk_window_get_content_region(ctx).h - row * (HOST_FIXED_ROWS + 1)
+		- ctx->style.window.padding.y * 2;
+	int current = nk_ui_current_mode();
+	static const float widths[] = { HOST_LIST_WIDTH, 1.0f - HOST_LIST_WIDTH };
+
+	nk_ui_build_host_header(ctx, st);
+
+	nk_layout_row(ctx, NK_DYNAMIC, max(pane_h, row * HOST_MIN_PANE_ROWS), 2, widths);
+	if (nk_group_begin(ctx, "modes", NK_WINDOW_BORDER))
+	{
+		nk_ui_build_mode_list(ctx, current);
+		nk_group_end(ctx);
+	}
+	if (nk_group_begin(ctx, "settings", NK_WINDOW_BORDER))
+	{
+		nk_ui_build_mode_panel(ctx, current);
+		if (st->solo)
+			nk_ui_build_cpu_opponents(ctx);
+		else
+		{
+			nk_ui_build_players(ctx);
+			nk_ui_build_access(ctx);
+		}
+		nk_group_end(ctx);
+	}
+
+	nk_ui_build_host_buttons(ctx, st);
+}
+
+static int nk_ui_run_hosting(const char *title, int solo)
 {
 	struct hosting_ui_state st;
 
@@ -2383,11 +2675,12 @@ int nk_ui_hosting_setup(void)
 
 	memset(&st, 0, sizeof(st));
 	st.running = 1;
+	st.solo = solo;
 	snprintf(st.slevel, sizeof(st.slevel), "%d", Netgame.levelnum > 0 ? Netgame.levelnum : 1);
 
 	while (st.running)
 	{
-		if (!nk_ui_frame("Host Game", nk_vec2(0.6f, 0.8f), nk_ui_build_hosting, &st))
+		if (!nk_ui_frame(title, nk_vec2(0.7f, 0.8f), nk_ui_build_hosting, &st))
 			break;
 		if (st.start_requested)
 		{
@@ -2401,6 +2694,16 @@ int nk_ui_hosting_setup(void)
 	}
 
 	return st.started;
+}
+
+int nk_ui_hosting_setup(void)
+{
+	return nk_ui_run_hosting("Host Game", 0);
+}
+
+int nk_ui_singleplayer_setup(void)
+{
+	return nk_ui_run_hosting("Singleplayer", 1);
 }
 
 // ==============================
@@ -3483,6 +3786,111 @@ void nk_ui_toggle_section(const newmenu_item *items, int nitems, int index, unsi
 		*collapsed ^= 1u << section;
 }
 
+static unsigned int nk_ui_all_sections_collapsed(const newmenu_item *items, int nitems);
+
+#define NK_UI_MIN_TABS	2
+#define NK_UI_TABBED_WIDTH_FRAC	0.7f
+#define NK_UI_TAB_LIST_FRAC	0.3f
+
+static int nk_ui_count_tabs(const newmenu_item *items, int nitems)
+{
+	int i, tabs = 0;
+
+	for (i = 0; i < nitems; i++)
+		if (nk_ui_is_collapsible_head(items, nitems, i))
+			tabs++;
+	return tabs;
+}
+
+// SNG: a menu's sections drawn as tabs across the top, one open at a time
+int nk_ui_tabs_active(const newmenu_item *items, int nitems)
+{
+	return GameCfg.UiTabs && nk_ui_count_tabs(items, nitems) >= NK_UI_MIN_TABS;
+}
+
+static int nk_ui_open_tab(const newmenu_item *items, int nitems, unsigned int collapsed)
+{
+	int i;
+
+	for (i = 0; i < nitems; i++)
+		if (nk_ui_is_collapsible_head(items, nitems, i) &&
+			!((collapsed >> nk_ui_section_of(items, nitems, i)) & 1u))
+			return i;
+	return -1;
+}
+
+static void nk_ui_show_tab(const newmenu_item *items, int nitems, int head, unsigned int *collapsed)
+{
+	*collapsed = nk_ui_all_sections_collapsed(items, nitems) & ~(1u << nk_ui_section_of(items, nitems, head));
+}
+
+static int nk_ui_open_tab_count(const newmenu_item *items, int nitems, unsigned int collapsed)
+{
+	int i, open = 0;
+
+	for (i = 0; i < nitems; i++)
+		if (nk_ui_is_collapsible_head(items, nitems, i) &&
+			!((collapsed >> nk_ui_section_of(items, nitems, i)) & 1u))
+			open++;
+	return open;
+}
+
+// exactly one tab open: left alone once it is; else the selected item's, else the first
+static void nk_ui_settle_tabs(const newmenu_item *items, int nitems, int citem, unsigned int *collapsed)
+{
+	int head = -1, i;
+
+	if (nk_ui_open_tab_count(items, nitems, *collapsed) == 1)
+		return;
+
+	for (i = citem; i >= 0 && i < nitems; i--)
+		if (nk_ui_is_collapsible_head(items, nitems, i))
+		{
+			head = i;
+			break;
+		}
+	if (head < 0)
+		head = nk_ui_open_tab(items, nitems, *collapsed);
+	for (i = 0; head < 0 && i < nitems; i++)
+		if (nk_ui_is_collapsible_head(items, nitems, i))
+			head = i;
+	if (head >= 0)
+		nk_ui_show_tab(items, nitems, head, collapsed);
+}
+
+// Tab / Shift-Tab: the next or previous tab's heading index, opened
+int nk_ui_next_tab(const newmenu_item *items, int nitems, unsigned int *collapsed, int direction)
+{
+	int head = nk_ui_open_tab(items, nitems, *collapsed), i;
+
+	for (i = 0; i < nitems; i++)
+	{
+		head = (head + direction + nitems) % nitems;
+		if (nk_ui_is_collapsible_head(items, nitems, head))
+		{
+			nk_ui_show_tab(items, nitems, head, collapsed);
+			return head;
+		}
+	}
+	return -1;
+}
+
+static void nk_ui_tab_list(struct nk_context *ctx, const newmenu_item *items, int nitems)
+{
+	int i, open = nk_ui_open_tab(items, nitems, nk_ui_collapsed_mask());
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	for (i = 0; i < nitems; i++)
+	{
+		nk_bool on = i == open;
+
+		if (!nk_ui_is_collapsible_head(items, nitems, i))
+			continue;
+		if (nk_selectable_label(ctx, items[i].text, NK_TEXT_LEFT, &on) && on && s_collapsed)
+			nk_ui_show_tab(items, nitems, i, s_collapsed);
+	}
+}
+
 // Every section folded: what a menu looks like before the player has
 // touched it, so it opens as a short list of headings.
 static unsigned int nk_ui_all_sections_collapsed(const newmenu_item *items, int nitems)
@@ -3588,6 +3996,8 @@ int nk_ui_item_is_folded(const newmenu_item *items, int nitems, int index, unsig
 {
 	int start;
 
+	if (nk_ui_tabs_active(items, nitems) && nk_ui_is_collapsible_head(items, nitems, index))
+		return 1;		// it's a tab now
 	if (nk_ui_section_is_collapsed(items, nitems, index, collapsed))
 		return 1;
 	if (items[index].type != NM_TYPE_RADIO)
@@ -3842,7 +4252,7 @@ static int nk_ui_menu_item_widget(struct nk_context *ctx, newmenu_item *items, i
 
 		case NM_TYPE_SLIDER:
 			nk_label(ctx, item->text, NK_TEXT_LEFT);
-			nk_slider_int(ctx, item->min_value, &item->value, item->max_value, 1);
+			nk_ui_slider_int(ctx, item->min_value, &item->value, item->max_value, 1);
 			return item->value != value;
 
 		case NM_TYPE_NUMBER:
@@ -3886,7 +4296,7 @@ static int nk_ui_is_navigation(const newmenu_item *items, int nitems)
 
 static float nk_ui_menu_width(int screen_width, int is_table)
 {
-	float wanted = screen_width * (is_table ? NK_UI_TABLE_WIDTH_FRAC : NK_UI_MENU_WIDTH_FRAC);
+	float wanted = screen_width * (is_table ? NK_UI_TABLE_WIDTH_FRAC : NK_UI_MENU_WIDTH_FRAC) * nk_ui_width_factor();
 	float least = (float)(NK_UI_ROW_HEIGHT * NK_UI_MENU_MIN_WIDTH_ROWS);
 	float limit = screen_width * NK_UI_MENU_MAX_HEIGHT_FRAC;
 
@@ -3922,6 +4332,24 @@ static float nk_ui_menu_height_px(int nrows, float extra_px, int screen_height)
 	float limit = screen_height * NK_UI_MENU_MAX_HEIGHT_FRAC;
 
 	return wanted < limit ? wanted : limit;
+}
+
+static int muted_menu(int has_focus)
+{
+	return !has_focus || s_drawing_underneath;
+}
+
+// Takes effect next frame, when the fonts are re-baked at the new size.
+static void nk_ui_fit_to_screen(float wanted, int screen_height)
+{
+	float limit = screen_height * NK_UI_MENU_MAX_HEIGHT_FRAC;
+	float fit = s_fit_scale;
+
+	if (wanted > limit)
+		fit = s_fit_scale * limit / wanted;
+	else if (s_fit_scale < 1.0f && wanted * NK_UI_FIT_SLACK < limit)
+		fit = min(1.0f, s_fit_scale * limit / (wanted * NK_UI_FIT_SLACK));
+	s_fit_scale = max(NK_UI_FIT_MIN, fit);
 }
 
 static float nk_ui_menu_height(int nrows, int screen_height)
@@ -4122,6 +4550,8 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 	*changed = -1;
 	*selected = -1;
 	s_collapsed = collapsed;
+	if (collapsed && nk_ui_tabs_active(items, nitems))
+		nk_ui_settle_tabs(items, nitems, citem, collapsed);
 	nk_ui_init_once();
 	nk_ui_sync_fonts();
 	nk_ui_claim_panel(id);
@@ -4203,8 +4633,19 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 			tall_gap_px = nk_ui_column_gap_px(items, nitems, col_start[c], col_start[c + 1]);
 		}
 	}
+	if (!muted_menu(has_focus) && (has_table || !GameCfg.UiFitMenus || nk_ui_tabs_active(items, nitems)))
+		s_fit_scale = 1.0f;		// lists scroll at the player's own size
+	else if (!muted_menu(has_focus))
+		nk_ui_fit_to_screen((head_rows + tall_rows) * row_stride + tall_gap_px + NK_UI_MENU_CHROME_HEIGHT, height);
 	// Every panel is as tall as what it holds, capped at most of the screen.
 	panel_h = nk_ui_menu_height_px(head_rows + tall_rows, tall_gap_px, height);
+	if (nk_ui_tabs_active(items, nitems))
+	{
+		// tabbed menus hold one size, whichever tab is open: room to spare
+		panel_h = height * NK_UI_MENU_MAX_HEIGHT_FRAC;
+		panel_w = max(panel_w, min(layout_w * NK_UI_TABBED_WIDTH_FRAC * nk_ui_width_factor(),
+			layout_w * NK_UI_MAX_SCREEN_FRAC));
+	}
 	column_h = panel_h - NK_UI_MENU_CHROME_HEIGHT - head_rows * row_stride;
 	if (column_h < row_stride)
 		column_h = row_stride;
@@ -4246,8 +4687,24 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 		}
 		if (body)
 			nk_ui_message_lines(s_ctx, body);
+		if (nk_ui_tabs_active(items, nitems))
+		{
+			static const float split[] = { NK_UI_TAB_LIST_FRAC, 1.0f - NK_UI_TAB_LIST_FRAC };
 
-		if (ncols > 1)
+			nk_layout_row(s_ctx, NK_DYNAMIC, column_h, 2, split);
+			if (nk_group_begin(s_ctx, "tabs", NK_WINDOW_BORDER))
+			{
+				nk_ui_tab_list(s_ctx, items, nitems);
+				nk_group_end(s_ctx);
+			}
+			if (nk_group_begin(s_ctx, "tab", NK_WINDOW_BORDER))
+			{
+				nk_layout_row_dynamic(s_ctx, NK_UI_ROW_HEIGHT, 1);
+				nk_ui_draw_items(s_ctx, &draw, 0, nitems);
+				nk_group_end(s_ctx);
+			}
+		}
+		else if (ncols > 1)
 		{
 			nk_layout_row_dynamic(s_ctx, column_h, ncols);
 			for (c = 0; c < ncols; c++)
@@ -4271,6 +4728,8 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 		}
 		if (s_item_font != &s_body_font)
 			nk_style_pop_font(s_ctx);
+		if (!muted)
+			nk_ui_scale_grip(s_ctx);
 	}
 	nk_end(s_ctx);
 	if (!muted)
@@ -4465,6 +4924,7 @@ int nk_ui_bind_frame(const void *id, const char *title, const char *hint,
 					current_row, current_slot, changing, picked_row, picked_slot);
 			nk_group_end(s_ctx);
 		}
+		nk_ui_scale_grip(s_ctx);
 	}
 	nk_end(s_ctx);
 	nk_window_set_focus(s_ctx, name);
@@ -4608,6 +5068,8 @@ int nk_ui_listbox_frame(const void *id, const char *title, char **items, int nit
 			result = NK_UI_LISTBOX_ACCEPT;
 		if (allow_abort && nk_button_label(s_ctx, "Cancel"))
 			result = NK_UI_LISTBOX_CANCEL;
+		if (!muted)
+			nk_ui_scale_grip(s_ctx);
 	}
 	nk_end(s_ctx);
 	if (!muted)
@@ -5271,4 +5733,86 @@ void nk_ui_screenshots(void)
 
 	nk_ui_shots_drop_texture(&s);
 	d_free(s.names);
+}
+
+// ==============================
+// Menu Size: everything the corner grip does, and finer
+// ==============================
+
+static void nk_ui_pct_slider(struct nk_context *ctx, const char *label, int *field, int lo, int hi, int step)
+{
+	int v = clamp_pct(*field, lo, hi);
+
+	nk_labelf(ctx, NK_TEXT_LEFT, "%s: %d%%", label, v);
+	nk_ui_slider_int(ctx, lo, &v, hi, step);
+	*field = v;
+}
+
+static void nk_ui_build_scale_presets(struct nk_context *ctx)
+{
+	int i;
+	char label[16];
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, NUM_SCALE_PRESETS);
+	for (i = 0; i < NUM_SCALE_PRESETS; i++)
+	{
+		snprintf(label, sizeof(label), "GUI %d", i + 1);
+		if (nk_button_label(ctx, label))
+			GameCfg.UiScale = Scale_presets[i];
+	}
+}
+
+static void nk_ui_reset_menu_size(void)
+{
+	GameCfg.UiScale = UI_STOCK;
+	GameCfg.UiTextScale = UI_STOCK;
+	GameCfg.UiRowSpacing = UI_STOCK;
+	GameCfg.UiPanelWidth = UI_STOCK;
+	GameCfg.UiFitMenus = 1;
+	GameCfg.UiTabs = 1;
+}
+
+static void nk_ui_build_menu_size(struct nk_context *ctx, void *userdata)
+{
+	int *running = (int *)userdata;
+	nk_bool fit = GameCfg.UiFitMenus != 0;
+
+	nk_ui_section(ctx, "OVERALL SIZE");
+	nk_ui_build_scale_presets(ctx);
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_ui_pct_slider(ctx, "Size", &GameCfg.UiScale, NK_UI_SCALE_MIN, NK_UI_SCALE_MAX, 5);
+	nk_label(ctx, "Tip: drag the corner of any menu to resize.", NK_TEXT_LEFT);
+
+	nk_ui_section(ctx, "FINE TUNING");
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_ui_pct_slider(ctx, "Text size", &GameCfg.UiTextScale, UI_TEXT_MIN, UI_TEXT_MAX, 5);
+	nk_ui_pct_slider(ctx, "Row spacing", &GameCfg.UiRowSpacing, UI_ROWS_MIN, UI_ROWS_MAX, 10);
+	nk_ui_pct_slider(ctx, "Panel width", &GameCfg.UiPanelWidth, UI_WIDTH_MIN, UI_WIDTH_MAX, 5);
+	nk_checkbox_label(ctx, "Shrink tall menus to fit the screen", &fit);
+	GameCfg.UiFitMenus = fit;
+	{
+		nk_bool tabs = GameCfg.UiTabs != 0;
+
+		nk_checkbox_label(ctx, "Menu sections as side tabs (Tab key switches)", &tabs);
+		GameCfg.UiTabs = tabs;
+	}
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
+	if (nk_button_label(ctx, "Reset"))
+		nk_ui_reset_menu_size();
+	if (nk_button_label(ctx, "Done") || nk_ui_take_enter())
+		*running = 0;
+}
+
+void nk_ui_menu_size(void)
+{
+	int running = 1;
+
+	nk_ui_init_once();
+	while (running)
+	{
+		if (!nk_ui_frame("Menu Size", nk_vec2(0.45f, 0.6f), nk_ui_build_menu_size, &running))
+			break;
+	}
+	WriteConfigFile();
 }

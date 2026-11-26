@@ -1423,7 +1423,7 @@ void add_points_to_score(int points)
 	if (points == 0 || cheats.enabled)
 		return;
 
-	if ((Game_mode & GM_MULTI) && !( (Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) ) && !Netgame.PointCapture)
+	if ((Game_mode & GM_MULTI) && !( (Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS) ) && !Netgame.PointCapture && !Netgame.CTF)
 		return;
 
 	prev_score=Players[Player_num].score;
@@ -2382,7 +2382,7 @@ void hud_show_kill_list()
 				x0 -= FSPACX(18);
 			}
 
-			if(Show_network_stats) {
+			if(Show_network_stats && !net_udp_solo()) {
 				x1 -= FSPACX(45);
 				x0 -= FSPACX(45);
 
@@ -2517,13 +2517,13 @@ void hud_show_kill_list()
 			else if (Netgame.CTF)
 				gr_printf(x1, y, "%d", Players[player_num].score);
 			else if (Netgame.PointCapture)
-				gr_printf(x1,y,"K:%3d",Players[player_num].net_kills_total);
+				gr_printf(x1,y,"%d",Players[player_num].score);
 			else // this is the default normal multi game mode score count.
 				gr_printf(x1,y,"%3d",Players[player_num].net_kills_total);
 
 		}
 
-		if((Show_network_stats && !is_observer()) && player_num != Player_num && Players[player_num].connected && Show_kill_list != 3) {
+		if((Show_network_stats && !is_observer() && !net_udp_solo()) && player_num != Player_num && Players[player_num].connected && Show_kill_list != 3) {
 			int lag = -1;
 
 			if(Netgame.RetroProtocol) {

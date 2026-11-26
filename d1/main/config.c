@@ -69,6 +69,12 @@ static const char GrabinputStr[] ="GrabInput";
 static const char BorderlessWindowStr[] ="BorderlessWindow";
 static const char MenuBackgroundStr[] ="MenuBackground";
 static const char MenuColorStr[] ="MenuColor";	// SNG: accent colour of the Nuklear menus
+static const char UiScaleStr[] ="UiScale";
+static const char UiTextScaleStr[] ="UiTextScale";
+static const char UiRowSpacingStr[] ="UiRowSpacing";
+static const char UiPanelWidthStr[] ="UiPanelWidth";
+static const char UiFitMenusStr[] ="UiFitMenus";
+static const char UiTabsStr[] ="UiTabs";
 
 int ReadConfigFile()
 {
@@ -123,6 +129,12 @@ int ReadConfigFile()
 	GameCfg.Grabinput = 1;
 	GameCfg.BorderlessWindow = 0;
 	GameCfg.MenuColor = 0;
+	GameCfg.UiScale = 100;
+	GameCfg.UiTextScale = 100;
+	GameCfg.UiRowSpacing = 100;
+	GameCfg.UiPanelWidth = 100;
+	GameCfg.UiFitMenus = 1;
+	GameCfg.UiTabs = 1;
 	snprintf(GameCfg.MenuBackground, sizeof(GameCfg.MenuBackground), "%s", MENU_BACKGROUND_DEFAULT);
 
 	infile = PHYSFSX_openReadBuffered("descent.cfg");
@@ -247,6 +259,18 @@ int ReadConfigFile()
 				GameCfg.BorderlessWindow = strtol(value, NULL, 10);
 			else if (!strcmp(token, MenuColorStr))
 				GameCfg.MenuColor = strtol(value, NULL, 10);
+			else if (!strcmp(token, UiScaleStr))
+				GameCfg.UiScale = strtol(value, NULL, 10);
+			else if (!strcmp(token, UiTextScaleStr))
+				GameCfg.UiTextScale = strtol(value, NULL, 10);
+			else if (!strcmp(token, UiRowSpacingStr))
+				GameCfg.UiRowSpacing = strtol(value, NULL, 10);
+			else if (!strcmp(token, UiPanelWidthStr))
+				GameCfg.UiPanelWidth = strtol(value, NULL, 10);
+			else if (!strcmp(token, UiFitMenusStr))
+				GameCfg.UiFitMenus = strtol(value, NULL, 10);
+			else if (!strcmp(token, UiTabsStr))
+				GameCfg.UiTabs = strtol(value, NULL, 10);
 			else if (!strcmp(token, MenuBackgroundStr))	{
 				char * p;
 				snprintf(GameCfg.MenuBackground, sizeof(GameCfg.MenuBackground), "%s", value);
@@ -313,6 +337,12 @@ int WriteConfigFile()
 	PHYSFSX_printf(infile, "%s=%i\n", GrabinputStr, GameCfg.Grabinput);
 	PHYSFSX_printf(infile, "%s=%i\n", BorderlessWindowStr, GameCfg.BorderlessWindow);
 	PHYSFSX_printf(infile, "%s=%i\n", MenuColorStr, GameCfg.MenuColor);
+	PHYSFSX_printf(infile, "%s=%i\n", UiScaleStr, GameCfg.UiScale);
+	PHYSFSX_printf(infile, "%s=%i\n", UiTextScaleStr, GameCfg.UiTextScale);
+	PHYSFSX_printf(infile, "%s=%i\n", UiRowSpacingStr, GameCfg.UiRowSpacing);
+	PHYSFSX_printf(infile, "%s=%i\n", UiPanelWidthStr, GameCfg.UiPanelWidth);
+	PHYSFSX_printf(infile, "%s=%i\n", UiFitMenusStr, GameCfg.UiFitMenus);
+	PHYSFSX_printf(infile, "%s=%i\n", UiTabsStr, GameCfg.UiTabs);
 	PHYSFSX_printf(infile, "%s=%s\n", MenuBackgroundStr, GameCfg.MenuBackground);
 
 	PHYSFS_close(infile);

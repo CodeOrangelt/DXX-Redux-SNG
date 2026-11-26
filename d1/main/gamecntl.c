@@ -78,6 +78,9 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "scores.h"
 
 #include "multi.h"
+#ifdef USE_UDP
+#include "net_udp.h"
+#endif
 #include "survival.h"
 #include "cntrlcen.h"
 #include "fuelcen.h"
@@ -287,7 +290,7 @@ int do_game_pause()
 	char total_time[9],level_time[9];
 
 #ifdef NETWORK
-	if (Game_mode & GM_MULTI)
+	if ((Game_mode & GM_MULTI) && !net_udp_solo())
 	{
 		netplayerinfo_on= !netplayerinfo_on;
 		return(KEY_PAUSE);
