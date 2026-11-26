@@ -2191,7 +2191,7 @@ void nk_ui_weapon_autoselect(void)
 
 	while (running)
 	{
-		if (!nk_ui_frame("Weapon Autoselect", nk_vec2(0.62f, 0.66f), nk_ui_build_weapon_autoselect, &running))
+		if (!nk_ui_frame("Weapon Autoselect", nk_vec2(0.75f, 0.8f), nk_ui_build_weapon_autoselect, &running))
 			break;
 	}
 }
