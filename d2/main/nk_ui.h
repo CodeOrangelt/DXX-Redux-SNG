@@ -124,6 +124,7 @@ enum { NK_UI_BIND_NONE, NK_UI_BIND_PICK, NK_UI_BIND_CLOSE, NK_UI_BIND_CLEAR, NK_
 
 // `slot_names`, when given, heads each column with what its slots are
 // (the weapon-key screen binds keyboard, joystick and mouse side by side).
+int nk_ui_bind_rows_per_column(void);
 int nk_ui_bind_frame(const void *id, const char *title, const char *hint,
 	const struct nk_ui_bind_row *rows, int nrows, const char *const *slot_names,
 	int current_row, int current_slot, int changing, int *picked_row, int *picked_slot);

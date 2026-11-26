@@ -22,6 +22,11 @@ void nk_ui_menu_closed(void)
 {
 }
 
+int nk_ui_bind_rows_per_column(void)
+{
+	return 0;
+}
+
 int nk_ui_bind_frame(const void *id, const char *title, const char *hint,
 	const struct nk_ui_bind_row *rows, int nrows, const char *const *slot_names,
 	int current_row, int current_slot, int changing, int *picked_row, int *picked_slot)
