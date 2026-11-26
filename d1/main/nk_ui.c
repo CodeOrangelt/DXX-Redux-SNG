@@ -6202,8 +6202,31 @@ int nk_ui_filter_matches(const char *text, const char *filter)
 // Returns NK_UI_LISTBOX_ACCEPT / _CANCEL when a button (or a click on the
 // already-highlighted row) ends the list, else _NONE. *citem follows clicks;
 // the view scrolls only when *citem moved since *last_citem (keyboard).
+// SNG: a listbox title's first line heads the window; the rest is a subtitle row
+static void nk_ui_split_title(const char *title, char *head, size_t head_len, char *sub, size_t sub_len)
+{
+	const char *nl = title ? strchr(title, '\n') : NULL;
+	size_t i, o = 0;
+
+	snprintf(head, head_len, "%.*s", nl ? (int)(nl - title) : (int)head_len, title ? title : "");
+	sub[0] = 0;
+	for (i = 0; nl && nl[i] && o + 3 < sub_len; i++)
+	{
+		if (nl[i] != '\n')
+			sub[o++] = nl[i];
+		else if (o && sub[o - 1] != ' ')
+			sub[o++] = ' ', sub[o++] = ' ';
+	}
+	while (o && sub[o - 1] == ' ')
+		o--;
+	sub[o] = 0;
+	while (sub[0] == ' ')
+		memmove(sub, sub + 1, strlen(sub));
+}
+
 int nk_ui_listbox_frame(const void *id, const char *title, char **items, int nitems, int *citem, int *last_citem, unsigned int *scroll_y, char *filter, int allow_abort, int has_focus)
 {
+	char head[NM_MAX_TEXT_LEN], sub[NM_MAX_TEXT_LEN];
 	int width = grd_curscreen->sc_w, height = grd_curscreen->sc_h;
 	int layout_w = nk_ui_layout_width(grd_curscreen->sc_w, grd_curscreen->sc_h);
 	float panel_w = layout_w * NK_UI_LISTBOX_WIDTH_FRAC, panel_h = height * NK_UI_LISTBOX_HEIGHT_FRAC;
@@ -6220,10 +6243,13 @@ int nk_ui_listbox_frame(const void *id, const char *title, char **items, int nit
 	nk_ui_init_once();
 	nk_ui_sync_fonts();
 	nk_ui_claim_panel(id);
+	nk_ui_split_title(title, head, sizeof(head), sub, sizeof(sub));
+	if (sub[0])
+		list_h -= NK_UI_ROW_HEIGHT + s_ctx->style.window.spacing.y;
 	for (i = 0; i < nitems; i++)
 		item_need = max(item_need, nk_ui_text_width(&s_body_font, items[i]));
 	panel_w = min(max(panel_w, item_need + s_row_h * 3 + s_ctx->style.window.padding.x * 2), layout_w * NK_UI_MAX_SCREEN_FRAC);
-	if (title && title[0])
+	if (head[0])
 		flags |= NK_WINDOW_TITLE;
 	if (!has_focus || s_drawing_underneath)
 		flags |= NK_WINDOW_NO_INPUT;
@@ -6232,11 +6258,19 @@ int nk_ui_listbox_frame(const void *id, const char *title, char **items, int nit
 	if (muted)
 		saved_input = nk_ui_mute_input();
 
-	if (nk_ui_begin_panel(name, title ? title : "",
+	if (nk_ui_begin_panel(name, head,
 			nk_ui_hide_if_muted(nk_rect((width - panel_w) * 0.5f, (height - panel_h) * 0.5f, panel_w, panel_h), muted), flags))
 	{
 		float stride = NK_UI_ROW_HEIGHT + s_ctx->style.window.spacing.y;
 		float row_top;
+
+		if (sub[0])
+		{
+			nk_layout_row_dynamic(s_ctx, NK_UI_ROW_HEIGHT, 1);
+			nk_style_push_color(s_ctx, &s_ctx->style.text.color, NK_UI_ACCENT_BRIGHT);
+			nk_label(s_ctx, sub, NK_TEXT_LEFT);
+			nk_style_pop_color(s_ctx);
+		}
 
 		for (i = 0; i < nitems && i < *citem; i++)
 			if (nk_ui_filter_matches(items[i], filter))
