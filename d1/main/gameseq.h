@@ -113,3 +113,9 @@ extern int NumNetPlayerPositions;
 void bash_to_shield(int, char *);
 
 #endif /* _GAMESEQ_H */
+
+int ctf_game_on(void);
+int ctf_home_spawn(int pnum, int start_num);
+void ctf_assign_home_starts(int *locations);
+int start_taken(int start_num, int self);
+int free_spawn(int pnum, int start_num);

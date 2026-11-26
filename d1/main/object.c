@@ -1551,7 +1551,7 @@ void dead_player_frame(void)
 #ifdef NETWORK
 				if((Game_mode & GM_NETWORK) && (Netgame.SpawnStyle == SPAWN_STYLE_PREVIEW)) {
 					d_srand((fix)timer_query());
-					previewed_spawn_point = d_rand() % NumNetPlayerPositions;
+					previewed_spawn_point = ctf_game_on() ? ctf_home_spawn(Player_num, 0) : free_spawn(Player_num, d_rand() % NumNetPlayerPositions);
 
 					Dead_player_camera->pos = Player_init[previewed_spawn_point].pos;
 					Dead_player_camera->orient = Player_init[previewed_spawn_point].orient;
@@ -1594,7 +1594,10 @@ void dead_player_frame(void)
 				}
 #endif
 			}
-			DoPlayerDead();         //kill_player();
+			if (multi_lms_eliminated(Player_num))
+				HUD_init_message_literal(HM_MULTI | HM_REDUNDANT, "Eliminated: watching until the round ends");
+			else
+				DoPlayerDead();         //kill_player();
 		}
 	}
 	else

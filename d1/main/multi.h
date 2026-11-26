@@ -251,6 +251,7 @@ void multi_init_objects(void);
 void multi_show_player_list(void);
 void multi_do_protocol_frame(int force, int listen);
 void multi_do_frame(void);
+int multi_lms_eliminated(int pnum);
 
 void multi_send_fire(int laser_gun, int laser_level, int laser_flags, int laser_fired, short laser_track);
 void multi_send_fire_for(int pnum, int laser_gun, int laser_level, int laser_flags, int laser_fired, short laser_track);
@@ -282,6 +283,7 @@ void multi_send_create_powerup(int powerup_type, int segnum, int objnum, vms_vec
 void multi_send_play_sound(int sound_num, fix volume);
 void multi_send_audio_taunt(int taunt_num);
 void multi_send_score(void);
+void multi_send_score_for(int pnum);
 void multi_send_trigger(int trigger);
 void multi_send_hostage_door_status(int wallnum);
 void multi_send_damage(fix damage, fix shields, ubyte killer_type, ubyte killer_id, ubyte damage_type, object* source);
@@ -295,6 +297,8 @@ void multi_send_create_explosion2(int segnum, vms_vector *pos, fix size, int typ
 void multi_do_create_explosion2( const ubyte *buf );
 
 void multi_send_flags(void);
+void multi_send_flags_for(int pnum);
+void multi_powcap_cap_objects_for(int pnum);
 void multi_do_flags(const ubyte* buf);
 void multi_send_bounty( void );
 void multi_endlevel_score(void);

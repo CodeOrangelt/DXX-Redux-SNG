@@ -1522,6 +1522,103 @@ int spawn_point_sort_func(const void* element1, const void* element2)
 	return 0;
 }
 
+#define CTF_HOME_SPAWNS		2	// a team respawns at one of the free starts nearest its own flag
+#define SPAWN_CLEARANCE		(F1_0*12)	// two ship widths: closer and the new ship is wedged inside
+
+// another ship already sitting on this start
+int start_taken(int start_num, int self)
+{
+	int i;
+
+	for (i = 0; i < N_players; i++)
+		if (i != self && Objects[Players[i].objnum].type == OBJ_PLAYER &&
+			vm_vec_dist(&Objects[Players[i].objnum].pos, &Player_init[start_num].pos) < SPAWN_CLEARANCE)
+			return 1;
+	return 0;
+}
+
+// a free start at random, or the original if every one is taken
+int free_spawn(int pnum, int start_num)
+{
+	int i, offset;
+
+	if (!start_taken(start_num, pnum))
+		return start_num;
+	offset = d_rand() % NumNetPlayerPositions;
+	for (i = 0; i < NumNetPlayerPositions; i++)
+		if (!start_taken((offset + i) % NumNetPlayerPositions, pnum))
+			return (offset + i) % NumNetPlayerPositions;
+	return start_num;
+}
+
+static fix dist_to_home(int pnum, int start_num)
+{
+	vms_vector *home = get_team(pnum) == 0 ? &blue_key_pos : &red_key_pos;
+
+	return vm_vec_dist(home, &Player_init[start_num].pos);
+}
+
+// the start nearest pnum's own flag that passes `skip`, or -1
+static int nearest_home_start(int pnum, const ubyte *skip)
+{
+	int i, best = -1;
+
+	for (i = 0; i < NumNetPlayerPositions; i++)
+		if (!skip[i] && (best < 0 || dist_to_home(pnum, i) < dist_to_home(pnum, best)))
+			best = i;
+	return best;
+}
+
+int ctf_game_on(void)
+{
+	return (Game_mode & GM_MULTI) && Netgame.CTF;
+}
+
+// SNG: CTF respawns a ship at its own base, on a start nobody is sitting on
+int ctf_home_spawn(int pnum, int start_num)
+{
+	ubyte skip[MAX_PLAYERS];
+	int nearest[CTF_HOME_SPAWNS], found, i;
+
+	if (!ctf_game_on())
+		return start_num;
+	for (i = 0; i < MAX_PLAYERS; i++)
+		skip[i] = i >= NumNetPlayerPositions || start_taken(i, pnum);
+	for (found = 0; found < CTF_HOME_SPAWNS; found++)
+	{
+		nearest[found] = nearest_home_start(pnum, skip);
+		if (nearest[found] < 0)
+			break;
+		skip[nearest[found]] = 1;
+	}
+	return found ? nearest[d_rand() % found] : free_spawn(pnum, start_num);
+}
+
+// SNG: level start, host only. Each ship gets the free start nearest its own flag.
+void ctf_assign_home_starts(int *locations)
+{
+	ubyte used[MAX_PLAYERS];
+	int i, start;
+
+	memset(used, 0, sizeof(used));
+	for (i = NumNetPlayerPositions; i < MAX_PLAYERS; i++)
+		used[i] = 1;
+	for (i = 0; i < NumNetPlayerPositions; i++)
+		if (Players[i].connected)
+		{
+			start = nearest_home_start(i, used);
+			locations[i] = start;
+			used[start] = 1;
+		}
+	for (i = 0; i < NumNetPlayerPositions; i++)
+		if (!Players[i].connected)
+		{
+			start = nearest_home_start(i, used);
+			locations[i] = start;
+			used[start] = 1;
+		}
+}
+
 int choose_multi_spawn_point()
 {
 	struct spawn_point_candidate candidates[MAX_PLAYERS];
@@ -1669,6 +1766,8 @@ void InitPlayerPosition(int random)
 		return;
 	}
 
+	if (!is_observer())
+		NewPlayer = ctf_game_on() ? ctf_home_spawn(Player_num, NewPlayer) : free_spawn(Player_num, NewPlayer);
 	Assert(NewPlayer >= 0);
 	Assert(NewPlayer < NumNetPlayerPositions);
 	ConsoleObject->pos = Player_init[NewPlayer].pos;

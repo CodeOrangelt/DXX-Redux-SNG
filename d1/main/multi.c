@@ -1183,7 +1183,7 @@ multi_sort_kill_list(void)
 
 	for (i = 0; i < MAX_PLAYERS; i++)
 	{
-		if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS || Netgame.CTF))
+		if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS || Netgame.CTF || Netgame.PointCapture))
 			kills[i] = Players[i].score;
 		else
 			kills[i] = Players[i].net_kills_total;
@@ -1218,6 +1218,35 @@ void robo_anarchy_suicide_penalty() {
 }
 
 extern object *obj_find_first_of_type (int);
+// SNG: Last Man Standing. Deaths are already counted on every machine,
+// so one death means out; no separate lives to sync.
+int multi_lms_eliminated(int pnum)
+{
+	return (Game_mode & GM_MULTI) && Netgame.Deathmatch && Players[pnum].net_killed_total > 0;
+}
+
+static void multi_lms_check_winner(void)
+{
+	int i, alive = 0, last = -1;
+
+	for (i = 0; i < N_players; i++)
+	{
+		if (!Players[i].connected || (Netgame.host_is_obs && i == 0) || multi_lms_eliminated(i))
+			continue;
+		alive++;
+		last = i;
+	}
+	if (alive > 1)
+		return;
+
+	if (last == Player_num)
+		HUD_init_message_literal(HM_MULTI, "You are the last one standing! You win!");
+	else if (last >= 0)
+		HUD_init_message(HM_MULTI, "%s is the last one standing and wins!", Players[last].callsign);
+	HUD_init_message_literal(HM_MULTI, "The control center has been destroyed!");
+	net_destroy_controlcen(obj_find_first_of_type(OBJ_CNTRLCEN));
+}
+
 
 void multi_compute_kill(int killer, int killed)
 {
@@ -1490,28 +1519,8 @@ void multi_compute_kill(int killer, int killed)
 		}
 	}
 
-	// Deathmatch mode: Check for last player standing
-	if (Netgame.Deathmatch) {
-		int alive_count = 0;
-		int last_alive = -1;
-		
-		for (int i = 0; i < N_players; i++) {
-			if (Players[i].lives > 0) {
-				alive_count++;
-				last_alive = i;
-			}
-		}
-		
-		if (alive_count == 1 && last_alive >= 0) {
-			if (last_alive == Player_num) {
-				HUD_init_message_literal(HM_MULTI, "You are the last one standing! You win!");
-			} else {
-				HUD_init_message(HM_MULTI, "%s is the last one standing and wins!", Players[last_alive].callsign);
-			}
-			HUD_init_message_literal(HM_MULTI, "The control center has been destroyed!");
-			net_destroy_controlcen (obj_find_first_of_type (OBJ_CNTRLCEN));
-		}
-	}
+	if (Netgame.Deathmatch)
+		multi_lms_check_winner();
 
 	multi_sort_kill_list();
 	multi_show_player_list();
@@ -4471,9 +4480,6 @@ void multi_powcap_count_powerups_in_mine(void)
 // We want to drop something. Kill every Powerup which exceeds the level limit
 void multi_powcap_cap_objects()
 {
-	char type;
-	int index;
-
 	if (!(Game_mode & GM_NETWORK))
 		return;
 
@@ -4484,6 +4490,17 @@ void multi_powcap_cap_objects()
 
 	Players[Player_num].secondary_ammo[PROXIMITY_INDEX]+=Proximity_dropped;
 	Proximity_dropped=0;
+	multi_powcap_cap_objects_for(Player_num);
+}
+
+// SNG: also run for a CPU's death, so static weapons aren't spewed as extras
+void multi_powcap_cap_objects_for(int pnum)
+{
+	char type;
+	int index;
+
+	if (!(Game_mode & GM_NETWORK) || (Game_mode & GM_MULTI_COOP))
+		return;
 
 	// SNG: Arcade - super powers intentionally push players past the level's
 	// powerup budget, so the cap would immediately claw the ammo back.
@@ -4501,22 +4518,22 @@ void multi_powcap_cap_objects()
 	{
 		type=Primary_weapon_to_powerup[index];
 		if (PowerupsInMine[(int)type]>=MaxPowerupsAllowed[(int)type])
-			if(Players[Player_num].primary_weapon_flags & (1 << index))
+			if(Players[pnum].primary_weapon_flags & (1 << index))
 			{
 				con_printf(CON_VERBOSE,"PIM=%d MPA=%d\n",PowerupsInMine[(int)type],MaxPowerupsAllowed[(int)type]);
 				con_printf(CON_VERBOSE,"Killing a primary cuz there's too many! (%d)\n",type);
-				Players[Player_num].primary_weapon_flags&=(~(1 << index));
+				Players[pnum].primary_weapon_flags&=(~(1 << index));
 			}
 	}
 
 
-	if (Players[Player_num].flags & PLAYER_FLAGS_QUAD_LASERS)
+	if (Players[pnum].flags & PLAYER_FLAGS_QUAD_LASERS)
 		if (PowerupsInMine[POW_QUAD_FIRE]+1 > MaxPowerupsAllowed[POW_QUAD_FIRE])
-			Players[Player_num].flags&=(~PLAYER_FLAGS_QUAD_LASERS);
+			Players[pnum].flags&=(~PLAYER_FLAGS_QUAD_LASERS);
 
-	if (Players[Player_num].flags & PLAYER_FLAGS_CLOAKED)
+	if (Players[pnum].flags & PLAYER_FLAGS_CLOAKED)
 		if (PowerupsInMine[POW_CLOAK]+1 > MaxPowerupsAllowed[POW_CLOAK])
-			Players[Player_num].flags&=(~PLAYER_FLAGS_CLOAKED);
+			Players[pnum].flags&=(~PLAYER_FLAGS_CLOAKED);
 }
 
 // Adds players inventory to multi cap
@@ -5051,17 +5068,21 @@ multi_send_score(void)
 {
 	if(Game_mode & GM_OBSERVER) { return; }
 
-	// Send my current score to all other players so it will remain
-	// synced.
+	multi_send_score_for(Player_num);
+}
+
+// SNG: King of the Hill scores by points too, so it has to sync them
+void multi_send_score_for(int pnum)
+{
 	int count = 0;
 
-	if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS || Netgame.CTF)) {
-		multi_sort_kill_list();
-		multibuf[count] = MULTI_SCORE;                  count += 1;
-		multibuf[count] = Player_num;                           count += 1;
-		PUT_INTEL_INT(multibuf+count, Players[Player_num].score);  count += 4;
-		multi_send_data(multibuf, count, 0);
-	}
+	if (!(Game_mode & (GM_MULTI_COOP | GM_MULTI_ROBOTS)) && !Netgame.CTF && !Netgame.PointCapture)
+		return;
+	multi_sort_kill_list();
+	multibuf[count] = MULTI_SCORE;				count += 1;
+	multibuf[count] = pnum;					count += 1;
+	PUT_INTEL_INT(multibuf + count, Players[pnum].score);	count += 4;
+	multi_send_data(multibuf, count, 0);
 }
 
 void
@@ -5943,14 +5964,18 @@ void multi_do_repair( const ubyte *buf )
 	}
 }
 
-void multi_send_flags(void)
+void multi_send_flags_for(int pnum)
 {
-	// Setup flags packet.
 	multibuf[0] = MULTI_FLAGS;
-	multibuf[1] = Player_num;
-	PUT_INTEL_INT(multibuf + 2, Players[Player_num].flags);
+	multibuf[1] = pnum;
+	PUT_INTEL_INT(multibuf + 2, Players[pnum].flags);
 
 	multi_send_data(multibuf, 6, 0);
+}
+
+void multi_send_flags(void)
+{
+	multi_send_flags_for(Player_num);
 }
 
 void multi_do_flags(const ubyte* buf)

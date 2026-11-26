@@ -677,7 +677,7 @@ fix fuelcen_give_fuel(segment* segp, fix MaxAmountCanTake)
 			amount = MaxAmountCanTake;
 
 // PointCapture: add points while standing on energy center, at Netgame.PointCaptureRate points/sec
-	if (Netgame.PointCapture)
+	if (Netgame.PointCapture && !Player_is_dead)	// a wreck holds nothing
 	{
 		static fix64 last_point_time = 0;
 		// Award Netgame.PointCaptureRate points per second, in 0.1-second ticks

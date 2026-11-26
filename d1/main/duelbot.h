@@ -21,6 +21,7 @@ void duelbot_new_match(void);
 void duelbot_level_start(void);
 void duelbot_frame(void);
 int duelbot_is_bot(const object *obj);
+void duelbot_credit_robot_kill(int parent_objnum, int points);
 int duelbot_no_lan(void);
 int duelbot_take_damage(object *obj, object *killer, fix damage);
 int duelbot_pickup(object *obj, object *powerup);

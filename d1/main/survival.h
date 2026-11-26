@@ -41,6 +41,8 @@ int survival_random_ammo_type(void);
 // primary and secondary -- in Survival these drops are the only source of
 // weapons in the entire match.
 int survival_random_weapon_type(void);
+int survival_starting_extra_lives(void);
+void survival_cpu_shop(int pnum, int (*grant)(int pnum, int powerup_id));
 
 // Rolls every drop table for a just-killed robot and creates/syncs whatever
 // comes up. Called from multi_drop_robot_powerups() (multibot.c) in place of

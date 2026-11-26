@@ -167,6 +167,8 @@ void apply_force_damage(object *obj,fix force,object *other_obj)
 				add_points_to_score(Robot_info[obj->id].score_value);
 				survival_note_robot_kill(obj, Robot_info[obj->id].score_value);
 			}
+			else if (result && other_obj->type == OBJ_WEAPON)
+				duelbot_credit_robot_kill(other_obj->ctype.laser_info.parent_num, Robot_info[obj->id].score_value);
 			break;
 
 		case OBJ_PLAYER:
@@ -1008,6 +1010,8 @@ void collide_robot_and_weapon( object * robot, object * weapon, vms_vector *coll
 				add_points_to_score(Robot_info[robot->id].score_value);
 				survival_note_robot_kill(robot, Robot_info[robot->id].score_value);
 			}
+			else
+				duelbot_credit_robot_kill(weapon->ctype.laser_info.parent_num, Robot_info[robot->id].score_value);
 		}
 
 	}
@@ -1722,17 +1726,17 @@ void collide_player_and_powerup( object * player, object * powerup, vms_vector *
 		return;
 	}
 
+	// Turkeys cannot pick up powerups
+	if ((Game_mode & GM_TURKEY_SHOOT) && (player->id == Turkey_target)) {
+		return;
+	}
+
 	if (duelbot_is_bot(player)) {
 		if (duelbot_pickup(player, powerup) && !((Game_mode & GM_MULTI) && powerup_is_static(powerup->id))) {
 			powerup->flags |= OF_SHOULD_BE_DEAD;
 			if (Game_mode & GM_MULTI)
 				multi_send_remobj(powerup-Objects);
 		}
-		return;
-	}
-
-	// Turkeys cannot pick up powerups
-	if ((Game_mode & GM_TURKEY_SHOOT) && (player->id == Turkey_target)) {
 		return;
 	}
 
