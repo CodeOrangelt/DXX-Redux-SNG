@@ -29,4 +29,9 @@ int nk_ui_bind_frame(const void *id, const char *title, const char *hint,
 	return NK_UI_BIND_CLOSE;
 }
 
+int nk_ui_singleplayer_setup(void)
+{
+	return 0;
+}
+
 #endif
