@@ -4564,10 +4564,14 @@ static void nk_ui_draw_more(struct nk_context *ctx, struct nk_rect area, int fil
 // SNG: a scrolling panel says so in its footer, left of the size grip
 static void nk_ui_more_below(struct nk_context *ctx)
 {
-	struct nk_panel *layout = ctx->current->layout;
-	struct nk_rect footer = nk_rect(layout->bounds.x, layout->bounds.y + layout->bounds.h,
-		layout->bounds.w - s_row_h, layout->footer_height);
+	struct nk_panel *layout;
+	struct nk_rect footer;
 
+	if (!ctx->current)
+		return;		// a nested messagebox ended this frame's window
+	layout = ctx->current->layout;
+	footer = nk_rect(layout->bounds.x, layout->bounds.y + layout->bounds.h,
+		layout->bounds.w - s_row_h, layout->footer_height);
 	nk_ui_note_overflow(ctx);
 	if (!nk_ui_has_footer(ctx) || !nk_ui_has_more_below(ctx))
 		return;
