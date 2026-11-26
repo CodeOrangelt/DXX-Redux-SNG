@@ -56,6 +56,8 @@ int survival_random_ammo_type(void);
 // more rarely -- see SURVIVAL_SUPER_WEAPON_DROP_PERMILLE / SURVIVAL_
 // EARTHSHAKER_DROP_PERMILLE above.
 int survival_random_weapon_type(void);
+int survival_starting_extra_lives(void);
+void survival_cpu_shop(int pnum, int (*grant)(int pnum, int powerup_id));
 
 // Rewrites a robot's about-to-fire weapon id for Survival's own balance
 // rules -- currently just FLASH_ID -> CONCUSSION_ID, since a HAM robot type

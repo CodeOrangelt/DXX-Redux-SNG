@@ -167,6 +167,8 @@ int  find_goal_texture(ubyte t);
 void multi_do_capture_bonus(const ubyte *buf);
 void multi_do_orb_bonus(const ubyte *buf);
 void multi_send_drop_flag(int objnum,int seed);
+void multi_do_got_flag(const ubyte *buf);
+void multi_do_got_orb(const ubyte *buf);
 void multi_send_ranking();
 void multi_do_play_by_play(const ubyte *buf);
 void multi_new_bounty_target( int pnum );
@@ -3748,9 +3750,6 @@ void multi_powcap_count_powerups_in_mine(void)
 // We want to drop something. Kill every Powerup which exceeds the level limit
 void multi_powcap_cap_objects()
 {
-	char type,flagtype;
-	int index;
-
 	if (!(Game_mode & GM_NETWORK))
 		return;
 
@@ -3766,6 +3765,18 @@ void multi_powcap_cap_objects()
 	Proximity_dropped=0;
 	Smartmines_dropped=0;
 
+	multi_powcap_cap_objects_for(Player_num);
+}
+
+// SNG: also run for a CPU's death, so it spews what the level can hold, as a human does
+void multi_powcap_cap_objects_for(int pnum)
+{
+	char type,flagtype;
+	int index;
+
+	if (!(Game_mode & GM_NETWORK) || (Game_mode & GM_MULTI_COOP))
+		return;
+
 	// Don't even try.  TODO: There is no try, only do.
 	if(Netgame.PrimaryDupFactor > 1 || Netgame.SecondaryDupFactor > 1 || Netgame.SecondaryCapFactor > 1 ) {
 		return;
@@ -3775,20 +3786,20 @@ void multi_powcap_cap_objects()
 	{
 		type=Primary_weapon_to_powerup[index];
 		if (PowerupsInMine[(int)type]>=MaxPowerupsAllowed[(int)type])
-			if(Players[Player_num].primary_weapon_flags & (1 << index))
+			if(Players[pnum].primary_weapon_flags & (1 << index))
 			{
 				con_printf(CON_VERBOSE,"PIM=%d MPA=%d\n",PowerupsInMine[(int)type],MaxPowerupsAllowed[(int)type]);
 				con_printf(CON_VERBOSE,"Killing a primary cuz there's too many! (%d)\n",type);
-				Players[Player_num].primary_weapon_flags&=(~(1 << index));
+				Players[pnum].primary_weapon_flags&=(~(1 << index));
 			}
 	}
 
 
 	// Don't do the adjustment stuff for Hoard mode
 	if (!(Game_mode & GM_HOARD))
-		Players[Player_num].secondary_ammo[2]/=4;
+		Players[pnum].secondary_ammo[2]/=4;
 
-	Players[Player_num].secondary_ammo[7]/=4;
+	Players[pnum].secondary_ammo[7]/=4;
 
 	for (index=0;index<MAX_SECONDARY_WEAPONS;index++)
 	{
@@ -3797,63 +3808,63 @@ void multi_powcap_cap_objects()
 
 		type=Secondary_weapon_to_powerup[index];
 
-		if ((Players[Player_num].secondary_ammo[index]+PowerupsInMine[(int)type])>MaxPowerupsAllowed[(int)type])
+		if ((Players[pnum].secondary_ammo[index]+PowerupsInMine[(int)type])>MaxPowerupsAllowed[(int)type])
 		{
 			if (MaxPowerupsAllowed[(int)type]-PowerupsInMine[(int)type]<0)
-				Players[Player_num].secondary_ammo[index]=0;
+				Players[pnum].secondary_ammo[index]=0;
 			else
-				Players[Player_num].secondary_ammo[index]=(MaxPowerupsAllowed[(int)type]-PowerupsInMine[(int)type]);
+				Players[pnum].secondary_ammo[index]=(MaxPowerupsAllowed[(int)type]-PowerupsInMine[(int)type]);
 			con_printf(CON_VERBOSE,"Hey! I killed secondary type %d because PIM=%d MPA=%d\n",type,PowerupsInMine[(int)type],MaxPowerupsAllowed[(int)type]);
 		}
 	}
 
 	if (!(Game_mode & GM_HOARD))
-		Players[Player_num].secondary_ammo[2]*=4;
-	Players[Player_num].secondary_ammo[7]*=4;
+		Players[pnum].secondary_ammo[2]*=4;
+	Players[pnum].secondary_ammo[7]*=4;
 
-	if (Players[Player_num].laser_level > MAX_LASER_LEVEL)
+	if (Players[pnum].laser_level > MAX_LASER_LEVEL)
 		if (PowerupsInMine[POW_SUPER_LASER]+1 > MaxPowerupsAllowed[POW_SUPER_LASER])
-			Players[Player_num].laser_level=0;
+			Players[pnum].laser_level=0;
 
-	if (Players[Player_num].flags & PLAYER_FLAGS_QUAD_LASERS)
+	if (Players[pnum].flags & PLAYER_FLAGS_QUAD_LASERS)
 		if (PowerupsInMine[POW_QUAD_FIRE]+1 > MaxPowerupsAllowed[POW_QUAD_FIRE])
-			Players[Player_num].flags&=(~PLAYER_FLAGS_QUAD_LASERS);
+			Players[pnum].flags&=(~PLAYER_FLAGS_QUAD_LASERS);
 
-	if (Players[Player_num].flags & PLAYER_FLAGS_CLOAKED)
+	if (Players[pnum].flags & PLAYER_FLAGS_CLOAKED)
 		if (PowerupsInMine[POW_CLOAK]+1 > MaxPowerupsAllowed[POW_CLOAK])
-			Players[Player_num].flags&=(~PLAYER_FLAGS_CLOAKED);
+			Players[pnum].flags&=(~PLAYER_FLAGS_CLOAKED);
 
-	if (Players[Player_num].flags & PLAYER_FLAGS_MAP_ALL)
+	if (Players[pnum].flags & PLAYER_FLAGS_MAP_ALL)
 		if (PowerupsInMine[POW_FULL_MAP]+1 > MaxPowerupsAllowed[POW_FULL_MAP])
-			Players[Player_num].flags&=(~PLAYER_FLAGS_MAP_ALL);
+			Players[pnum].flags&=(~PLAYER_FLAGS_MAP_ALL);
 
-	if (Players[Player_num].flags & PLAYER_FLAGS_AFTERBURNER)
+	if (Players[pnum].flags & PLAYER_FLAGS_AFTERBURNER)
 		if (PowerupsInMine[POW_AFTERBURNER]+1 > MaxPowerupsAllowed[POW_AFTERBURNER])
-			Players[Player_num].flags&=(~PLAYER_FLAGS_AFTERBURNER);
+			Players[pnum].flags&=(~PLAYER_FLAGS_AFTERBURNER);
 
-	if (Players[Player_num].flags & PLAYER_FLAGS_AMMO_RACK)
+	if (Players[pnum].flags & PLAYER_FLAGS_AMMO_RACK)
 		if (PowerupsInMine[POW_AMMO_RACK]+1 > MaxPowerupsAllowed[POW_AMMO_RACK])
-			Players[Player_num].flags&=(~PLAYER_FLAGS_AMMO_RACK);
+			Players[pnum].flags&=(~PLAYER_FLAGS_AMMO_RACK);
 
-	if (Players[Player_num].flags & PLAYER_FLAGS_CONVERTER)
+	if (Players[pnum].flags & PLAYER_FLAGS_CONVERTER)
 		if (PowerupsInMine[POW_CONVERTER]+1 > MaxPowerupsAllowed[POW_CONVERTER])
-			Players[Player_num].flags&=(~PLAYER_FLAGS_CONVERTER);
+			Players[pnum].flags&=(~PLAYER_FLAGS_CONVERTER);
 
-	if (Players[Player_num].flags & PLAYER_FLAGS_HEADLIGHT)
+	if (Players[pnum].flags & PLAYER_FLAGS_HEADLIGHT)
 		if (PowerupsInMine[POW_HEADLIGHT]+1 > MaxPowerupsAllowed[POW_HEADLIGHT])
-			Players[Player_num].flags&=(~PLAYER_FLAGS_HEADLIGHT);
+			Players[pnum].flags&=(~PLAYER_FLAGS_HEADLIGHT);
 
 	if (Game_mode & GM_CAPTURE)
 	{
-		if (Players[Player_num].flags & PLAYER_FLAGS_FLAG)
+		if (Players[pnum].flags & PLAYER_FLAGS_FLAG)
 		{
-			if (get_team(Player_num)==TEAM_RED)
+			if (get_team(pnum)==TEAM_RED)
 				flagtype=POW_FLAG_BLUE;
 			else
 				flagtype=POW_FLAG_RED;
 
 			if (PowerupsInMine[(int)flagtype]+1 > MaxPowerupsAllowed[(int)flagtype])
-				Players[Player_num].flags&=(~PLAYER_FLAGS_FLAG);
+				Players[pnum].flags&=(~PLAYER_FLAGS_FLAG);
 		}
 	}
 
@@ -4467,17 +4478,21 @@ multi_send_score(void)
 {
 	if (is_observer()) { return; }
 
-	// Send my current score to all other players so it will remain
-	// synced.
+	multi_send_score_for(Player_num);
+}
+
+// SNG: also the host syncing a CPU's robot-kill score
+void multi_send_score_for(int pnum)
+{
 	int count = 0;
 
-	if ((Game_mode & GM_MULTI_COOP) || (Game_mode & GM_MULTI_ROBOTS)) {
-		multi_sort_kill_list();
-		multibuf[count] = MULTI_SCORE;                  count += 1;
-		multibuf[count] = Player_num;                           count += 1;
-		PUT_INTEL_INT(multibuf+count, Players[Player_num].score);  count += 4;
-		multi_send_data(multibuf, count, 0);
-	}
+	if (!(Game_mode & (GM_MULTI_COOP | GM_MULTI_ROBOTS)))
+		return;
+	multi_sort_kill_list();
+	multibuf[count] = MULTI_SCORE;				count += 1;
+	multibuf[count] = pnum;					count += 1;
+	PUT_INTEL_INT(multibuf + count, Players[pnum].score);	count += 4;
+	multi_send_data(multibuf, count, 0);
 }
 
 void
@@ -5636,6 +5651,16 @@ void multi_do_flags (const ubyte *buf)
 		Players[(int)pnum].flags=flags;
 }
 
+// also for a CPU, so not gated on the host observing
+void multi_send_flags_for(int pnum)
+{
+	multibuf[0]=MULTI_FLAGS;
+	multibuf[1]=pnum;
+	PUT_INTEL_INT(multibuf+2, Players[pnum].flags);
+
+	multi_send_data(multibuf, 6, 2);
+}
+
 void multi_send_flags (char pnum)
 {
 	if (is_observer()) { return; }
@@ -5931,6 +5956,38 @@ void multi_do_orb_bonus(const ubyte *buf)
 	}
 	multi_sort_kill_list();
 	multi_show_player_list();
+}
+
+// SNG: the host announcing a CPU's flag or orb; shown here too, since its
+// own broadcasts never come back to it
+void multi_send_got_flag_for(int pnum)
+{
+	multibuf[0]=MULTI_GOT_FLAG;
+	multibuf[1]=pnum;
+	multi_send_data (multibuf,2,2);
+	multi_do_got_flag (multibuf);
+	multi_send_flags_for (pnum);
+}
+
+void multi_send_got_orb_for(int pnum)
+{
+	multibuf[0]=MULTI_GOT_ORB;
+	multibuf[1]=pnum;
+	multi_send_data (multibuf,2,2);
+	multi_do_got_orb (multibuf);
+	multi_send_flags_for (pnum);
+}
+
+void multi_send_orb_bonus_for(int pnum)
+{
+	Assert (Game_mode & GM_HOARD);
+
+	multibuf[0]=MULTI_ORB_BONUS;
+	multibuf[1]=pnum;
+	multibuf[2]=Players[pnum].secondary_ammo[PROXIMITY_INDEX];
+
+	multi_send_data (multibuf,3,2);
+	multi_do_orb_bonus (multibuf);
 }
 
 void multi_send_got_flag (char pnum)

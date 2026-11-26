@@ -199,6 +199,8 @@ void apply_force_damage(object *obj,fix force,object *other_obj)
 				add_points_to_score(Robot_info[obj->id].score_value);
 				survival_note_robot_kill(obj, Robot_info[obj->id].score_value);
 			}
+			else if (result && other_obj->type == OBJ_WEAPON)
+				duelbot_credit_robot_kill(other_obj->ctype.laser_info.parent_num, Robot_info[obj->id].score_value);
 			break;
 
 		case OBJ_PLAYER:
@@ -1707,6 +1709,8 @@ void collide_robot_and_weapon( object * robot, object * weapon, vms_vector *coll
 				survival_note_robot_kill(robot, Robot_info[robot->id].score_value);
 				detect_escort_goal_accomplished(robot-Objects);
 			}
+			else
+				duelbot_credit_robot_kill(weapon->ctype.laser_info.parent_num, Robot_info[robot->id].score_value);
 		}
 
 

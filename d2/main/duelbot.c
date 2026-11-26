@@ -44,6 +44,7 @@
 #include "args.h"
 #include "net_udp.h"
 #include "playsave.h"
+#include "survival.h"
 
 #define DUEL_RESPAWN_TIME	(F1_0*2)
 #define DUEL_MAX_BOTS		MAX_PLAYERS
@@ -305,6 +306,9 @@ typedef struct duel_bot
 	fix64	strafe_flip_at;
 	struct { int sig; fix closest, last, reach; char seen; } incoming[DUEL_WATCHED];	// enemy missiles, until they're gone
 	fix64	next_mine;		// honey pots are spaced out, not a minefield
+	int	robot_target;		// co-op: objnum of the robot it's fighting, else -1
+	int	spare_lives;		// survival
+	int	eliminated;		// survival: out of lives, watching
 	fix64	cover_until;		// retreating: heading round a corner first
 	fix64	missile_alert_until;	// missiles in play: keep momentum
 	vms_vector	dodge_dir;
@@ -603,6 +607,20 @@ static const duel_skill *skill(const duel_bot *b)
 	return &Skills[min(level, DUEL_TIERS - 1)];
 }
 
+// the host credits a CPU's robot kills, as a human's own machine credits theirs
+void duelbot_credit_robot_kill(int parent_objnum, int points)
+{
+	object *ship;
+
+	if (parent_objnum < 0 || parent_objnum > Highest_object_index)
+		return;
+	ship = &Objects[parent_objnum];
+	if (!duelbot_is_bot(ship))
+		return;
+	Players[ship->id].score += points;
+	multi_send_score_for(ship->id);
+}
+
 int duelbot_is_bot(const object *obj)
 {
 	return duelbot_running() && obj->type == OBJ_PLAYER && bot_for_pnum(obj->id);
@@ -631,8 +649,16 @@ static object *bot_object(const duel_bot *b)
 	return live_player_object(b->pnum);
 }
 
+static int coop_game(void)
+{
+	return net_game() && (Game_mode & GM_MULTI_COOP);
+}
+
+// co-op: every ship is on the same side against the robots
 static int teammates(int a, int b)
 {
+	if (Game_mode & GM_MULTI_COOP)
+		return 1;
 	return (Game_mode & GM_TEAM) && get_team(a) == get_team(b);
 }
 
@@ -657,6 +683,40 @@ static int targetable(const duel_bot *b, int pnum)
 }
 
 static int can_see(const duel_bot *b, const object *bot, const object *enemy);
+static int ctf_game(void);
+static int hoard_game(void);
+static int our_flag_carrier(const duel_bot *b);
+
+static int robot_alive(int objnum)
+{
+	return objnum >= 0 && objnum <= Highest_object_index && Objects[objnum].type == OBJ_ROBOT &&
+		!(Objects[objnum].flags & OF_SHOULD_BE_DEAD);
+}
+
+// co-op: the robot in sight, else the nearest one; Survival's HUD arrow points at it anyway
+static object *choose_robot(duel_bot *b, const object *bot)
+{
+	int i, seen = -1, nearest = -1;
+	fix seen_dist = 0, near_dist = 0;
+
+	b->target = -1;
+	if (robot_alive(b->robot_target) && can_see(b, bot, &Objects[b->robot_target]))
+		return &Objects[b->robot_target];
+	for (i = 0; i <= Highest_object_index; i++)
+	{
+		fix dist;
+
+		if (!robot_alive(i))
+			continue;
+		dist = vm_vec_dist((vms_vector *)&bot->pos, &Objects[i].pos);
+		if (nearest < 0 || dist < near_dist)
+			nearest = i, near_dist = dist;
+		if (can_see(b, bot, &Objects[i]) && (seen < 0 || dist < seen_dist))
+			seen = i, seen_dist = dist;
+	}
+	b->robot_target = seen >= 0 ? seen : nearest;
+	return b->robot_target >= 0 ? &Objects[b->robot_target] : NULL;
+}
 
 // keep fighting whoever is in sight; else switch to the nearest one that is;
 // else keep hunting the one it remembers; else go looking for the nearest
@@ -665,6 +725,18 @@ static object *choose_target(duel_bot *b, const object *bot)
 	int p, seen = -1, nearest = -1;
 	fix seen_dist = 0, near_dist = 0;
 
+	if (coop_game())
+		return choose_robot(b, bot);
+	if (ctf_game() && our_flag_carrier(b) >= 0)
+	{
+		b->target = our_flag_carrier(b);
+		return live_player_object(b->target);
+	}
+	if ((Game_mode & GM_BOUNTY) && Bounty_target != b->pnum && targetable(b, Bounty_target))
+	{
+		b->target = Bounty_target;
+		return live_player_object(Bounty_target);
+	}
 	if (b->target >= 0 && targetable(b, b->target) && can_see(b, bot, live_player_object(b->target)))
 		return live_player_object(b->target);
 
@@ -969,6 +1041,8 @@ static int spawn_index(const duel_bot *b)
 	fix best_dist = -1;
 	object *nearest;
 
+	if (ctf_game())
+		return ctf_home_spawn(b->pnum, 0);
 	if (Bench_close)
 	{
 		nearest_enemy_dist(b, &Player_init[0].pos, &nearest);
@@ -1158,9 +1232,6 @@ void duelbot_claim_net_slots(void)
 	Bot_count = 0;
 	Netgame.CpuSlots = 0;
 
-	if (Game_mode & GM_MULTI_COOP)
-		return;
-
 	while (want-- > 0 && N_players < MAX_PLAYERS)
 	{
 		seat_cpu(N_players);
@@ -1224,6 +1295,9 @@ static void claim_slot(duel_bot *b)
 	b->active = 1;
 	b->respawn_at = 0;
 	b->dying_until = 0;
+	b->robot_target = -1;
+	b->eliminated = 0;
+	b->spare_lives = survival_starting_extra_lives();
 	spawn_bot(b);
 }
 
@@ -1292,7 +1366,25 @@ static void finish_dying(duel_bot *b, object *obj)
 	b->blast_at = GameTime64;
 
 	// the same order a human death runs in: spew, tell everyone, blow, ghost
-	drop_player_eggs(obj);
+	if (Netgame.gamemode == NETGAME_SURVIVAL && net_game())
+	{
+		if (b->spare_lives > 0)
+			b->spare_lives--;
+		else
+		{
+			b->eliminated = 1;
+			survival_player_died(b->pnum);
+		}
+	}
+	multi_powcap_cap_objects_for(b->pnum);	// what a human's death runs first
+	drop_player_eggs(obj);		// a carried flag or orbs fall with the wreck
+	if (ctf_game() || hoard_game())
+	{
+		bot_player(b)->flags &= ~PLAYER_FLAGS_FLAG;
+		if (hoard_game())
+			bot_player(b)->secondary_ammo[PROXIMITY_INDEX] = 0;
+		multi_send_flags_for(b->pnum);
+	}
 	if (net_game())
 		multi_send_player_explode_for(b->pnum, MULTI_PLAYER_EXPLODE);
 	explode_badass_player(obj);
@@ -1506,7 +1598,7 @@ int duelbot_take_damage(object *obj, object *killer, fix damage)
 		return 1;
 
 	// a hit tells a pilot roughly where it came from
-	if (killer && killer->type == OBJ_PLAYER && killer != obj && !b->visible)
+	if (killer && killer->type == OBJ_PLAYER && killer != obj && !b->visible && !teammates(killer->id, b->pnum))
 	{
 		b->last_seen_pos = killer->pos;
 		b->last_seen_seg = killer->segnum;
@@ -1533,6 +1625,144 @@ int duelbot_take_damage(object *obj, object *killer, fix damage)
 
 	start_dying(b, obj, killer);
 	return 1;
+}
+
+//	-------------------------------------------------------------------------
+//	Objectives: D2's own flags and hoard orbs, scored in the goal rooms
+//	-------------------------------------------------------------------------
+
+#define HOARD_ORB_MAX		12	// what do_powerup() lets a human carry
+#define HOARD_BANK_AT		4	// orbs worth a trip to the goal: the bonus grows with the stack
+
+static int ctf_game(void)
+{
+	return net_game() && (Game_mode & GM_CAPTURE);
+}
+
+static int hoard_game(void)
+{
+	return net_game() && (Game_mode & GM_HOARD);
+}
+
+// each side scores by carrying the other side's flag into its own goal
+static int enemy_flag_id(int pnum)
+{
+	return get_team(pnum) == TEAM_BLUE ? POW_FLAG_RED : POW_FLAG_BLUE;
+}
+
+static int goal_segment(int special)
+{
+	int s;
+
+	for (s = 0; s <= Highest_segment_index; s++)
+		if (Segments[s].special == special)
+			return s;
+	return -1;
+}
+
+static int home_segment(int pnum)
+{
+	return goal_segment(get_team(pnum) == TEAM_BLUE ? SEGMENT_IS_GOAL_BLUE : SEGMENT_IS_GOAL_RED);
+}
+
+static int carrying_flag(int pnum)
+{
+	return ctf_game() && (Players[pnum].flags & PLAYER_FLAGS_FLAG);
+}
+
+// whoever has our flag: the HUD marks carriers, so everyone knows
+static int our_flag_carrier(const duel_bot *b)
+{
+	int p;
+
+	for (p = 0; p < MAX_PLAYERS; p++)
+		if (targetable(b, p) && carrying_flag(p))
+			return p;
+	return -1;
+}
+
+static object *enemy_flag_object(int pnum)
+{
+	int i, id = enemy_flag_id(pnum);
+
+	for (i = 0; i <= Highest_object_index; i++)
+		if (Objects[i].type == OBJ_POWERUP && Objects[i].id == id)
+			return &Objects[i];
+	return NULL;
+}
+
+// 0: not a flag this bot may take, so it stays on the floor
+static int take_flag(duel_bot *b, int id)
+{
+	if (id != enemy_flag_id(b->pnum) || carrying_flag(b->pnum))
+		return 0;
+	bot_player(b)->flags |= PLAYER_FLAGS_FLAG;
+	multi_send_got_flag_for(b->pnum);
+	return 1;
+}
+
+// as fuelcen_check_for_goal() scores a human's capture
+static void capture_flag(duel_bot *b, const object *bot)
+{
+	if (!carrying_flag(b->pnum) || bot->segnum != home_segment(b->pnum))
+		return;
+	multi_send_capture_bonus(b->pnum);
+	bot_player(b)->flags &= ~PLAYER_FLAGS_FLAG;
+	multi_send_flags_for(b->pnum);
+	maybe_drop_net_powerup(enemy_flag_id(b->pnum));
+	b->next_path = 0;
+}
+
+// hoard keeps the orb count in the proximity slot: there are no bombs to drop
+static int proxies_held(int pnum)
+{
+	return hoard_game() ? 0 : Players[pnum].secondary_ammo[PROXIMITY_INDEX];
+}
+
+static int orbs_held(int pnum)
+{
+	return hoard_game() ? Players[pnum].secondary_ammo[PROXIMITY_INDEX] : 0;
+}
+
+static int take_orb(duel_bot *b)
+{
+	player *p = bot_player(b);
+
+	if (p->secondary_ammo[PROXIMITY_INDEX] >= HOARD_ORB_MAX)
+		return 0;
+	p->secondary_ammo[PROXIMITY_INDEX]++;
+	p->flags |= PLAYER_FLAGS_FLAG;
+	multi_send_got_orb_for(b->pnum);
+	return 1;
+}
+
+static int in_goal(const object *bot)
+{
+	return Segments[bot->segnum].special == SEGMENT_IS_GOAL_BLUE || Segments[bot->segnum].special == SEGMENT_IS_GOAL_RED;
+}
+
+// as fuelcen_check_for_hoard_goal() banks a human's orbs: either goal will do
+static void score_orbs(duel_bot *b, const object *bot)
+{
+	player *p = bot_player(b);
+
+	if (!orbs_held(b->pnum) || !in_goal(bot))
+		return;
+	multi_send_orb_bonus_for(b->pnum);
+	p->flags &= ~PLAYER_FLAGS_FLAG;
+	p->secondary_ammo[PROXIMITY_INDEX] = 0;
+	multi_send_flags_for(b->pnum);
+	b->next_path = 0;
+}
+
+static void play_objectives(duel_bot *b, object *bot)
+{
+	if (!net_game())
+		return;
+	if (ctf_game())
+		capture_flag(b, bot);
+	if (hoard_game())
+		score_orbs(b, bot);
 }
 
 //	-------------------------------------------------------------------------
@@ -1634,7 +1864,7 @@ static int powerup_value(const duel_bot *b, int id)
 		case POW_MISSILE_4:			return p->secondary_ammo[CONCUSSION_INDEX] < Secondary_ammo_max[CONCUSSION_INDEX] ? 3 : 0;
 		case POW_HOMING_AMMO_1:
 		case POW_HOMING_AMMO_4:		return p->secondary_ammo[HOMING_INDEX] < Secondary_ammo_max[HOMING_INDEX] ? 9 : 0;
-		case POW_PROXIMITY_WEAPON:	return p->secondary_ammo[PROXIMITY_INDEX] < Secondary_ammo_max[PROXIMITY_INDEX] ? 4 : 0;
+		case POW_PROXIMITY_WEAPON:	return !hoard_game() && p->secondary_ammo[PROXIMITY_INDEX] < Secondary_ammo_max[PROXIMITY_INDEX] ? 4 : 0;
 		case POW_SMARTBOMB_WEAPON:	return p->secondary_ammo[SMART_INDEX] < Secondary_ammo_max[SMART_INDEX] ? 16 : 0;	// the duel-decider
 		case POW_MEGA_WEAPON:		return p->secondary_ammo[MEGA_INDEX] < Secondary_ammo_max[MEGA_INDEX] ? 10 : 0;
 		case POW_CLOAK:				return (p->flags & PLAYER_FLAGS_CLOAKED) ? 0 : 5;
@@ -1690,7 +1920,7 @@ static int apply_powerup(duel_bot *b, int id)
 		case POW_MISSILE_4:			return add_secondary(b, CONCUSSION_INDEX, 4);
 		case POW_HOMING_AMMO_1:		return add_secondary(b, HOMING_INDEX, 1);
 		case POW_HOMING_AMMO_4:		return add_secondary(b, HOMING_INDEX, 4);
-		case POW_PROXIMITY_WEAPON:	return add_secondary(b, PROXIMITY_INDEX, 4);
+		case POW_PROXIMITY_WEAPON:	return !hoard_game() && add_secondary(b, PROXIMITY_INDEX, 4);
 		case POW_SMARTBOMB_WEAPON:	return add_secondary(b, SMART_INDEX, 1);
 		case POW_MEGA_WEAPON:		return add_secondary(b, MEGA_INDEX, 1);
 		case POW_CLOAK:
@@ -1704,6 +1934,15 @@ static int apply_powerup(duel_bot *b, int id)
 	}
 }
 
+static int take_powerup(duel_bot *b, object *powerup)
+{
+	if (ctf_game() && (powerup->id == POW_FLAG_RED || powerup->id == POW_FLAG_BLUE))
+		return take_flag(b, powerup->id);
+	if (hoard_game() && powerup->id == POW_HOARD_ORB)
+		return take_orb(b);
+	return apply_powerup(b, powerup->id);
+}
+
 int duelbot_pickup(object *obj, object *powerup)
 {
 	duel_bot *b;
@@ -1712,7 +1951,7 @@ int duelbot_pickup(object *obj, object *powerup)
 		return 0;
 
 	b = bot_for_pnum(obj->id);
-	if (b->respawn_at || !apply_powerup(b, powerup->id))
+	if (b->respawn_at || !take_powerup(b, powerup))
 		return 0;
 
 	digi_link_sound_to_pos(Powerup_info[powerup->id].hit_sound, obj->segnum, 0, &obj->pos, 0, F1_0);
@@ -1794,7 +2033,7 @@ static int can_see(const duel_bot *b, const object *bot, const object *enemy)
 	if (dist > DUEL_SIGHT_RANGE || !in_view(b, bot, enemy, dist))
 		return 0;
 
-	if ((Players[enemy->id].flags & PLAYER_FLAGS_CLOAKED) && dist > DUEL_CLOAK_SIGHT)
+	if (enemy->type == OBJ_PLAYER && (Players[enemy->id].flags & PLAYER_FLAGS_CLOAKED) && dist > DUEL_CLOAK_SIGHT)
 		return 0;
 
 	return clear_line(bot, &enemy->pos, 0);
@@ -1887,7 +2126,7 @@ static void update_sight(duel_bot *b, const object *bot, const object *enemy)
 		b->est_shields[b->target] = min(StartingShields, b->est_shields[b->target] + fixmul(FrameTime, DUEL_SHIELD_REGEN));
 	if (!visible && b->visible)
 		b->escape_vel = b->enemy_vel;
-	if (visible && Foes[enemy->id].haunt_open && GameTime64 - Foes[enemy->id].died_at < DUEL_HAUNT_WINDOW)
+	if (visible && enemy->type == OBJ_PLAYER && Foes[enemy->id].haunt_open && GameTime64 - Foes[enemy->id].died_at < DUEL_HAUNT_WINDOW)
 		note_haunt(&Foes[enemy->id], enemy->segnum);
 	if (visible)
 	{
@@ -2116,7 +2355,7 @@ static void hear(duel_bot *b, const object *bot, int source, const vms_vector *p
 {
 	fix dist = vm_vec_dist((vms_vector *)&bot->pos, (vms_vector *)pos);
 
-	if (b->visible || source == b->pnum || dist > min(reach, DUEL_HEAR_RANGE))
+	if (b->visible || source == b->pnum || dist > min(reach, DUEL_HEAR_RANGE) || coop_game())
 		return;
 	if (source < 0 && (dist < DUEL_SELF_NOISE || own_noise(bot, pos)))
 		return;			// a door it opened, a pickup it took, its own shot landing
@@ -2189,7 +2428,11 @@ static int enemy_shot(const duel_bot *b, const object *weapon)
 {
 	int shooter = weapon->ctype.laser_info.parent_num;
 
-	if (shooter < 0 || shooter > Highest_object_index || weapon->ctype.laser_info.parent_type != OBJ_PLAYER)
+	if (shooter < 0 || shooter > Highest_object_index)
+		return 0;
+	if (weapon->ctype.laser_info.parent_type == OBJ_ROBOT)
+		return coop_game();
+	if (weapon->ctype.laser_info.parent_type != OBJ_PLAYER)
 		return 0;
 	return Objects[shooter].id != b->pnum && !teammates(Objects[shooter].id, b->pnum);
 }
@@ -2292,9 +2535,9 @@ static void scan_objects(duel_bot *b, const object *bot, const object *enemy)
 	{
 		object *obj = &Objects[i];
 
-		if (obj->type == OBJ_ROBOT)
+		if (obj->type == OBJ_ROBOT && (Game_mode & GM_DUEL))
 		{
-			obj_delete(i);
+			obj_delete(i);		// the bench arena stays empty
 			continue;
 		}
 
@@ -2747,7 +2990,7 @@ static int path_to_honey_pot(duel_bot *b, const object *bot)
 {
 	int s, objnum;
 
-	if (Players[b->pnum].secondary_ammo[PROXIMITY_INDEX] < DUEL_MINE_KEEP ||
+	if (proxies_held(b->pnum) < DUEL_MINE_KEEP ||
 		GameTime64 - max(b->seen_at, b->heard_at) < DUEL_MINE_QUIET ||
 		GameTime64 < b->next_mine || undergunned(b) || match_tense())
 		return 0;
@@ -2785,6 +3028,184 @@ static int topping_up(duel_bot *b, const object *bot)
 	return 1;
 }
 
+static int marked_target(const duel_bot *b)
+{
+	if ((Game_mode & GM_BOUNTY) && Bounty_target != b->pnum)
+		return Bounty_target;
+	return -1;
+}
+
+// bounty: the HUD marks the target for everyone, so hunting it isn't cheating
+static int path_to_bounty(duel_bot *b, const object *bot)
+{
+	object *target;
+	int pnum = marked_target(b);
+
+	if (pnum < 0 || !targetable(b, pnum))
+		return 0;
+	target = live_player_object(pnum);
+	if (Players[pnum].flags & PLAYER_FLAGS_CLOAKED)
+		return 0;
+	if (!path_to_segment(b, bot, target->segnum))
+		return 0;
+	b->goal_seg = -1;		// it moves; never blacklist where it was
+	b->goal_pos = target->pos;
+	return 1;
+}
+
+static int path_to_point(duel_bot *b, const object *bot, int segnum, const vms_vector *pos, int moving)
+{
+	if (segnum < 0 || !path_to_segment(b, bot, segnum))
+		return 0;
+	b->goal_seg = moving ? -1 : segnum;
+	b->goal_pos = *pos;
+	return 1;
+}
+
+// the lowest-numbered CPU on a side of three or more stays home
+static int ctf_defender(const duel_bot *b)
+{
+	int p;
+
+	if (get_team_size(get_team(b->pnum)) < 3)
+		return 0;
+	for (p = 0; p < b->pnum; p++)
+		if (Players[p].connected && multi_cpu_slot(p) && get_team(p) == get_team(b->pnum))
+			return 0;
+	return 1;
+}
+
+#define CTF_ESCORT_DEPTH	3	// rooms behind our carrier before closing up
+
+static int team_carrier(const duel_bot *b)
+{
+	int p;
+
+	for (p = 0; p < MAX_PLAYERS; p++)
+		if (p != b->pnum && Players[p].connected && teammates(p, b->pnum) &&
+			carrying_flag(p) && live_player_object(p))
+			return p;
+	return -1;
+}
+
+static int path_to_ship(duel_bot *b, const object *bot, int pnum)
+{
+	object *ship = live_player_object(pnum);
+
+	return ship && path_to_point(b, bot, ship->segnum, &ship->pos, 1);
+}
+
+static int path_to_escort(duel_bot *b, const object *bot, int carrier)
+{
+	object *ship = live_player_object(carrier);
+
+	bfs(bot->segnum);
+	if (!reachable(ship->segnum) || Bfs_depth[ship->segnum] <= CTF_ESCORT_DEPTH)
+		return 0;		// close enough: free to fight whoever chases it
+	return path_to_ship(b, bot, carrier);
+}
+
+// a capture only needs our own goal, never our own flag back home
+static int path_to_flag_goal(duel_bot *b, const object *bot)
+{
+	int thief = our_flag_carrier(b), carrier = team_carrier(b);
+	object *flag;
+	vms_vector home;
+
+	if (!ctf_game())
+		return 0;
+	if (home_segment(b->pnum) < 0)
+		return 0;		// no goal rooms in this level: nothing to play for
+	compute_segment_center(&home, &Segments[home_segment(b->pnum)]);
+	if (carrying_flag(b->pnum))
+		return path_to_point(b, bot, home_segment(b->pnum), &home, 0);
+	if (thief >= 0 && path_to_ship(b, bot, thief))
+		return 1;
+	if (ctf_defender(b))
+		return path_to_point(b, bot, home_segment(b->pnum), &home, 0);
+	flag = enemy_flag_object(b->pnum);
+	if (flag && path_to_point(b, bot, flag->segnum, &flag->pos, 0))
+		return 1;
+	return carrier >= 0 && path_to_escort(b, bot, carrier);
+}
+
+#define DUEL_REGROUP_DEPTH	5	// rooms from the nearest partner before heading back
+
+// hoard: gather orbs, and bank them in a goal once the stack is worth it
+// or there are none left to find
+static int path_to_hoard(duel_bot *b, const object *bot)
+{
+	int held = orbs_held(b->pnum), i, best = -1, blue, red, goal;
+	vms_vector center;
+
+	if (!hoard_game())
+		return 0;
+	bfs(bot->segnum);
+	if (held < HOARD_BANK_AT)
+		for (i = 0; i <= Highest_object_index; i++)
+		{
+			object *orb = &Objects[i];
+
+			if (orb->type != OBJ_POWERUP || orb->id != POW_HOARD_ORB || !reachable(orb->segnum) || avoided(b, orb->segnum))
+				continue;
+			if (best < 0 || Bfs_depth[orb->segnum] < Bfs_depth[Objects[best].segnum])
+				best = i;
+		}
+	if (best >= 0)
+		return path_to_point(b, bot, Objects[best].segnum, &Objects[best].pos, 0);
+	if (!held)
+		return 0;
+	blue = goal_segment(SEGMENT_IS_GOAL_BLUE);
+	red = goal_segment(SEGMENT_IS_GOAL_RED);
+	goal = blue;
+	if (red >= 0 && reachable(red) && (goal < 0 || !reachable(goal) || Bfs_depth[red] < Bfs_depth[goal]))
+		goal = red;
+	if (goal < 0 || !reachable(goal))
+		return 0;
+	compute_segment_center(&center, &Segments[goal]);
+	return path_to_point(b, bot, goal, &center, 0);
+}
+
+static int nearest_partner(const duel_bot *b, const object *bot)
+{
+	int p, best = -1;
+	fix best_dist = 0;
+
+	for (p = 0; p < MAX_PLAYERS; p++)
+	{
+		object *ship;
+		fix dist;
+
+		if (p == b->pnum || !Players[p].connected || survival_is_eliminated(p) ||
+			(Netgame.host_is_obs && p == 0) || !(ship = live_player_object(p)))
+			continue;
+		dist = vm_vec_dist((vms_vector *)&bot->pos, &ship->pos);
+		if (best < 0 || dist < best_dist)
+			best = p, best_dist = dist;
+	}
+	return best;
+}
+
+// co-op: hunt robots, but never drift far from the others
+static int path_to_coop(duel_bot *b, const object *bot)
+{
+	int partner;
+	object *ship, *robot;
+
+	if (!coop_game())
+		return 0;
+	partner = nearest_partner(b, bot);
+	if (partner >= 0)
+	{
+		ship = live_player_object(partner);
+		bfs(bot->segnum);
+		if (reachable(ship->segnum) && Bfs_depth[ship->segnum] > DUEL_REGROUP_DEPTH)
+			return path_to_point(b, bot, ship->segnum, &ship->pos, 1);
+	}
+	robot = robot_alive(b->robot_target) ? &Objects[b->robot_target] : NULL;
+	return robot && path_to_point(b, bot, robot->segnum, &robot->pos, 1);
+}
+
 static void plan_route(duel_bot *b, const object *bot, int retreating)
 {
 	if (GameTime64 < b->next_path)
@@ -2797,6 +3218,21 @@ static void plan_route(duel_bot *b, const object *bot, int retreating)
 		journal_plan(b, 7, "refuel", "energy center: filling the tank before moving on");
 		return;
 	}
+	if (path_to_flag_goal(b, bot))
+	{
+		journal_plan(b, 10, "flag", carrying_flag(b->pnum) ? "carrying your flag home" : "playing the flag");
+		return;
+	}
+	if (path_to_hoard(b, bot))
+	{
+		journal_plan(b, 11, "hoard", orbs_held(b->pnum) >= HOARD_BANK_AT ? "banking my orbs" : "gathering orbs");
+		return;
+	}
+	if (!retreating && path_to_bounty(b, bot))
+	{
+		journal_plan(b, 9, "bounty", "only the bounty counts: hunting it");
+		return;
+	}
 	if ((retreating || undergunned(b) || no_smarts(b) || aggression(b) < DUEL_CHASE_AGGRESSION) &&
 		path_to_supplies(b, bot, MAX_SEGMENTS))
 	{
@@ -2804,6 +3240,11 @@ static void plan_route(duel_bot *b, const object *bot, int retreating)
 		journal_plan(b, 0, "restock", retreating ? "retreating: heading for supplies" :
 					 undergunned(b) ? "undergunned: arming up before I look for you" :
 					 no_smarts(b) ? "no smart missiles: they decide duels, getting some first" : "not confident enough to hunt yet");
+		return;
+	}
+	if (path_to_coop(b, bot))
+	{
+		journal_plan(b, 13, "co-op", "sticking with the team and hunting robots");
 		return;
 	}
 	if (path_to_supplies(b, bot, DUEL_GRAB_DEPTH))
@@ -3584,7 +4025,7 @@ static int pick_secondary(const duel_bot *b, const object *bot, const object *en
 	{
 		if (p->secondary_ammo[SMART_MINE_INDEX])
 			return SMART_MINE_INDEX;
-		if (p->secondary_ammo[PROXIMITY_INDEX])
+		if (proxies_held(b->pnum))
 			return PROXIMITY_INDEX;
 	}
 
@@ -3640,11 +4081,39 @@ static int charge_fusion(duel_bot *b, int on_aim)
 	return on_aim && b->fusion_charge >= DUEL_FUSION_RELEASE;
 }
 
+#define DUEL_FRIENDLY_MARGIN	(F1_0*4)
+
+// a partner anywhere near the nose, out to the target and a little past
+static int friend_in_line(const duel_bot *b, const object *bot, fix dist)
+{
+	int p;
+
+	for (p = 0; p < MAX_PLAYERS; p++)
+	{
+		object *ship;
+		vms_vector rel, off;
+		fix along;
+
+		if (p == b->pnum || !teammates(p, b->pnum) || !(ship = live_player_object(p)))
+			continue;
+		vm_vec_sub(&rel, &ship->pos, (vms_vector *)&bot->pos);
+		along = vm_vec_dot(&rel, (vms_vector *)&bot->orient.fvec);
+		if (along <= 0 || along > dist + DUEL_FRIENDLY_MARGIN)
+			continue;
+		vm_vec_scale_add(&off, &rel, (vms_vector *)&bot->orient.fvec, -along);
+		if (vm_vec_mag(&off) < ship->size + DUEL_FRIENDLY_MARGIN)
+			return 1;
+	}
+	return 0;
+}
+
 static void shoot(duel_bot *b, object *bot, const object *enemy, int weapon, const vms_vector *aim, fix dist)
 {
 	int missile;
 
 	if (!b->visible || GameTime64 - b->sighted_at < skill(b)->reaction)
+		return;
+	if (friend_in_line(b, bot, dist))
 		return;
 
 	if (on_target(bot, enemy, aim))
@@ -4377,7 +4846,8 @@ static void prefire(duel_bot *b, object *bot, const vms_vector *point)
 	int weapon = prefire_weapon(b);
 	player *p = bot_player(b);
 
-	if (!aimed_near(bot, point) || own_mine_ahead(bot))
+	if (!aimed_near(bot, point) || own_mine_ahead(bot) ||
+		friend_in_line(b, bot, vm_vec_dist((vms_vector *)point, &bot->pos)))
 		return;
 	if (weapon >= 0 && GameTime64 >= b->next_primary)
 		fire_primary(b, bot, weapon);
@@ -4419,6 +4889,8 @@ static int choose_fight_mode(duel_bot *b, const object *bot, const object *enemy
 // spawn control: saturate the nearest respawn point it can see with plasma
 static int choose_mode(duel_bot *b, const object *bot, const object *enemy, int weapon, vms_vector *point)
 {
+	if (ctf_game() && carrying_flag(b->pnum))
+		return MODE_HUNT;		// the capture is worth more than the ship: run it home
 	if (in_blast_danger(b, bot, point))
 		return MODE_BLAST;
 
@@ -4427,6 +4899,8 @@ static int choose_mode(duel_bot *b, const object *bot, const object *enemy, int 
 
 	if (GameTime64 - b->seen_at > DUEL_NEW_FIGHT)
 		b->engage_until = 0;	// a flicker out of view is the same fight
+	if (coop_game() || ctf_game() || hoard_game())
+		return MODE_HUNT;		// no camping or corner traps: there's a place to be
 
 	if (smart_trap_point(b, bot, point))
 		return MODE_PREFIRE;
@@ -4651,6 +5125,30 @@ static void shoot_mine(duel_bot *b, object *bot, const object *mine)
 		fire_primary(b, bot, weapon);
 }
 
+#define DUEL_SHIP_CLEARANCE	(F1_0*14)
+
+// ramming anyone wastes a turn and shoves both ships off line
+static void avoid_ships(const object *bot, vms_vector *move)
+{
+	int p;
+
+	for (p = 0; p < MAX_PLAYERS; p++)
+	{
+		object *ship = live_player_object(p);
+		vms_vector away;
+		fix dist;
+
+		if (!ship || ship == bot)
+			continue;
+		dist = vm_vec_dist((vms_vector *)&bot->pos, &ship->pos);
+		if (dist >= DUEL_SHIP_CLEARANCE)
+			continue;
+		vm_vec_sub(&away, (vms_vector *)&bot->pos, &ship->pos);
+		vm_vec_normalize(&away);
+		vm_vec_scale_add2(move, &away, fixdiv(DUEL_SHIP_CLEARANCE - dist, DUEL_SHIP_CLEARANCE) * 2);
+	}
+}
+
 static void add_avoidance(duel_bot *b, const object *bot, vms_vector *move)
 {
 	vms_vector push;
@@ -4664,6 +5162,7 @@ static void add_avoidance(duel_bot *b, const object *bot, vms_vector *move)
 		vm_vec_add2(move, &push);
 	}
 	avoid_mines(bot, move);
+	avoid_ships(bot, move);
 }
 
 static int mode_fights(int mode)
@@ -5015,8 +5514,8 @@ static void mine_stash(duel_bot *b, object *bot)
 {
 	int i;
 
-	if (b->visible || Players[b->pnum].secondary_ammo[PROXIMITY_INDEX] < DUEL_MINE_KEEP ||
-		GameTime64 < b->next_secondary || GameTime64 < b->next_mine || match_tense())
+	if (b->visible || proxies_held(b->pnum) < DUEL_MINE_KEEP ||
+		GameTime64 < b->next_secondary || GameTime64 < b->next_mine || match_tense() || coop_game())
 		return;
 
 	for (i = 0; i <= Highest_object_index; i++)
@@ -5054,9 +5553,11 @@ static void think(duel_bot *b, object *bot)
 		weapon = commit_weapon(b, bot, enemy, dist);
 		lead_point(b, bot, enemy, fired_weapon_id(b, weapon >= 0 ? weapon : LASER_INDEX),
 				   weapon_lead_bias(weapon), &aim);
-		read_dodge(b, bot, enemy, fired_weapon_id(b, weapon >= 0 ? weapon : LASER_INDEX), &aim);
+		if (enemy->type == OBJ_PLAYER)
+			read_dodge(b, bot, enemy, fired_weapon_id(b, weapon >= 0 ? weapon : LASER_INDEX), &aim);
 		add_aim_slop(b, enemy, &aim);
-		study_foe(b, bot, enemy, dist);
+		if (enemy->type == OBJ_PLAYER)
+			study_foe(b, bot, enemy, dist);
 	}
 
 	b->mode = choose_mode(b, bot, enemy, weapon, &point);
@@ -5068,6 +5569,8 @@ static void think(duel_bot *b, object *bot)
 		mine_stash(b, bot);
 	}
 	fighting = mode_fights(b->mode) && b->visible;
+	if (ctf_game() && carrying_flag(b->pnum))
+		fighting = b->visible;		// shoots what crosses its nose, never turns to fight
 	if (b->mode == MODE_BREAK && GameTime64 >= b->next_path)
 	{
 		b->next_path = GameTime64 + DUEL_PATH_REFRESH;
@@ -5087,7 +5590,7 @@ static void think(duel_bot *b, object *bot)
 	if (mine)
 		look = mine->pos;
 	fly(b, bot, &move, &look, &aim);
-	if (mine)
+	if (mine && !friend_in_line(b, bot, vm_vec_dist(&mine->pos, &bot->pos)))
 		shoot_mine(b, bot, mine);
 
 	if (fighting)
@@ -5107,11 +5610,22 @@ static void think(duel_bot *b, object *bot)
 //	Frame
 //	-------------------------------------------------------------------------
 
+static int grant_purchase(int pnum, int powerup_id)
+{
+	duel_bot *b = bot_for_pnum(pnum);
+
+	return b && apply_powerup(b, powerup_id);
+}
+
 static void run_bot(duel_bot *b)
 {
 	object *bot;
 
 	if (!b->active)
+		return;
+	if (Netgame.gamemode == NETGAME_SURVIVAL && net_game())
+		survival_cpu_shop(b->pnum, grant_purchase);
+	if (b->eliminated && !b->dying_until)
 		return;
 
 	if (b->dying_until)
@@ -5145,6 +5659,7 @@ static void run_bot(duel_bot *b)
 
 	expire_powers(b);
 	refuel(b, bot);
+	play_objectives(b, bot);
 	think(b, bot);
 }
 

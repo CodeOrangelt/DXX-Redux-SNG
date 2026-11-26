@@ -285,6 +285,12 @@ void multi_do_frame(void);
 
 
 void multi_send_flags(char);
+void multi_send_flags_for(int pnum);
+void multi_send_got_flag_for(int pnum);
+void multi_send_got_orb_for(int pnum);
+void multi_send_orb_bonus_for(int pnum);
+void multi_powcap_cap_objects_for(int pnum);
+void multi_send_score_for(int pnum);
 void multi_send_sng_flags(void);
 void multi_do_sng_flags(const ubyte *buf);
 void multi_disable_spawn_weapon_powerups(void);
@@ -427,6 +433,7 @@ extern int multi_message_input_sub(int key);
 extern void multi_send_message_start();
 extern int multi_powerup_is_4pack(int);
 extern void multi_send_orb_bonus( char pnum );
+extern void multi_send_capture_bonus( char pnum );
 extern void multi_send_got_orb( char pnum );
 extern void multi_add_lifetime_kills(void);
 extern int multi_change_weapon_info(void);

@@ -2435,6 +2435,72 @@ static void survival_shop_buy_armor(void)
 	survival_banner("ARMOR PLATING PURCHASED!", F1_0, -1);
 }
 
+int survival_starting_extra_lives(void)
+{
+	return SURVIVAL_STARTING_EXTRA_LIVES;
+}
+
+#define CPU_SHOP_REPAIR_BELOW	(SURVIVAL_SHOP_SHIELD_RESTORE_CAP / 2)
+#define CPU_SHOP_MISSILES_LOW	3
+
+// omega isn't one: a CPU never fires it
+static int cpu_has_big_gun(int pnum)
+{
+	return (Players[pnum].primary_weapon_flags & (HAS_FLAG(PLASMA_INDEX) | HAS_FLAG(FUSION_INDEX) |
+		HAS_FLAG(GAUSS_INDEX) | HAS_FLAG(HELIX_INDEX) | HAS_FLAG(PHOENIX_INDEX))) != 0;
+}
+
+static int cpu_missiles(int pnum)
+{
+	const player *p = &Players[pnum];
+
+	return p->secondary_ammo[HOMING_INDEX] + p->secondary_ammo[SMART_INDEX] + p->secondary_ammo[MEGA_INDEX] +
+		p->secondary_ammo[SMISSILE4_INDEX] + p->secondary_ammo[SMISSILE5_INDEX];
+}
+
+static void cpu_charge(int pnum, int price)
+{
+	Players[pnum].score -= price;
+	multi_send_score_for(pnum);
+}
+
+// a purchase the ship can't use isn't charged
+static int cpu_buy(int pnum, int price, int powerup_id, int (*grant)(int pnum, int powerup_id))
+{
+	if (Players[pnum].score < price || !grant(pnum, powerup_id))
+		return 0;
+	cpu_charge(pnum, price);
+	return 1;
+}
+
+static void cpu_buy_repair(int pnum)
+{
+	cpu_charge(pnum, survival_shop_shield_price());
+	Players[pnum].shields = SURVIVAL_SHOP_SHIELD_RESTORE_CAP;
+	Objects[Players[pnum].objnum].shields = Players[pnum].shields;
+}
+
+// SNG: a CPU's shop visit. Repair when hurt, then a big gun, then missiles,
+// always keeping the price of the next repair in the bank.
+void survival_cpu_shop(int pnum, int (*grant)(int pnum, int powerup_id))
+{
+	int reserve = survival_shop_shield_price();
+	int supply = Survival_shop_supply_types[(d_rand() * SURVIVAL_NUM_SHOP_SUPPLY_TYPES) >> 15];
+
+	if (Survival_shop_phase != SURVIVAL_SHOP_PHASE_OPEN || Survival_shop_ready[pnum] || Survival_eliminated[pnum])
+		return;
+
+	if (Players[pnum].shields < CPU_SHOP_REPAIR_BELOW && Players[pnum].score >= reserve)
+		cpu_buy_repair(pnum);
+	if (!cpu_has_big_gun(pnum) && Players[pnum].score - survival_shop_weapon_price() >= reserve)
+		cpu_buy(pnum, survival_shop_weapon_price(), survival_random_weapon_type(), grant);
+	if (cpu_missiles(pnum) < CPU_SHOP_MISSILES_LOW && Players[pnum].score - survival_shop_supply_price() >= reserve)
+		cpu_buy(pnum, survival_shop_supply_price(), supply, grant);
+
+	Survival_shop_ready[pnum] = 1;
+	survival_send_shop_ready(pnum);
+}
+
 // Shared by both the keyboard (survival_shop_handle_key()) and mouse
 // (survival_shop_do_mouse()) purchase paths, so there's exactly one place
 // that maps a slot number to what it does.
