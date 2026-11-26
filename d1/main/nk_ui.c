@@ -4190,6 +4190,11 @@ void nk_ui_feed_event(SDL_Event *evt)
 	nk_ui_handle_event(evt);
 }
 
+void nk_ui_pad_scroll(int steps)
+{
+	s_wheel_steps += steps;
+}
+
 void nk_ui_select_radio(newmenu_item *items, int nitems, int chosen)
 {
 	int i;

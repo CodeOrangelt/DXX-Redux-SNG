@@ -63,6 +63,7 @@ int nk_ui_pane_split(const void *items);
 void nk_ui_input_begin(void);
 void nk_ui_feed_event(SDL_Event *evt);
 void nk_ui_input_end(void);
+void nk_ui_pad_scroll(int steps);
 
 // Draws one panel; *changed / *selected get the item index touched, or -1.
 void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle, struct newmenu_item *items, int nitems, int citem, int refocus, int reorder, unsigned int *collapsed, int has_focus, int *changed, int *selected);

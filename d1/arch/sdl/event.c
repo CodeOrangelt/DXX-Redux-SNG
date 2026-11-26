@@ -35,6 +35,14 @@ static int initialised=0;
 #define PAD_REPEAT_SLOW_MS	160
 #define PAD_REPEAT_FAST_MS	35
 
+#define PAD_SCROLL_SLOW_MS	260
+#define PAD_SCROLL_FAST_MS	70
+#ifdef _WIN32
+#define PAD_AXIS_SCROLL		3	// winmm: right stick is R (y), then U (x)
+#else
+#define PAD_AXIS_SCROLL		4	// joydev: right stick x 3, y 4
+#endif
+
 static int pad_held[PAD_DIRECTIONS];
 static int pad_deflect[PAD_DIRECTIONS];		// hats count as half-way
 static Uint32 pad_next_repeat[PAD_DIRECTIONS];
@@ -87,9 +95,27 @@ static int pad_direction_event(SDL_Event *out, const int wanted[PAD_DIRECTIONS])
 	return 0;
 }
 
+static int pad_scroll_deflect;	// right stick, signed; 0 inside the deadzone
+static Uint32 pad_next_scroll;
+
+static void pad_scroll_axis(int value)
+{
+	if (abs(value) < PAD_AXIS_DEADZONE)
+		value = 0;
+	else if (!pad_scroll_deflect)
+		pad_next_scroll = SDL_GetTicks();
+	pad_scroll_deflect = value;
+}
+
 static int pad_axis_event(SDL_Event *out, const SDL_JoyAxisEvent *axis)
 {
 	int wanted[PAD_DIRECTIONS], vertical;
+
+	if (axis->axis == PAD_AXIS_SCROLL)
+	{
+		pad_scroll_axis(axis->value);
+		return 0;
+	}
 
 	// sticks and d-pad-as-axes only; triggers rest at full negative
 	if (axis->axis != 0 && axis->axis != 1 && axis->axis != 6 && axis->axis != 7)
@@ -151,11 +177,27 @@ static int pad_event(const SDL_Event *event)
 }
 
 // further from centre, faster: the stick scrolls menus like a drag
-static Uint32 pad_repeat_interval(int deflect)
+static Uint32 pad_interval(int deflect, Uint32 slow_ms, Uint32 fast_ms)
 {
 	int over = max(0, min(deflect, PAD_AXIS_MAX) - PAD_AXIS_DEADZONE);
 
-	return PAD_REPEAT_SLOW_MS - over * (PAD_REPEAT_SLOW_MS - PAD_REPEAT_FAST_MS) / (PAD_AXIS_MAX - PAD_AXIS_DEADZONE);
+	return slow_ms - over * (slow_ms - fast_ms) / (PAD_AXIS_MAX - PAD_AXIS_DEADZONE);
+}
+
+static Uint32 pad_repeat_interval(int deflect)
+{
+	return pad_interval(deflect, PAD_REPEAT_SLOW_MS, PAD_REPEAT_FAST_MS);
+}
+
+// SNG: the right stick scrolls like a wheel, faster the further it is pushed
+static int pad_scroll_steps(void)
+{
+	Uint32 now = SDL_GetTicks();
+
+	if (!pad_scroll_deflect || (Sint32)(now - pad_next_scroll) < 0)
+		return 0;
+	pad_next_scroll = now + pad_interval(abs(pad_scroll_deflect), PAD_SCROLL_SLOW_MS, PAD_SCROLL_FAST_MS);
+	return pad_scroll_deflect > 0 ? 1 : -1;
 }
 
 // A held direction's next auto-repeat key press, once it is due.
@@ -343,6 +385,8 @@ void event_poll()
 	}
 
 #ifdef USE_NK_UI
+	if (nk_menu_input && wind == window_get_front() && pad_drives_menus(wind))
+		nk_ui_pad_scroll(pad_scroll_steps());
 	if (nk_menu_input)
 		nk_ui_input_end();
 #endif
