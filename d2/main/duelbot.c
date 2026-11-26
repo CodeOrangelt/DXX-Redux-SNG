@@ -15,6 +15,7 @@
 #include <time.h>
 
 #include "duelbot.h"
+#include "vers_id.h"
 #include "inferno.h"
 #include "game.h"
 #include "gameseq.h"
@@ -6410,9 +6411,9 @@ static void dedicated_start(void)
 		snprintf(Players[Player_num].callsign, sizeof(Players[Player_num].callsign), "%s",
 				 Server_bot_name ? Server_bot_name : Tier_names[skill]);
 	if (ffa && Server_bot_name)
-		snprintf(name, sizeof(name), "%s - FFA CPU", Server_bot_name);
+		snprintf(name, sizeof(name), "%s FFA %s", Server_bot_name, VERSION);
 	else if (cpus && Server_bot_name)
-		snprintf(name, sizeof(name), "%s - 1v1 CPU", Server_bot_name);
+		snprintf(name, sizeof(name), "%s 1v1 %s", Server_bot_name, VERSION);
 	else if (cpus)
 		snprintf(name, sizeof(name), "1v1 vs %s", Tier_names[skill]);
 	else
