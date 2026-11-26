@@ -53,6 +53,11 @@ void nk_ui_menu_opened(void);
 void nk_ui_menu_closed(void);
 int nk_ui_menus_open(void);
 void nk_ui_set_fixed_sections(int fixed);
+void nk_ui_set_pages(const char *title, const char *const *names, int count, int active);
+int nk_ui_take_page_pick(void);
+int nk_ui_text_focused(void);
+enum { NK_UI_REFOCUS_NONE, NK_UI_REFOCUS_CLAIM, NK_UI_REFOCUS_DROP };
+int nk_ui_pane_split(const void *items);
 
 // Bracket the SDL events of one event_poll() pass (see arch/sdl/event.c).
 void nk_ui_input_begin(void);

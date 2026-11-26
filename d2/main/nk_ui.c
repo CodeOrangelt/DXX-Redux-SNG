@@ -51,11 +51,13 @@
 #define NK_INCLUDE_DEFAULT_FONT
 #define NK_IMPLEMENTATION
 #include "nuklear/nuklear.h"
+#include <math.h>
 
 // Panels sized by fixed fractions clipped long labels. These wrappers record
 // how wide each label wants to be as it is drawn; the next frame's panel is
 // sized from that. See nk_ui_note().
 static void nk_ui_note(const char *text, float extra_rows);
+#define NK_UI_ROUNDING 3.0f
 #define NK_UI_TOGGLE_EXTRA_ROWS 2.0f
 #define NK_UI_LABEL_EXTRA_ROWS 0.5f
 #define NK_UI_PROPERTY_EXTRA_ROWS 6.0f
@@ -86,6 +88,7 @@ static void nk_ui_note(const char *text, float extra_rows);
 #include "ogl_init.h"
 #include "mouse.h"
 #include "event.h"
+#include "args.h"
 #include "window.h"
 #include "newmenu.h"
 #include "gamefont.h"
@@ -388,12 +391,32 @@ static int s_enter_pressed = 0;
 static int s_wheel_steps = 0;
 static int s_arrow_steps = 0;
 
+#define NK_UI_NAV_MAX		512
+
+struct nk_ui_nav_slot
+{
+	struct nk_rect r;
+	int kind;
+};
+
+static struct
+{
+	const void *screen;
+	int on, collecting, shown, reveal, focus, count, prev_count;
+	int step_x, step_y, adjust, activate, wants_arrows, grabbed;
+	struct nk_ui_nav_slot slots[NK_UI_NAV_MAX], prev[NK_UI_NAV_MAX];
+} s_nav = { NULL, 0, 0, 0, 0, -1 };
+
+static void nk_ui_more_below(struct nk_context *ctx);
+static void nk_ui_drop_empty_row(struct nk_context *ctx);
+
 // Claims this frame's arrow steps for a list, leaving none for the scroller.
 static int nk_ui_take_arrow_steps(void)
 {
 	int steps = s_arrow_steps;
 
 	s_arrow_steps = 0;
+	s_nav.wants_arrows = 1;		// a list screen keeps the arrows
 	return steps;
 }
 
@@ -416,6 +439,7 @@ static void nk_ui_step_selection(int *selected, int count)
 // No clipboard support -- SDL1.2 has no clipboard text API to bridge.
 static void nk_ui_handle_event(SDL_Event *evt)
 {
+
 	struct nk_context *ctx = s_ctx;
 	int ctrl_down = SDL_GetModState() & KMOD_CTRL;
 
@@ -451,12 +475,12 @@ static void nk_ui_handle_event(SDL_Event *evt)
 				case SDLK_UP:
 						nk_input_key(ctx, NK_KEY_UP, down);
 						if (down)
-							s_arrow_steps--;
+							s_arrow_steps--, s_nav.step_y--;
 						break;
 				case SDLK_DOWN:
 						nk_input_key(ctx, NK_KEY_DOWN, down);
 						if (down)
-							s_arrow_steps++;
+							s_arrow_steps++, s_nav.step_y++;
 						break;
 				case SDLK_ESCAPE:
 					nk_input_key(ctx, NK_KEY_TEXT_RESET_MODE, down);
@@ -465,10 +489,14 @@ static void nk_ui_handle_event(SDL_Event *evt)
 					break;
 				case SDLK_a: if (ctrl_down) nk_input_key(ctx, NK_KEY_TEXT_SELECT_ALL, down); break;
 				case SDLK_LEFT:
+					if (down)
+						s_nav.step_x--;
 					if (ctrl_down) nk_input_key(ctx, NK_KEY_TEXT_WORD_LEFT, down);
 					else nk_input_key(ctx, NK_KEY_LEFT, down);
 					break;
 				case SDLK_RIGHT:
+					if (down)
+						s_nav.step_x++;
 					if (ctrl_down) nk_input_key(ctx, NK_KEY_TEXT_WORD_RIGHT, down);
 					else nk_input_key(ctx, NK_KEY_RIGHT, down);
 					break;
@@ -519,12 +547,331 @@ static void nk_ui_handle_event(SDL_Event *evt)
 		case SDL_MOUSEMOTION:
 			nk_input_motion(ctx, evt->motion.x, evt->motion.y);
 			mouse_touch_cursor_time();
+			s_nav.shown = 0;
 			break;
 
 		default:
 			break;
 	}
 }
+
+// SNG: keyboard/gamepad focus for the immediate-mode screens. Each wrapped
+// widget registers its bounds; arrows move between them by position, Enter
+// activates, Left/Right adjust sliders and spinners.
+#define NK_UI_NAV_PERP_WEIGHT	3.0f
+#define NK_UI_NAV_OUTLINE	2.0f
+
+enum nk_ui_nav_kind { NAV_PRESS, NAV_ADJUST, NAV_CYCLE };	// a cycle takes Left/Right ungrabbed
+
+static int nk_ui_nav_pick(int from, int dx, int dy)
+{
+	struct nk_vec2 c0, c;
+	float best = 1e30f, along, perp, score;
+	int i, pick = -1;
+
+	c0 = nk_vec2(s_nav.prev[from].r.x + s_nav.prev[from].r.w / 2, s_nav.prev[from].r.y + s_nav.prev[from].r.h / 2);
+	for (i = 0; i < s_nav.prev_count; i++)
+	{
+		if (i == from)
+			continue;
+		c = nk_vec2(s_nav.prev[i].r.x + s_nav.prev[i].r.w / 2, s_nav.prev[i].r.y + s_nav.prev[i].r.h / 2);
+		along = dx ? (c.x - c0.x) * dx : (c.y - c0.y) * dy;
+		perp = dx ? NK_ABS(c.y - c0.y) : NK_ABS(c.x - c0.x);
+		if (along < 1.0f)
+			continue;
+		score = along + perp * NK_UI_NAV_PERP_WEIGHT;
+		if (score < best)
+			best = score, pick = i;
+	}
+	return pick;
+}
+
+static void nk_ui_nav_move(int dx, int dy)
+{
+	int next;
+
+	if (s_nav.focus < 0 || s_nav.focus >= s_nav.prev_count)
+	{
+		s_nav.focus = 0;
+		return;
+	}
+	next = nk_ui_nav_pick(s_nav.focus, dx, dy);
+	if (next >= 0)
+		s_nav.focus = next;
+}
+
+// Before a screen builds: turn this frame's keys into focus moves.
+static void nk_ui_nav_begin(const void *screen)
+{
+	int dx = s_nav.step_x, dy = s_nav.step_y;
+
+	s_nav.step_x = s_nav.step_y = 0;
+	s_nav.adjust = 0;
+	s_nav.activate = 0;
+	if (screen != s_nav.screen)
+	{
+		s_nav.screen = screen;
+		s_nav.focus = -1;
+		s_nav.prev_count = 0;
+	}
+	s_nav.on = !s_nav.wants_arrows && s_nav.prev_count > 0;
+	s_nav.wants_arrows = 0;
+	s_nav.count = 0;
+	if (!s_nav.on)
+		return;
+	if (dx || dy)
+	{
+		int kind = s_nav.shown && s_nav.focus >= 0 && s_nav.focus < s_nav.prev_count ? s_nav.prev[s_nav.focus].kind : NAV_PRESS;
+
+		if (dx && !dy && ((kind == NAV_ADJUST && s_nav.grabbed) || kind == NAV_CYCLE))
+			s_nav.adjust = dx;
+		else if (s_nav.shown)
+		{
+			s_nav.grabbed = 0;
+			nk_ui_nav_move(dx ? (dx > 0 ? 1 : -1) : 0, dx ? 0 : (dy > 0 ? 1 : -1));
+		}
+		else if (s_nav.focus < 0)
+			s_nav.focus = 0;
+		s_nav.shown = 1;
+		s_nav.reveal = 1;
+		s_arrow_steps = 0;
+	}
+	if (s_nav.shown && s_enter_pressed && s_nav.focus >= 0)
+	{
+		// a slider takes Left/Right only once grabbed with Enter / pad A
+		if (s_nav.focus < s_nav.prev_count && s_nav.prev[s_nav.focus].kind == NAV_ADJUST)
+			s_nav.grabbed = !s_nav.grabbed;
+		else
+			s_nav.activate = 1;
+		s_enter_pressed = 0;
+	}
+}
+
+static void nk_ui_nav_end(void)
+{
+	memcpy(s_nav.prev, s_nav.slots, sizeof(s_nav.slots[0]) * s_nav.count);
+	s_nav.prev_count = s_nav.count;
+	if (s_nav.focus >= s_nav.prev_count)
+		s_nav.focus = s_nav.prev_count - 1;
+	s_nav.on = 0;
+	s_nav.activate = 0;
+	s_nav.adjust = 0;
+}
+
+static void nk_ui_nav_reveal(struct nk_context *ctx, struct nk_rect r)
+{
+	struct nk_panel *layout = ctx->current->layout;
+	struct nk_rect clip;
+
+	while (layout->parent && (layout->flags & NK_WINDOW_NO_SCROLLBAR))
+		layout = layout->parent;
+	clip = layout->clip;
+	if (!s_nav.reveal || !layout->offset_y)
+		return;
+	s_nav.reveal = 0;
+	if (r.y < clip.y)
+		*layout->offset_y -= NK_MIN(*layout->offset_y, (nk_uint)(clip.y - r.y));
+	else if (r.y + r.h > clip.y + clip.h)
+		*layout->offset_y += (nk_uint)(r.y + r.h - clip.y - clip.h);
+}
+
+// Registers the next widget; true if it holds the focus.
+static int nk_ui_nav_add(struct nk_context *ctx, int kind, struct nk_rect *bounds)
+{
+	int index;
+
+	if (!s_nav.on && !s_nav.collecting)
+		return 0;
+	if (s_nav.count >= NK_UI_NAV_MAX)
+		return 0;
+	*bounds = nk_widget_bounds(ctx);
+	index = s_nav.count++;
+	s_nav.slots[index].r = *bounds;
+	s_nav.slots[index].kind = kind;
+	if (!s_nav.on || !s_nav.shown || index != s_nav.focus)
+		return 0;
+	nk_ui_nav_reveal(ctx, *bounds);
+	return 1;
+}
+
+static void nk_ui_nav_outline(struct nk_context *ctx, struct nk_rect r)
+{
+	struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+	struct nk_color tint = NK_UI_ACCENT;
+
+	tint.a = 40;
+	nk_fill_rect(canvas, r, 3.0f, tint);
+}
+
+static nk_bool nk_ui_nav_button_label(struct nk_context *ctx, const char *title)
+{
+	struct nk_rect r;
+	int focused = nk_ui_nav_add(ctx, NAV_PRESS, &r);
+	nk_bool hit = nk_button_label(ctx, title);
+
+	if (focused)
+		nk_ui_nav_outline(ctx, r);
+	return hit || (focused && s_nav.activate);
+}
+
+static nk_bool nk_ui_nav_button_symbol(struct nk_context *ctx, enum nk_symbol_type symbol)
+{
+	struct nk_rect r;
+	int focused = nk_ui_nav_add(ctx, NAV_PRESS, &r);
+	nk_bool hit = nk_button_symbol(ctx, symbol);
+
+	if (focused)
+		nk_ui_nav_outline(ctx, r);
+	return hit || (focused && s_nav.activate);
+}
+
+#define NK_UI_TOGGLE_W_ROWS	1.6f
+#define NK_UI_TOGGLE_H_FRAC	0.6f
+
+// SNG: a checkbox drawn as a settings row: label left, switch right, the
+// whole row clickable
+static nk_bool nk_ui_toggle(struct nk_context *ctx, const char *label, nk_bool *active)
+{
+	struct nk_rect row, track;
+	struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+	const struct nk_user_font *font = ctx->style.font;
+	struct nk_input *in = &ctx->input;
+	struct nk_color text = ctx->style.text.color;
+	float track_h, track_w, knob;
+	nk_bool changed = 0;
+
+	nk_ui_note(label, NK_UI_TOGGLE_EXTRA_ROWS);
+	if (!nk_widget(&row, ctx))
+		return 0;
+	if (!(ctx->current->layout->flags & NK_WINDOW_ROM) && nk_input_is_mouse_click_in_rect(in, NK_BUTTON_LEFT, row))
+	{
+		*active = !*active;
+		changed = 1;
+	}
+	if (nk_input_is_mouse_hovering_rect(in, row))
+		nk_fill_rect(canvas, row, NK_UI_ROUNDING, nk_ui_shade(16));
+	track_h = row.h * NK_UI_TOGGLE_H_FRAC;
+	track_w = track_h * NK_UI_TOGGLE_W_ROWS;
+	track = nk_rect(row.x + row.w - track_w - 4.0f, row.y + (row.h - track_h) * 0.5f, track_w, track_h);
+	nk_draw_text(canvas, nk_rect(row.x + 4.0f, row.y + (row.h - font->height) * 0.5f, row.w - track_w - 12.0f, font->height),
+		label, nk_strlen(label), font, nk_rgba(0, 0, 0, 0), text);
+	nk_fill_rect(canvas, track, track_h * 0.5f, *active ? NK_UI_ACCENT_DIM : nk_ui_shade(22));
+	knob = track_h - 4.0f;
+	nk_fill_circle(canvas, nk_rect(*active ? track.x + track.w - knob - 2.0f : track.x + 2.0f, track.y + 2.0f, knob, knob),
+		*active ? NK_UI_ACCENT_BRIGHT : nk_ui_shade(70));
+	return changed;
+}
+
+static nk_bool nk_ui_nav_checkbox_label(struct nk_context *ctx, const char *label, nk_bool *active)
+{
+	struct nk_rect r;
+	int focused = nk_ui_nav_add(ctx, NAV_PRESS, &r);
+	nk_bool changed = nk_ui_toggle(ctx, label, active);
+
+	if (focused && s_nav.activate)
+	{
+		*active = !*active;
+		changed = 1;
+	}
+	if (focused)
+		nk_ui_nav_outline(ctx, r);
+	return changed;
+}
+
+static nk_bool nk_ui_nav_option_label(struct nk_context *ctx, const char *label, nk_bool active)
+{
+	struct nk_rect r;
+	int focused = nk_ui_nav_add(ctx, NAV_PRESS, &r);
+	nk_bool on = nk_option_label(ctx, label, active);
+
+	if (focused)
+		nk_ui_nav_outline(ctx, r);
+	return on || (focused && s_nav.activate);
+}
+
+static nk_bool nk_ui_nav_selectable_label(struct nk_context *ctx, const char *label, nk_flags align, nk_bool *value)
+{
+	struct nk_rect r;
+	int focused = nk_ui_nav_add(ctx, NAV_PRESS, &r);
+	nk_bool changed = nk_selectable_label(ctx, label, align, value);
+
+	if (focused && s_nav.activate)
+	{
+		*value = !*value;
+		changed = 1;
+	}
+	if (focused)
+		nk_ui_nav_outline(ctx, r);
+	return changed;
+}
+
+static nk_bool nk_ui_nav_select_label(struct nk_context *ctx, const char *label, nk_flags align, nk_bool value)
+{
+	struct nk_rect r;
+	int focused = nk_ui_nav_add(ctx, NAV_PRESS, &r);
+	nk_bool on = nk_select_label(ctx, label, align, value);
+
+	if (focused)
+		nk_ui_nav_outline(ctx, r);
+	return (focused && s_nav.activate) ? !value : on;
+}
+
+static void nk_ui_nav_property_int(struct nk_context *ctx, const char *name, int min, int *val, int max, int step, float inc_per_pixel)
+{
+	struct nk_rect r;
+	int focused = nk_ui_nav_add(ctx, NAV_ADJUST, &r);
+
+	if (focused && s_nav.adjust)
+		*val = NK_CLAMP(min, *val + s_nav.adjust * step, max);
+	nk_property_int(ctx, name, min, val, max, step, inc_per_pixel);
+	if (focused)
+		nk_ui_nav_outline(ctx, r);
+}
+
+static nk_bool nk_ui_nav_slider_int(struct nk_context *ctx, int min, int *val, int max, int step)
+{
+	struct nk_rect r;
+	int focused = nk_ui_nav_add(ctx, NAV_ADJUST, &r);
+	nk_bool changed = 0;
+
+	if (focused && s_nav.adjust)
+	{
+		*val = NK_CLAMP(min, *val + s_nav.adjust * step, max);
+		changed = 1;
+	}
+	changed |= nk_slider_int(ctx, min, val, max, step);
+	if (focused)
+		nk_ui_nav_outline(ctx, r);
+	return changed;
+}
+
+static nk_flags nk_ui_nav_edit_string_zero_terminated(struct nk_context *ctx, nk_flags flags, char *buffer, int max, nk_plugin_filter filter)
+{
+	struct nk_rect r;
+	int focused = nk_ui_nav_add(ctx, NAV_PRESS, &r);
+	nk_flags result;
+
+	if (focused && s_nav.activate)
+		nk_edit_focus(ctx, flags);
+	result = nk_edit_string_zero_terminated(ctx, flags, buffer, max, filter);
+	if (focused)
+		nk_ui_nav_outline(ctx, r);
+	return result;
+}
+
+#undef nk_button_label
+#undef nk_checkbox_label
+#undef nk_option_label
+#undef nk_property_int
+#define nk_button_label nk_ui_nav_button_label
+#define nk_button_symbol nk_ui_nav_button_symbol
+#define nk_checkbox_label nk_ui_nav_checkbox_label
+#define nk_option_label nk_ui_nav_option_label
+#define nk_selectable_label nk_ui_nav_selectable_label
+#define nk_select_label nk_ui_nav_select_label
+#define nk_property_int nk_ui_nav_property_int
+#define nk_slider_int nk_ui_nav_slider_int
+#define nk_edit_string_zero_terminated nk_ui_nav_edit_string_zero_terminated
 
 // nk_bool is `int` (or C99 `bool`) depending on toolchain -- never the same
 // size as the `ubyte`/`short` fields on Netgame. Binding nk_checkbox_label
@@ -969,8 +1316,9 @@ static void nk_ui_apply_theme(struct nk_context *ctx)
 	table[NK_COLOR_TAB_HEADER] = nk_ui_shade(14);
 	nk_style_from_table(ctx, table);
 
-	ctx->style.window.border = 2.0f;
-	ctx->style.window.rounding = 0.0f;
+	ctx->style.window.border = 1.0f;
+	ctx->style.window.rounding = NK_UI_ROUNDING;
+	ctx->style.window.scrollbar_size = nk_vec2((float)max(6, s_row_h / 3), (float)max(6, s_row_h / 3));
 	ctx->style.window.padding = nk_vec2((float)pad, (float)pad);
 	ctx->style.window.spacing = nk_vec2((float)pad, (float)(pad / 3));
 	ctx->style.window.header.padding = nk_vec2((float)pad, (float)(pad / 2));
@@ -978,18 +1326,18 @@ static void nk_ui_apply_theme(struct nk_context *ctx)
 	ctx->style.window.header.label_normal = title;
 	ctx->style.window.header.label_hover = title;
 	ctx->style.window.header.label_active = title;
-	ctx->style.button.rounding = 0.0f;
+	ctx->style.button.rounding = NK_UI_ROUNDING;
 	ctx->style.button.border = 1.0f;
 	ctx->style.button.border_color = nk_ui_shade(58);
 	ctx->style.button.padding = nk_vec2((float)pad, (float)(pad / 2));
 	ctx->style.button.text_hover = bright;
 	ctx->style.button.text_active = nk_rgba(255, 255, 255, 255);
-	ctx->style.slider.rounding = 0.0f;
-	ctx->style.slider.bar_height = (float)max(4, s_row_h / 4);
-	ctx->style.slider.cursor_size = nk_vec2((float)max(10, s_row_h / 2), (float)s_row_h * 0.8f);
+	ctx->style.slider.rounding = NK_UI_ROUNDING;
+	ctx->style.slider.bar_height = (float)max(3, s_row_h / 6);
+	ctx->style.slider.cursor_size = nk_vec2((float)max(10, s_row_h / 2), (float)max(10, s_row_h / 2));
 	// Nuklear centres the knob on the bar end, so half of it hangs outside.
 	ctx->style.slider.padding = nk_vec2(ctx->style.slider.cursor_size.x * 0.5f + 1.0f, 2.0f);
-	ctx->style.edit.rounding = 0.0f;
+	ctx->style.edit.rounding = NK_UI_ROUNDING;
 	ctx->style.edit.border = 1.0f;
 	ctx->style.edit.border_color = nk_ui_shade(58);
 	// Nuklear highlights selected text in the plain text colour, which over
@@ -1000,12 +1348,12 @@ static void nk_ui_apply_theme(struct nk_context *ctx)
 	ctx->style.edit.selected_text_hover = table[NK_COLOR_TEXT];
 	ctx->style.edit.cursor_size = 2.0f;
 	ctx->style.property.rounding = 0.0f;
-	ctx->style.scrollv.rounding = 0.0f;
-	ctx->style.scrollv.rounding_cursor = 0.0f;
-	ctx->style.selectable.rounding = 0.0f;
+	ctx->style.scrollv.rounding = NK_UI_ROUNDING;
+	ctx->style.scrollv.rounding_cursor = NK_UI_ROUNDING;
+	ctx->style.selectable.rounding = NK_UI_ROUNDING;
 	ctx->style.selectable.text_hover = bright;
 	ctx->style.selectable.text_normal_active = nk_rgba(255, 255, 255, 255);
-	ctx->style.combo.rounding = 0.0f;
+	ctx->style.combo.rounding = NK_UI_ROUNDING;
 	ctx->style.combo.border = 1.0f;
 	ctx->style.combo.border_color = nk_ui_shade(58);
 	ctx->style.combo.label_hover = bright;
@@ -1479,8 +1827,13 @@ static int nk_ui_frame(const char *title, struct nk_vec2 size_frac, void (*build
 			nk_ui_title_lines(s_ctx, title);
 		}
 		s_widest_label = 0.0f;
+		nk_ui_nav_begin((const void *)build);
+		s_nav.collecting = 1;
 		build(s_ctx, userdata);
+		s_nav.collecting = 0;
+		nk_ui_nav_end();
 		s_modal_need = s_widest_label;
+		nk_ui_more_below(s_ctx);
 		nk_ui_apply_manual_scroll(scroll_x, scroll_y_before, 1);
 		nk_ui_scale_grip(s_ctx);
 	}
@@ -1796,14 +2149,54 @@ static void nk_ui_pop_accent_toggle_text(struct nk_context *ctx)
 	nk_style_pop_color(ctx);
 }
 
-// A game mode's settings, indented a bit and tinted with the accent color so
-// they read as clearly distinct from the plain-white mode list above them.
+// the same heading newmenu panels draw
+static void nk_ui_section(struct nk_context *ctx, const char *title)
+{
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	if (s_head_font.ready)
+		nk_style_push_font(ctx, &s_head_font.handle);
+	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT_BRIGHT);
+	nk_label(ctx, title, NK_TEXT_LEFT);
+	nk_style_pop_color(ctx);
+	if (s_head_font.ready)
+		nk_style_pop_font(ctx);
+}
+
+#define NK_UI_TABS_PER_ROW 5
+
+static int nk_ui_tab_strip_rows(int count)
+{
+	return (count + NK_UI_TABS_PER_ROW - 1) / NK_UI_TABS_PER_ROW;
+}
+
+// one cell of a tab strip across the top; wraps every NK_UI_TABS_PER_ROW
+static int nk_ui_tab_cell(struct nk_context *ctx, const char *name, int index, int count, int open)
+{
+	nk_bool on = open;
+
+	if (index % NK_UI_TABS_PER_ROW == 0)
+		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, min(NK_UI_TABS_PER_ROW, count));
+	return nk_selectable_label(ctx, name, NK_TEXT_CENTERED, &on) && on;
+}
+
+static void nk_ui_tab_strip(struct nk_context *ctx, const char *const *names, int count, int *active)
+{
+	int i;
+
+	// SNG: gamepad bumpers arrive as Page Up/Down
+	if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_DOWN))
+		*active = (*active + 1) % count;
+	if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_UP))
+		*active = (*active + count - 1) % count;
+	for (i = 0; i < count; i++)
+		if (nk_ui_tab_cell(ctx, names[i], i, count, i == *active))
+			*active = i;
+}
+
 static void nk_ui_build_team_rules(struct nk_context *ctx)
 {
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	nk_ui_push_accent_toggle_text(ctx);
-	nk_ui_checkbox_ubyte(ctx, "    No Friendly Fire", &Netgame.NoFriendlyFire);
-	nk_ui_pop_accent_toggle_text(ctx);
+	nk_ui_checkbox_ubyte(ctx, "No Friendly Fire", &Netgame.NoFriendlyFire);
 }
 
 // Marshals Netgame's race item-chance fields through the legacy newmenu-based
@@ -1838,8 +2231,7 @@ static void nk_ui_build_race_rules(struct nk_context *ctx)
 	char bot_label[48];
 
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT);
-	nk_labelf(ctx, NK_TEXT_LEFT, "    Race Laps: %d", laps);
+	nk_labelf(ctx, NK_TEXT_LEFT, "Race Laps: %d", laps);
 	nk_ui_slider_int(ctx, 1, &laps, 10, 1);
 	Netgame.LapsToWin = (ubyte)laps;
 
@@ -1847,13 +2239,12 @@ static void nk_ui_build_race_rules(struct nk_context *ctx)
 		snprintf(bot_label, sizeof(bot_label), "Race Bots: off");
 	else
 		snprintf(bot_label, sizeof(bot_label), "Race Bots: fill %d", Netgame.RaceBotFill);
-	nk_labelf(ctx, NK_TEXT_LEFT, "    %s", bot_label);
+	nk_labelf(ctx, NK_TEXT_LEFT, "%s", bot_label);
 	nk_ui_slider_int(ctx, 0, &bots, MAX_PLAYERS - 1, 1);
 	Netgame.RaceBotFill = (ubyte)bots;
 
-	if (nk_button_label(ctx, "    Advanced Race Options..."))
+	if (nk_button_label(ctx, "Advanced Race Options..."))
 		nk_ui_defer(nk_ui_race_advanced_options);
-	nk_style_pop_color(ctx);
 }
 
 // Survival's pacing is driven by the same Netgame.difficulty field as every
@@ -1865,10 +2256,8 @@ static void nk_ui_build_survival_rules(struct nk_context *ctx)
 	int v = Netgame.difficulty;
 
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT);
-	nk_labelf(ctx, NK_TEXT_LEFT, "    Difficulty: %s", MENU_DIFFICULTY_TEXT(v));
+	nk_labelf(ctx, NK_TEXT_LEFT,  "Difficulty: %s", MENU_DIFFICULTY_TEXT(v));
 	nk_ui_slider_int(ctx, 0, &v, NDL - 1, 1);
-	nk_style_pop_color(ctx);
 	Netgame.difficulty = (ubyte)v;
 }
 
@@ -1941,10 +2330,31 @@ static int nk_ui_mode_allows_cpus(void)
 	return current >= 0 && (Host_modes[current].flags & MODE_CPUS);
 }
 
+enum { ADV_TAB_RULES, ADV_TAB_POWERUPS, ADV_TAB_SPAWN, ADV_TAB_SNG, ADV_TAB_VISUAL, ADV_TAB_NETWORK, ADV_TABS };
+
+static const char *const Advanced_tabs[ADV_TABS] = { "Game Rules", "Powerups & Weapons", "Spawn Settings", "SNG Toggles", "Visual & HUD", "Network Settings" };
+
+static int s_advanced_tab;
+
+// tab strip on top; the open tab fills the group the caller begins below it
+static int nk_ui_advanced_tabs(struct nk_context *ctx)
+{
+	float row = NK_UI_ROW_HEIGHT + ctx->style.window.spacing.y;
+	int tabs = net_udp_solo() ? ADV_TAB_NETWORK : ADV_TABS;	// offline: no Network tab
+	float pane_h = nk_window_get_content_region(ctx).h - row * (1 + nk_ui_tab_strip_rows(tabs)) - ctx->style.window.padding.y * 2;
+
+	if (s_advanced_tab >= tabs)
+		s_advanced_tab = 0;
+	nk_ui_tab_strip(ctx, Advanced_tabs, tabs, &s_advanced_tab);
+	nk_layout_row_dynamic(ctx, max(pane_h, row * 6), 1);
+	return s_advanced_tab;
+}
+
 static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 {
 	int *running = (int *)userdata;
 	char port_text[6];
+	int tab;
 
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	if (nk_ui_take_enter())
@@ -1952,7 +2362,11 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 	if (nk_button_label(ctx, "Back"))
 		*running = 0;
 
-	if (nk_tree_push(ctx, NK_TREE_TAB, "Game Rules", NK_MINIMIZED))
+	tab = nk_ui_advanced_tabs(ctx);
+	if (!nk_group_begin(ctx, "advanced", NK_WINDOW_BORDER))
+		return;
+
+	if (tab == ADV_TAB_RULES)
 	{
 		int v;
 		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
@@ -1977,10 +2391,9 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		nk_ui_slider_int(ctx, 0, &v, 10, 1);
 		Netgame.KillGoal = v;
 
-		nk_tree_pop(ctx);
 	}
 
-	if (nk_tree_push(ctx, NK_TREE_TAB, "Powerups & Weapons", NK_MINIMIZED))
+	if (tab == ADV_TAB_POWERUPS)
 	{
 		int v;
 		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
@@ -2021,10 +2434,9 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		if (nk_button_label(ctx, "Select Static Weapons"))
 			nk_ui_defer(nk_ui_static_weapons);
 
-		nk_tree_pop(ctx);
 	}
 
-	if (nk_tree_push(ctx, NK_TREE_TAB, "Spawn Settings", NK_MINIMIZED))
+	if (tab == ADV_TAB_SPAWN)
 	{
 		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 		nk_label(ctx, "Spawn Style", NK_TEXT_LEFT);
@@ -2036,10 +2448,9 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		nk_label(ctx, "Spawn Logic", NK_TEXT_LEFT);
 		nk_ui_checkbox_ubyte(ctx, "Redux: New Spawn Location Algorithm", &Netgame.NewSpawnAlgorithm);
 		nk_ui_checkbox_ubyte(ctx, "Smaller Map Spawning", &Netgame.SmallerSpawn);
-		nk_tree_pop(ctx);
 	}
 
-	if (nk_tree_push(ctx, NK_TREE_TAB, "SNG Toggles", NK_MINIMIZED))
+	if (tab == ADV_TAB_SNG)
 	{
 		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 		nk_ui_checkbox_ubyte(ctx, "No Weapon Stun", &Netgame.WeaponStun);
@@ -2049,10 +2460,9 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		nk_ui_checkbox_ubyte(ctx, "Fast Doors", &Netgame.FastDoor);
 		nk_ui_checkbox_ubyte(ctx, "Dark Smart Blobs", &Netgame.DarkSmartBlobs);
 		nk_ui_checkbox_ubyte(ctx, "Quiet Fan", &Netgame.QuietFan);
-		nk_tree_pop(ctx);
 	}
 
-	if (nk_tree_push(ctx, NK_TREE_TAB, "Visual & HUD", NK_MINIMIZED))
+	if (tab == ADV_TAB_VISUAL)
 	{
 		int show_on_map;
 		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
@@ -2089,10 +2499,9 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 		else
 			Netgame.game_flags &= ~NETGAME_FLAG_SHOW_MAP;
 
-		nk_tree_pop(ctx);
 	}
 
-	if (!net_udp_solo() && nk_tree_push(ctx, NK_TREE_TAB, "Network Settings", NK_MINIMIZED))
+	if (!net_udp_solo() && tab == ADV_TAB_NETWORK)
 	{
 		int v;
 		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
@@ -2113,8 +2522,8 @@ static void nk_ui_build_advanced_options(struct nk_context *ctx, void *userdata)
 #endif
 		nk_ui_checkbox_ubyte(ctx, "Retro Protocol (p2p, etc.)", &Netgame.RetroProtocol);
 
-		nk_tree_pop(ctx);
 	}
+	nk_group_end(ctx);
 }
 
 void nk_ui_advanced_options(void)
@@ -2373,13 +2782,6 @@ struct hosting_ui_state
 	char slevel[12];
 };
 
-static void nk_ui_section(struct nk_context *ctx, const char *title)
-{
-	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT);
-	nk_label(ctx, title, NK_TEXT_LEFT);
-	nk_style_pop_color(ctx);
-}
 
 static void nk_ui_build_host_header(struct nk_context *ctx, struct hosting_ui_state *st)
 {
@@ -3682,6 +4084,194 @@ static int nk_ui_is_section_head(const newmenu_item *item)
 // Set by newmenu.c around the menus whose headings are plain labels.
 static int s_fixed_sections = 0;
 
+// SNG: a set of menus shown as one, a page strip across the top
+static struct
+{
+	const char *title;
+	const char *const *names;
+	int count, active, picked;
+} s_pages = { NULL, NULL, 0, 0, -1 };
+
+void nk_ui_set_pages(const char *title, const char *const *names, int count, int active)
+{
+	s_pages.title = title;
+	s_pages.names = names;
+	s_pages.count = count;
+	s_pages.active = active;
+}
+
+// a text field on the front panel is taking keys
+int nk_ui_text_focused(void)
+{
+	return s_ctx && s_ctx->active && s_ctx->active->edit.active;
+}
+
+int nk_ui_take_page_pick(void)
+{
+	int picked = s_pages.picked;
+
+	s_pages.picked = -1;
+	return picked;
+}
+
+#define NK_UI_MORE_TEXT		"Scroll down for more"
+#define NK_UI_MORE_BOUNCE_MS	900
+#define NK_UI_MORE_BOUNCE_FRAC	0.15f
+#define NK_UI_MORE_SLACK	2.0f
+
+static int nk_ui_has_more_below(struct nk_context *ctx)
+{
+	struct nk_panel *layout = ctx->current->layout;
+
+	return layout->at_y + layout->row.height > layout->clip.y + layout->clip.h + NK_UI_MORE_SLACK;
+}
+
+// bouncing "scroll down for more" and a down arrow, centred in `area`
+static void nk_ui_draw_more(struct nk_context *ctx, struct nk_rect area, int fill)
+{
+	struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+	const struct nk_user_font *font = ctx->style.font;
+	struct nk_color fg = NK_UI_ACCENT_BRIGHT, bg = ctx->style.window.fixed_background.data.color;
+	float phase, bounce, text_w, x, y, arrow;
+
+	phase = (float)(SDL_GetTicks() % NK_UI_MORE_BOUNCE_MS) / NK_UI_MORE_BOUNCE_MS;
+	bounce = -NK_ABS(sinf(phase * 3.14159265f)) * area.h * NK_UI_MORE_BOUNCE_FRAC;
+	text_w = font->width(font->userdata, font->height, NK_UI_MORE_TEXT, (int)strlen(NK_UI_MORE_TEXT));
+	arrow = font->height * 0.6f;
+	x = area.x + (area.w - text_w - arrow * 2) * 0.5f;
+	y = area.y + (area.h - font->height) * 0.5f + bounce;
+	bg.a = 230;
+	if (fill)
+		nk_fill_rect(canvas, area, 0.0f, bg);
+	nk_draw_text(canvas, nk_rect(x, y, text_w, font->height), NK_UI_MORE_TEXT, (int)strlen(NK_UI_MORE_TEXT), font, bg, fg);
+	x += text_w + arrow;
+	y += (font->height - arrow) * 0.5f;
+	nk_fill_triangle(canvas, x, y, x + arrow, y, x + arrow * 0.5f, y + arrow, fg);
+}
+
+// SNG: a pane with no room below it says so over its last line
+static void nk_ui_more_below(struct nk_context *ctx)
+{
+	struct nk_rect clip = ctx->current->layout->clip;
+
+	if (nk_ui_has_more_below(ctx))
+		nk_ui_draw_more(ctx, nk_rect(clip.x, clip.y + clip.h - s_row_h, clip.w, (float)s_row_h), 1);
+}
+
+// The tabbed panes keep a line of their own under them for the hint.
+enum { PAD_STYLE_KEYS, PAD_STYLE_XBOX, PAD_STYLE_PLAYSTATION };
+enum { GLYPH_ACCEPT, GLYPH_BACK, GLYPH_TABS };
+
+// what the footer's button glyphs should look like: the first pad's family
+static int nk_ui_pad_style(void)
+{
+	const char *name;
+
+	if (GameArg.CtlNoJoystick || SDL_NumJoysticks() < 1 || !(name = SDL_JoystickName(0)))
+		return PAD_STYLE_KEYS;
+	if (strstr(name, "PS") || strstr(name, "Sony") || strstr(name, "DualSense") || strstr(name, "DualShock") ||
+		strstr(name, "Wireless Controller"))
+		return PAD_STYLE_PLAYSTATION;
+	return PAD_STYLE_XBOX;
+}
+
+static void nk_ui_glyph_text(struct nk_command_buffer *canvas, const struct nk_user_font *font, struct nk_rect r, const char *text, struct nk_color fg)
+{
+	float w = font->width(font->userdata, font->height, text, nk_strlen(text));
+
+	nk_draw_text(canvas, nk_rect(r.x + (r.w - w) * 0.5f, r.y + (r.h - font->height) * 0.5f, w, font->height),
+		text, nk_strlen(text), font, nk_rgba(0, 0, 0, 0), fg);
+}
+
+// a face button: Xbox letters on their colours, PlayStation shapes
+static void nk_ui_face_glyph(struct nk_command_buffer *canvas, const struct nk_user_font *font, struct nk_rect r, int style, int glyph)
+{
+	float in = r.w * 0.28f;
+
+	if (style == PAD_STYLE_XBOX)
+	{
+		nk_fill_circle(canvas, r, glyph == GLYPH_ACCEPT ? nk_rgba(70, 170, 70, 255) : nk_rgba(200, 60, 55, 255));
+		nk_ui_glyph_text(canvas, font, r, glyph == GLYPH_ACCEPT ? "A" : "B", nk_rgba(255, 255, 255, 255));
+		return;
+	}
+	nk_fill_circle(canvas, r, nk_rgba(30, 32, 38, 255));
+	if (glyph == GLYPH_ACCEPT)
+	{
+		nk_stroke_line(canvas, r.x + in, r.y + in, r.x + r.w - in, r.y + r.h - in, 2.0f, nk_rgba(110, 150, 230, 255));
+		nk_stroke_line(canvas, r.x + r.w - in, r.y + in, r.x + in, r.y + r.h - in, 2.0f, nk_rgba(110, 150, 230, 255));
+	}
+	else
+		nk_stroke_circle(canvas, nk_rect(r.x + in * 0.8f, r.y + in * 0.8f, r.w - in * 1.6f, r.h - in * 1.6f), 2.0f, nk_rgba(230, 90, 100, 255));
+}
+
+// a keycap or shoulder button: text in a rounded outline
+static float nk_ui_cap_glyph(struct nk_command_buffer *canvas, const struct nk_user_font *font, float x, float y, float h, const char *text)
+{
+	float w = font->width(font->userdata, font->height, text, nk_strlen(text)) + h * 0.6f;
+	struct nk_rect r = nk_rect(x, y, w, h);
+
+	nk_fill_rect(canvas, r, h * 0.3f, nk_rgba(30, 32, 38, 255));
+	nk_stroke_rect(canvas, r, h * 0.3f, 1.0f, nk_ui_shade(110));
+	nk_ui_glyph_text(canvas, font, r, text, nk_rgba(230, 230, 230, 255));
+	return w;
+}
+
+// one "glyph  label" pair of the footer; returns where the next one starts
+static float nk_ui_legend_item(struct nk_command_buffer *canvas, const struct nk_user_font *font, float x, struct nk_rect area, int style, int glyph, const char *label)
+{
+	static const char *const keys[] = { "Enter", "Esc", "Tab" };
+	float h = font->height * 1.35f, y = area.y + (area.h - h) * 0.5f, w;
+
+	if (glyph == GLYPH_TABS && style != PAD_STYLE_KEYS)
+	{
+		const char *left = style == PAD_STYLE_XBOX ? "LB" : "L1", *right = style == PAD_STYLE_XBOX ? "RB" : "R1";
+
+		w = nk_ui_cap_glyph(canvas, font, x, y, h, left);
+		w += 4.0f + nk_ui_cap_glyph(canvas, font, x + w + 4.0f, y, h, right);
+	}
+	else if (style == PAD_STYLE_KEYS)
+		w = nk_ui_cap_glyph(canvas, font, x, y, h, keys[glyph]);
+	else
+	{
+		nk_ui_face_glyph(canvas, font, nk_rect(x, y, h, h), style, glyph);
+		w = h;
+	}
+	x += w + h * 0.35f;
+	nk_draw_text(canvas, nk_rect(x, area.y + (area.h - font->height) * 0.5f, area.w, font->height),
+		label, nk_strlen(label), font, nk_rgba(0, 0, 0, 0), nk_ui_shade(150));
+	return x + font->width(font->userdata, font->height, label, nk_strlen(label)) + h * 1.2f;
+}
+
+// SNG: footer: the real buttons for this pad (or keys), and the scroll hint
+static void nk_ui_more_row(struct nk_context *ctx, int more)
+{
+	const struct nk_user_font *font = ctx->style.font;
+	struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+	int style = nk_ui_pad_style();
+	struct nk_rect area;
+	float x;
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT * 1.4f, 1);
+	area = nk_widget_bounds(ctx);
+	nk_spacing(ctx, 1);
+	nk_stroke_line(canvas, area.x, area.y + 1.0f, area.x + area.w, area.y + 1.0f, 1.0f, nk_ui_shade(30));
+	x = area.x + 6.0f;
+	x = nk_ui_legend_item(canvas, font, x, area, style, GLYPH_ACCEPT, "Select");
+	x = nk_ui_legend_item(canvas, font, x, area, style, GLYPH_BACK, "Back");
+	nk_ui_legend_item(canvas, font, x, area, style, GLYPH_TABS, "Switch tab");
+	if (more)
+		nk_ui_draw_more(ctx, nk_rect(area.x + area.w * 0.6f, area.y, area.w * 0.4f, area.h), 0);
+}
+
+static void nk_ui_page_strip(struct nk_context *ctx)
+{
+	int i;
+
+	for (i = 0; i < s_pages.count; i++)
+		if (nk_ui_tab_cell(ctx, s_pages.names[i], i, s_pages.count, i == s_pages.active) && i != s_pages.active)
+			s_pages.picked = i;
+}
+
 void nk_ui_set_fixed_sections(int fixed)
 {
 	s_fixed_sections = fixed;
@@ -3719,7 +4309,6 @@ static unsigned int nk_ui_all_sections_collapsed(const newmenu_item *items, int 
 
 #define NK_UI_MIN_TABS	2
 #define NK_UI_TABBED_WIDTH_FRAC	0.7f
-#define NK_UI_TAB_LIST_FRAC	0.3f
 
 static int nk_ui_count_tabs(const newmenu_item *items, int nitems)
 {
@@ -3807,15 +4396,13 @@ int nk_ui_next_tab(const newmenu_item *items, int nitems, unsigned int *collapse
 static void nk_ui_tab_list(struct nk_context *ctx, const newmenu_item *items, int nitems)
 {
 	int i, open = nk_ui_open_tab(items, nitems, nk_ui_collapsed_mask());
+	int count = nk_ui_count_tabs(items, nitems), index = 0;
 
-	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	for (i = 0; i < nitems; i++)
 	{
-		nk_bool on = i == open;
-
 		if (!nk_ui_is_collapsible_head(items, nitems, i))
 			continue;
-		if (nk_selectable_label(ctx, items[i].text, NK_TEXT_LEFT, &on) && on && s_collapsed)
+		if (nk_ui_tab_cell(ctx, items[i].text, index++, count, i == open) && s_collapsed)
 			nk_ui_show_tab(items, nitems, i, s_collapsed);
 	}
 }
@@ -3991,6 +4578,37 @@ static int nk_ui_reorder_row(struct nk_context *ctx, newmenu_item *items, int ni
 	return moved;
 }
 
+#define NK_UI_INLINE_LABEL_FRAC	0.42f
+
+// Settings menus draw their links as slim rows, not full-width buttons.
+static int s_link_rows;
+
+// SNG: a row that opens something: label left, value and ">" right
+static int nk_ui_link_row(struct nk_context *ctx, const char *label, const char *value)
+{
+	struct nk_rect row;
+	struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+	const struct nk_user_font *font = ctx->style.font;
+	struct nk_input *in = &ctx->input;
+	char right[NM_MAX_TEXT_LEN + 4];
+	float right_w, text_y;
+	int hovered;
+
+	nk_ui_note(label, NK_UI_TOGGLE_EXTRA_ROWS);
+	if (!nk_widget(&row, ctx))
+		return 0;
+	hovered = nk_input_is_mouse_hovering_rect(in, row);
+	nk_fill_rect(canvas, row, NK_UI_ROUNDING, hovered ? nk_ui_shade(20) : nk_ui_shade(12));
+	snprintf(right, sizeof(right), "%s%s>", value ? value : "", value ? "   " : "");
+	right_w = font->width(font->userdata, font->height, right, nk_strlen(right));
+	text_y = row.y + (row.h - font->height) * 0.5f;
+	nk_draw_text(canvas, nk_rect(row.x + 6.0f, text_y, row.w - right_w - 18.0f, font->height),
+		label, nk_strlen(label), font, nk_rgba(0, 0, 0, 0), hovered ? NK_UI_ACCENT_BRIGHT : ctx->style.text.color);
+	nk_draw_text(canvas, nk_rect(row.x + row.w - right_w - 6.0f, text_y, right_w, font->height),
+		right, nk_strlen(right), font, nk_rgba(0, 0, 0, 0), NK_UI_ACCENT);
+	return nk_input_is_mouse_click_in_rect(in, NK_BUTTON_LEFT, row);
+}
+
 // Set by the drop-down to the option it picked, so the menu reports the
 // option's own index to its handler rather than the row's.
 static int s_radio_pick = -1;
@@ -4000,10 +4618,9 @@ static int s_radio_pick = -1;
 static int nk_ui_option_run_row(struct nk_context *ctx, const newmenu_item *items, int start, int end)
 {
 	int chosen = nk_ui_radio_chosen(items, start, end);
-	char label[NM_MAX_TEXT_LEN + 4];
+	const char *label = start > 0 && items[start - 1].type == NM_TYPE_TEXT && !nk_ui_is_section_head(&items[start - 1]) ? NULL : "Mode";
 
-	snprintf(label, sizeof(label), "%s  >", chosen < 0 ? "---" : items[chosen].text);
-	return nk_button_label(ctx, label);
+	return nk_ui_link_row(ctx, label ? label : "", chosen < 0 ? "---" : items[chosen].text);
 }
 
 // A text row in capitals is a section heading; the accent colour makes the
@@ -4057,6 +4674,32 @@ static int nk_ui_menu_item_widget(struct nk_context *ctx, newmenu_item *items, i
 
 #define NK_UI_CURRENT_ITEM_THICKNESS 2.0f
 
+// SNG: section heading: small accent caps over a hairline rule
+static void nk_ui_section_label(struct nk_context *ctx, const char *text)
+{
+	struct nk_rect row;
+	struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+	const struct nk_user_font *font = ctx->style.font;
+	float base;
+
+	if (!nk_widget(&row, ctx))
+		return;
+	base = row.y + row.h - 2.0f;
+	nk_draw_text(canvas, nk_rect(row.x, base - font->height - 2.0f, row.w, font->height),
+		text, nk_strlen(text), font, nk_rgba(0, 0, 0, 0), NK_UI_ACCENT);
+	nk_stroke_line(canvas, row.x, base, row.x + row.w, base, 1.0f, NK_UI_ACCENT_DIM);
+}
+
+// the keyboard's row: a soft tint
+static void nk_ui_mark_current(struct nk_context *ctx, struct nk_rect r)
+{
+	struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+	struct nk_color tint = NK_UI_ACCENT;
+
+	tint.a = 40;
+	nk_fill_rect(canvas, r, NK_UI_ROUNDING, tint);
+}
+
 // Wraps the widget so the keyboard-selected item gets an outline.
 // Extra space to pull into view above a row: the heading that labels it is
 // a row of its own, and stopping at the row itself leaves it clipped.
@@ -4076,22 +4719,27 @@ static float nk_ui_reveal_lead(const newmenu_item *items, int nitems, int index)
 	return 0.0f;
 }
 
+// scrolls the pane the item sits in -- a group inside a tabbed panel, so the
+// tabs above it stay put -- not the whole window
 static void nk_ui_reveal_rect(struct nk_context *ctx, struct nk_rect item, float lead)
 {
-	struct nk_rect view = nk_window_get_content_region(ctx);
-	nk_uint scroll_x, scroll_y;
+	struct nk_panel *layout = ctx->current->layout;
+	struct nk_rect view;
 	float shift = 0.0f;
 
+	while (layout->parent && (layout->flags & NK_WINDOW_NO_SCROLLBAR))
+		layout = layout->parent;	// a column inside a scrolling page
+	view = layout->clip;
+	if (!layout->offset_y)
+		return;
 	if (item.y - lead < view.y)
 		shift = item.y - lead - view.y;
 	else if (item.y + item.h > view.y + view.h)
 		shift = (item.y + item.h) - (view.y + view.h);
 	if (shift == 0.0f)
 		return;
-
-	nk_window_get_scroll(ctx, &scroll_x, &scroll_y);
-	shift += (float)scroll_y;
-	nk_window_set_scroll(ctx, scroll_x, (nk_uint)(shift < 0.0f ? 0.0f : shift));
+	shift += (float)*layout->offset_y;
+	*layout->offset_y = (nk_uint)(shift < 0.0f ? 0.0f : shift);
 }
 
 static int nk_ui_menu_item(struct nk_context *ctx, newmenu_item *items, int nitems, int index, int *selected, int focus_input, int is_current, int reveal)
@@ -4103,7 +4751,7 @@ static int nk_ui_menu_item(struct nk_context *ctx, newmenu_item *items, int nite
 		nk_ui_reveal_rect(ctx, bounds, nk_ui_reveal_lead(items, nitems, index));
 
 	if (is_current && (items[index].type != NM_TYPE_TEXT || nk_ui_is_collapsible_head(items, nitems, index)))
-		nk_stroke_rect(nk_window_get_canvas(ctx), bounds, 0, NK_UI_CURRENT_ITEM_THICKNESS, NK_UI_ACCENT_BRIGHT);
+		nk_ui_mark_current(ctx, bounds);
 	return changed;
 }
 
@@ -4128,15 +4776,7 @@ static int nk_ui_menu_item_widget(struct nk_context *ctx, newmenu_item *items, i
 			else if (s_col_count)
 				nk_ui_table_row(ctx, item->text, 0);
 			else if (nk_ui_is_heading(item->text))
-			{
-				if (s_head_font.ready)
-					nk_style_push_font(ctx, &s_head_font.handle);
-				nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT_BRIGHT);
-				nk_label(ctx, item->text, NK_TEXT_LEFT);
-				nk_style_pop_color(ctx);
-				if (s_head_font.ready)
-					nk_style_pop_font(ctx);
-			}
+				nk_ui_section_label(ctx, item->text);
 			else
 				nk_label(ctx, item->text, NK_TEXT_LEFT);
 			return 0;
@@ -4150,7 +4790,7 @@ static int nk_ui_menu_item_widget(struct nk_context *ctx, newmenu_item *items, i
 				if (nk_ui_table_row(ctx, item->text, 1))
 					*selected = index;
 			}
-			else if (nk_button_label(ctx, item->text))
+			else if (s_link_rows ? nk_ui_link_row(ctx, item->text, NULL) : nk_button_label(ctx, item->text))
 				*selected = index;
 			return 0;
 
@@ -4180,9 +4820,16 @@ static int nk_ui_menu_item_widget(struct nk_context *ctx, newmenu_item *items, i
 		}
 
 		case NM_TYPE_SLIDER:
+		{
+			static const float split[] = { NK_UI_INLINE_LABEL_FRAC, 1.0f - NK_UI_INLINE_LABEL_FRAC };
+
+			nk_ui_drop_empty_row(ctx);
+			nk_layout_row(ctx, NK_DYNAMIC, (float)s_row_h, 2, split);
 			nk_label(ctx, item->text, NK_TEXT_LEFT);
 			nk_ui_slider_int(ctx, item->min_value, &item->value, item->max_value, 1);
+			nk_layout_row_dynamic(ctx, (float)s_row_h, 1);
 			return item->value != value;
+		}
 
 		case NM_TYPE_NUMBER:
 			nk_property_int(ctx, item->text, item->min_value, &item->value, item->max_value, 1, 1);
@@ -4203,24 +4850,16 @@ static int nk_ui_menu_item_widget(struct nk_context *ctx, newmenu_item *items, i
 	return 0;
 }
 
-// True for a menu that only takes you somewhere else -- the main menu, the
-// multiplayer menu, a message box's buttons. Those read as navigation and
-// keep the larger font; anything with a setting in it is body text.
-static int nk_ui_is_navigation(const newmenu_item *items, int nitems)
+// a menu that sets things, rather than one that only leads elsewhere
+static int nk_ui_is_settings_menu(const newmenu_item *items, int nitems)
 {
-	int destinations = 0, i;
+	int i;
 
 	for (i = 0; i < nitems; i++)
-	{
-		if (items[i].text && strchr(items[i].text, '\t'))
-			return 0;
-		if (items[i].type == NM_TYPE_TEXT)
-			continue;
-		if (items[i].type != NM_TYPE_MENU)
-			return 0;
-		destinations++;
-	}
-	return destinations > 0;
+		if (items[i].type == NM_TYPE_CHECK || items[i].type == NM_TYPE_SLIDER || items[i].type == NM_TYPE_RADIO ||
+			items[i].type == NM_TYPE_NUMBER || items[i].type == NM_TYPE_INPUT)
+			return 1;
+	return 0;
 }
 
 static float nk_ui_menu_width(int screen_width, int is_table)
@@ -4295,8 +4934,6 @@ static float nk_ui_menu_height(int nrows, int screen_height)
 // `content_w` of 0 measures without wrapping, for callers sizing the panel.
 static int nk_ui_item_rows(const newmenu_item *item, float content_w)
 {
-	if (item->type == NM_TYPE_SLIDER)
-		return 2;
 	if (nk_ui_is_section_head(item))
 		return NK_UI_HEAD_ROW_ROWS;
 	// A tabbed row is drawn as one table row, never wrapped.
@@ -4402,6 +5039,16 @@ struct nk_ui_menu_draw
 };
 
 // A blank row of `height` pixels; Nuklear resumes at the normal row height.
+// A row declared but never filled still takes its height when the next one
+// is declared; forget it instead, so a re-layout adds no blank line.
+static void nk_ui_drop_empty_row(struct nk_context *ctx)
+{
+	struct nk_panel *layout = ctx->current->layout;
+
+	if (layout->row.index == 0)
+		layout->row.height = 0.0f;
+}
+
 static void nk_ui_gap_row(struct nk_context *ctx, int height)
 {
 	nk_layout_row_dynamic(ctx, (float)height, 1);
@@ -4435,7 +5082,7 @@ static void nk_ui_draw_items(struct nk_context *ctx, struct nk_ui_menu_draw *d, 
 		// Focus is claimed only on the frame the keyboard lands on a field.
 		// Claiming it every frame stole every keystroke for the first one.
 		if (nk_ui_menu_item(ctx, d->items, d->nitems, i, d->selected,
-				d->refocus && (i == d->citem || (d->focus_first_input && i == d->first_input)),
+				d->refocus == NK_UI_REFOCUS_CLAIM && (i == d->citem || (d->focus_first_input && i == d->first_input)),
 				i == d->citem && !d->muted, d->reveal) && *d->changed < 0)
 			*d->changed = s_radio_pick >= 0 ? s_radio_pick : i;
 		if (*d->selected >= 0 && *d->selected == i)
@@ -4445,6 +5092,180 @@ static void nk_ui_draw_items(struct nk_context *ctx, struct nk_ui_menu_draw *d, 
 		if (nk_ui_head_has_gap(d->items, d->nitems, i))
 			nk_ui_gap_row(ctx, s_row_h / NK_UI_HEAD_GAP_DIVISOR);
 	}
+}
+
+#define NK_UI_TWO_COL_MIN_ROWS	28	// pane width, in row heights, worth splitting
+#define NK_UI_COL_SLACK_ROWS	1
+
+static float nk_ui_items_height(const newmenu_item *items, int nitems, int first, int last, float content_w)
+{
+	unsigned int collapsed = nk_ui_collapsed_mask();
+	float stride = NK_UI_ROW_HEIGHT + s_ctx->style.window.spacing.y;
+	float total = nk_ui_column_gap_px(items, nitems, first, last);
+	int i;
+
+	for (i = first; i < last; i++)
+		if (!nk_ui_item_is_folded(items, nitems, i, collapsed))
+			total += nk_ui_item_rows(&items[i], content_w) * stride;
+	return total;
+}
+
+// the section heading that best halves the rows, or -1 with too few sections
+static int nk_ui_column_split(const newmenu_item *items, int nitems, float content_w)
+{
+	float whole = nk_ui_items_height(items, nitems, 0, nitems, content_w), best = whole;
+	int i, split = -1;
+
+	for (i = 1; i < nitems; i++)
+	{
+		float diff;
+
+		if (!nk_ui_is_section_head(&items[i]))
+			continue;
+		diff = NK_ABS(whole - 2.0f * nk_ui_items_height(items, nitems, 0, i, content_w));
+		if (diff < best)
+			best = diff, split = i;
+	}
+	return split;
+}
+
+static const newmenu_item *s_pane_items;
+static int s_pane_split = -1;
+
+// where the open pane's right column starts, -1 for one column
+int nk_ui_pane_split(const void *items)
+{
+	return items == (const void *)s_pane_items ? s_pane_split : -1;
+}
+
+#define NK_UI_CARD_SHADE		10
+#define NK_UI_CARD_BORDER_SHADE		30
+#define NK_UI_MAX_CARDS			32
+
+// one card per section: the rows from a heading up to the next
+static int nk_ui_section_starts(const newmenu_item *items, int nitems, int *starts, int most)
+{
+	int i, count = 0;
+
+	for (i = 0; i < nitems && count < most; i++)
+		if (i == 0 || nk_ui_is_section_head(&items[i]))
+			starts[count++] = i;
+	return count;
+}
+
+#define NK_UI_CARD_PAD_FRAC	0.55f	// inner padding, in rows
+#define NK_UI_CARD_GAP_FRAC	0.5f	// air between cards, in rows
+
+static struct nk_vec2 nk_ui_card_padding(void)
+{
+	float pad = s_row_h * NK_UI_CARD_PAD_FRAC;
+
+	return nk_vec2(pad, pad);
+}
+
+static float nk_ui_card_gap(void)
+{
+	return s_row_h * NK_UI_CARD_GAP_FRAC;
+}
+
+static float nk_ui_card_height(struct nk_context *ctx, const newmenu_item *items, int nitems, int first, int last, float w)
+{
+	return nk_ui_items_height(items, nitems, first, last, w - nk_ui_card_padding().x * 2) + nk_ui_card_padding().y * 2
+		+ ctx->style.window.spacing.y * 2 + 4.0f;
+}
+
+// SNG: a section in a softly bordered box of its own
+static void nk_ui_draw_card(struct nk_context *ctx, struct nk_ui_menu_draw *d, int first, int last, float h, int index, int first_in_column)
+{
+	char name[16];
+
+	snprintf(name, sizeof(name), "card%d", index);
+	if (!first_in_column)
+		nk_ui_gap_row(ctx, (int)nk_ui_card_gap());
+	nk_ui_drop_empty_row(ctx);
+	nk_layout_row_dynamic(ctx, h, 1);
+	nk_style_push_style_item(ctx, &ctx->style.window.fixed_background, nk_style_item_color(nk_ui_shade(NK_UI_CARD_SHADE)));
+	nk_style_push_color(ctx, &ctx->style.window.group_border_color, nk_ui_shade(NK_UI_CARD_BORDER_SHADE));
+	nk_style_push_vec2(ctx, &ctx->style.window.group_padding, nk_ui_card_padding());
+	if (nk_group_begin(ctx, name, NK_WINDOW_BORDER | NK_WINDOW_NO_SCROLLBAR))
+	{
+		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+		nk_ui_draw_items(ctx, d, first, last);
+		nk_group_end(ctx);
+	}
+	nk_style_pop_vec2(ctx);
+	nk_style_pop_color(ctx);
+	nk_style_pop_style_item(ctx);
+}
+
+// cards [from, to) stacked down one column
+static void nk_ui_draw_card_column(struct nk_context *ctx, struct nk_ui_menu_draw *d, const int *starts, int count, int from, int to, float w)
+{
+	int c, end;
+
+	for (c = from; c < to; c++)
+	{
+		end = c + 1 < count ? starts[c + 1] : d->nitems;
+		nk_ui_draw_card(ctx, d, starts[c], end, nk_ui_card_height(ctx, d->items, d->nitems, starts[c], end, w), c, c == from);
+	}
+}
+
+static float nk_ui_card_column_height(struct nk_context *ctx, const newmenu_item *items, int nitems, const int *starts, int count, int from, int to, float w)
+{
+	float total = 0.0f;
+	int c;
+
+	for (c = from; c < to; c++)
+		total += nk_ui_card_height(ctx, items, nitems, starts[c], c + 1 < count ? starts[c + 1] : nitems, w)
+			+ ctx->style.window.spacing.y + (c > from ? nk_ui_card_gap() + ctx->style.window.spacing.y : 0.0f);
+	return total;
+}
+
+// SNG: a settings pane as cards, whole sections only, in two columns that
+// scroll together when the pane is wide enough
+static void nk_ui_draw_pane(struct nk_context *ctx, struct nk_ui_menu_draw *d)
+{
+	float pane_w = nk_window_get_content_region(ctx).w;
+	float col_w = pane_w * 0.5f - ctx->style.window.spacing.x;
+	int starts[NK_UI_MAX_CARDS];
+	int count = nk_ui_section_starts(d->items, d->nitems, starts, NK_UI_MAX_CARDS);
+	int split = pane_w >= NK_UI_TWO_COL_MIN_ROWS * s_row_h ? nk_ui_column_split(d->items, d->nitems, col_w) : -1;
+	int split_card = count, c;
+	float h;
+
+	s_pane_items = d->items;
+	s_pane_split = split;
+	if (count < 2)
+	{
+		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+		nk_ui_draw_items(ctx, d, 0, d->nitems);
+		return;
+	}
+	if (split < 0)
+	{
+		nk_ui_draw_card_column(ctx, d, starts, count, 0, count, pane_w);
+		return;
+	}
+	col_w -= nk_ui_card_gap();
+	for (c = 0; c < count; c++)
+		if (starts[c] == split)
+			split_card = c;
+	h = max(nk_ui_card_column_height(ctx, d->items, d->nitems, starts, count, 0, split_card, col_w),
+		nk_ui_card_column_height(ctx, d->items, d->nitems, starts, count, split_card, count, col_w))
+		+ ctx->style.window.group_padding.y * 2;
+	nk_layout_row_dynamic(ctx, h, 2);
+	nk_style_push_vec2(ctx, &ctx->style.window.group_padding, nk_vec2(nk_ui_card_gap() * 0.5f, 0.0f));
+	if (nk_group_begin(ctx, "left", NK_WINDOW_NO_SCROLLBAR))
+	{
+		nk_ui_draw_card_column(ctx, d, starts, count, 0, split_card, col_w);
+		nk_group_end(ctx);
+	}
+	if (nk_group_begin(ctx, "right", NK_WINDOW_NO_SCROLLBAR))
+	{
+		nk_ui_draw_card_column(ctx, d, starts, count, split_card, count, col_w);
+		nk_group_end(ctx);
+	}
+	nk_style_pop_vec2(ctx);
 }
 
 // One frame of a newmenu panel, drawn over whatever the game already drew.
@@ -4458,7 +5279,7 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 	int layout_w = nk_ui_layout_width(grd_curscreen->sc_w, grd_curscreen->sc_h);
 	int heading_is_subtitle = nk_ui_subtitle_is_heading(title, subtitle);
 	const char *body = heading_is_subtitle ? NULL : subtitle;
-	const char *heading = title ? title : (heading_is_subtitle ? subtitle : NULL);
+	const char *heading = s_pages.count && s_pages.title ? s_pages.title : (title ? title : (heading_is_subtitle ? subtitle : NULL));
 	float row_stride;
 	int head_rows = 0, tall_rows, rows_per_col;
 	float tall_gap_px;
@@ -4511,8 +5332,7 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 	}
 
 	row_stride = NK_UI_ROW_HEIGHT + s_ctx->style.window.spacing.y;
-	s_item_font = (!reorder && s_head_font.ready && nk_ui_is_navigation(items, nitems))
-		? &s_head_font : &s_body_font;
+	s_item_font = &s_body_font;
 	table_w = nk_ui_measure_table(items, nitems);
 	panel_w = nk_ui_menu_width(layout_w, has_table);
 	panel_w = nk_ui_fit_width(panel_w, layout_w, heading, subtitle, items, nitems);
@@ -4562,13 +5382,13 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 			tall_gap_px = nk_ui_column_gap_px(items, nitems, col_start[c], col_start[c + 1]);
 		}
 	}
-	if (!muted_menu(has_focus) && (has_table || !GameCfg.UiFitMenus || nk_ui_tabs_active(items, nitems)))
+	if (!muted_menu(has_focus) && (has_table || !GameCfg.UiFitMenus || nk_ui_tabs_active(items, nitems) || s_pages.count))
 		s_fit_scale = 1.0f;		// lists scroll at the player's own size
 	else if (!muted_menu(has_focus))
 		nk_ui_fit_to_screen((head_rows + tall_rows) * row_stride + tall_gap_px + NK_UI_MENU_CHROME_HEIGHT, height);
 	// Every panel is as tall as what it holds, capped at most of the screen.
 	panel_h = nk_ui_menu_height_px(head_rows + tall_rows, tall_gap_px, height);
-	if (nk_ui_tabs_active(items, nitems))
+	if (nk_ui_tabs_active(items, nitems) || s_pages.count)
 	{
 		// tabbed menus hold one size, whichever tab is open: room to spare
 		panel_h = height * NK_UI_MENU_MAX_HEIGHT_FRAC;
@@ -4583,8 +5403,8 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 		flags |= NK_WINDOW_TITLE;
 	if (!has_focus || s_drawing_underneath)
 		flags |= NK_WINDOW_NO_INPUT;
-	if (ncols > 1)
-		flags |= NK_WINDOW_NO_SCROLLBAR;
+	if (ncols > 1 || s_pages.count || nk_ui_tabs_active(items, nitems))
+		flags |= NK_WINDOW_NO_SCROLLBAR;	// the inner pane scrolls, not the panel
 	snprintf(name, sizeof(name), "nm%p", id);
 	muted = !has_focus || s_drawing_underneath;
 	draw.muted = muted;
@@ -4601,12 +5421,15 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 	else
 		swallowed = nk_ui_swallow_click(&saved_input);
 
+	s_link_rows = nk_ui_is_settings_menu(items, nitems);
 	if (nk_ui_begin_panel(name, heading && !heading_wraps ? heading : "",
 			nk_ui_hide_if_muted(nk_rect((width - panel_w) * 0.5f, (height - panel_h) * 0.5f, panel_w, panel_h), muted), flags))
 	{
 		nk_uint scroll_x = 0, scroll_before = 0;
 
 		nk_window_get_scroll(s_ctx, &scroll_x, &scroll_before);
+		if (refocus == NK_UI_REFOCUS_DROP && !muted)
+			nk_edit_unfocus(s_ctx);		// moving off a text field stops typing into it
 		if (s_item_font != &s_body_font)
 			nk_style_push_font(s_ctx, &s_item_font->handle);
 		nk_layout_row_dynamic(s_ctx, NK_UI_ROW_HEIGHT, 1);
@@ -4616,22 +5439,37 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 		}
 		if (body)
 			nk_ui_message_lines(s_ctx, body);
-		if (nk_ui_tabs_active(items, nitems))
+		if (s_pages.count)
 		{
-			static const float split[] = { NK_UI_TAB_LIST_FRAC, 1.0f - NK_UI_TAB_LIST_FRAC };
+			int strip = nk_ui_tab_strip_rows(s_pages.count);
 
-			nk_layout_row(s_ctx, NK_DYNAMIC, column_h, 2, split);
-			if (nk_group_begin(s_ctx, "tabs", NK_WINDOW_BORDER))
+			nk_ui_page_strip(s_ctx);
+			int more = 0;
+
+			nk_layout_row_dynamic(s_ctx, max(column_h - (strip + 1.4f) * row_stride, row_stride), 1);
+			if (nk_group_begin(s_ctx, "page", NK_WINDOW_BORDER))
 			{
-				nk_ui_tab_list(s_ctx, items, nitems);
+				nk_ui_draw_pane(s_ctx, &draw);
+				more = nk_ui_has_more_below(s_ctx);
 				nk_group_end(s_ctx);
 			}
+			nk_ui_more_row(s_ctx, more);
+		}
+		else if (nk_ui_tabs_active(items, nitems))
+		{
+			int strip = nk_ui_tab_strip_rows(nk_ui_count_tabs(items, nitems));
+
+			nk_ui_tab_list(s_ctx, items, nitems);
+			int more = 0;
+
+			nk_layout_row_dynamic(s_ctx, max(column_h - (strip + 1.4f) * row_stride, row_stride), 1);
 			if (nk_group_begin(s_ctx, "tab", NK_WINDOW_BORDER))
 			{
-				nk_layout_row_dynamic(s_ctx, NK_UI_ROW_HEIGHT, 1);
-				nk_ui_draw_items(s_ctx, &draw, 0, nitems);
+				nk_ui_draw_pane(s_ctx, &draw);
+				more = nk_ui_has_more_below(s_ctx);
 				nk_group_end(s_ctx);
 			}
+			nk_ui_more_row(s_ctx, more);
 		}
 		else if (ncols > 1)
 		{
@@ -4652,6 +5490,7 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 		else
 		{
 			nk_ui_draw_items(s_ctx, &draw, 0, nitems);
+			nk_ui_more_below(s_ctx);
 			if (!muted)
 				nk_ui_apply_manual_scroll(scroll_x, scroll_before, 0);
 		}
@@ -4737,7 +5576,7 @@ static void nk_ui_bind_row(struct nk_context *ctx, const struct nk_ui_bind_row *
 		nk_layout_row_push(ctx, slot_w);
 		if (slot >= row->nslots)
 		{
-			nk_spacing(ctx, 1);
+			nk_label(ctx, "", NK_TEXT_LEFT);	// nk_spacing wraps a pushed row onto a new line
 			continue;
 		}
 		if (nk_ui_bind_slot(ctx, row->slot[slot], index == current_row && slot == current_slot, changing)
@@ -4757,7 +5596,7 @@ static void nk_ui_bind_head(struct nk_context *ctx, const char *const *slot_name
 
 	nk_layout_row_begin(ctx, NK_STATIC, (float)s_row_h, max_slots + 1);
 	nk_layout_row_push(ctx, label_w);
-	nk_spacing(ctx, 1);
+	nk_label(ctx, "", NK_TEXT_LEFT);
 	nk_style_push_color(ctx, &ctx->style.text.color, NK_UI_ACCENT_BRIGHT);
 	for (slot = 0; slot < max_slots; slot++)
 	{
@@ -5722,7 +6561,7 @@ static void nk_ui_build_menu_size(struct nk_context *ctx, void *userdata)
 	{
 		nk_bool tabs = GameCfg.UiTabs != 0;
 
-		nk_checkbox_label(ctx, "Menu sections as side tabs (Tab key switches)", &tabs);
+		nk_checkbox_label(ctx, "Menu sections as tabs (Tab key switches)", &tabs);
 		GameCfg.UiTabs = tabs;
 	}
 

@@ -94,6 +94,10 @@ struct newmenu
 	const char		*nk_section_key;	// what nk_collapsed is remembered under
 	ubyte			nk_fixed_sections;	// headings are labels, nothing folds
 	ubyte			nk_has_sections;	// menus without headings are not worth remembering
+	const char *const	*page_names;		// SNG: one of a set of menus shown as pages
+	int			page_count, page;
+	int			*page_next;
+	ubyte			slider_grabbed;		// Left/Right move the slider only once grabbed
 	int			reorderitems;
 	int				scroll_offset, last_scroll_check, max_displayable;
 	int				all_text;		//set true if all text items
@@ -1665,8 +1669,56 @@ static int newmenu_item_is_selectable_nk(newmenu *menu, int index)
 static void newmenu_step_nk(newmenu *menu, int direction);
 
 // tab mode: open the next tab and land on its first item
+static struct
+{
+	const char *title;
+	const char *const *names;
+	int count, active;
+	int *next;
+} Newmenu_pages;
+
+// The next menu opened with this title becomes page `active` of the set;
+// picking another page closes it and stores that page in *next.
+void newmenu_offer_pages(const char *title, const char *const *names, int count, int active, int *next)
+{
+	Newmenu_pages.title = title;
+	Newmenu_pages.names = names;
+	Newmenu_pages.count = count;
+	Newmenu_pages.active = active;
+	Newmenu_pages.next = next;
+}
+
+static void newmenu_claim_pages(newmenu *menu)
+{
+	const char *name = menu->title ? menu->title : menu->subtitle;	// untitled menus head with their subtitle
+
+	if (!Newmenu_pages.title || !name || strcmp(Newmenu_pages.title, name))
+		return;
+	menu->page_names = Newmenu_pages.names;
+	menu->page_count = Newmenu_pages.count;
+	menu->page = Newmenu_pages.active;
+	menu->page_next = Newmenu_pages.next;
+	menu->nk_fixed_sections = 1;
+	menu->nk_has_sections = 0;
+	menu->nk_collapsed = 0;
+}
+
+static void newmenu_goto_page(newmenu *menu, int page)
+{
+	*menu->page_next = (page + menu->page_count) % menu->page_count;
+	if (menu->rval)
+		*menu->rval = -1;	// a looping caller must not reopen this page
+	window_close(menu->wind);
+}
+
 static void newmenu_switch_tab_nk(newmenu *menu, int direction)
 {
+	if (menu->page_count)
+	{
+		newmenu_goto_page(menu, menu->page + direction);
+		return;
+	}
+
 	int head;
 
 	if (!menu->nk_has_sections || !nk_ui_tabs_active(menu->items, menu->nitems))
@@ -1691,13 +1743,15 @@ static void newmenu_step_nk(newmenu *menu, int direction)
 	int candidate = menu->citem;
 	int tries;
 
+	menu->slider_grabbed = 0;
+
 	for (tries = 0; tries < menu->nitems; tries++)
 	{
 		candidate = (candidate + direction + menu->nitems) % menu->nitems;
 		if (newmenu_item_is_selectable_nk(menu, candidate))
 		{
 			menu->citem = candidate;
-			menu->nk_refocus = 1;
+			menu->nk_refocus = NK_UI_REFOCUS_DROP;	// typing starts only on Enter / pad A
 			return;
 		}
 	}
@@ -1832,6 +1886,57 @@ static void newmenu_activate_nk(newmenu *menu)
 	}
 }
 
+static int newmenu_is_input_nk(newmenu *menu)
+{
+	return menu->citem >= 0 && (menu->items[menu->citem].type == NM_TYPE_INPUT || menu->items[menu->citem].type == NM_TYPE_INPUT_MENU);
+}
+
+static int newmenu_is_slider_nk(newmenu *menu)
+{
+	return menu->citem >= 0 && (menu->items[menu->citem].type == NM_TYPE_SLIDER || menu->items[menu->citem].type == NM_TYPE_NUMBER);
+}
+
+// a menu of switches that also has somewhere to go, so Enter is free to flip
+// them; a bare checklist (the player-wait screen) keeps Enter as accept
+static int newmenu_has_links_nk(newmenu *menu)
+{
+	int i;
+
+	for (i = 0; i < menu->nitems; i++)
+		if (menu->items[i].type != NM_TYPE_CHECK && menu->items[i].type != NM_TYPE_TEXT)
+			return 1;
+	return menu->page_count > 0;
+}
+
+// Left/Right off a row that has nothing to adjust: the other column's row
+// at the same height.
+static int newmenu_cross_column_nk(newmenu *menu, int direction)
+{
+	int split = nk_ui_pane_split(menu->items);
+	int type = menu->citem >= 0 ? menu->items[menu->citem].type : NM_TYPE_TEXT;
+	int i, depth = 0, target;
+
+	if (split < 0)
+		return 0;
+	if ((direction > 0) != (menu->citem < split))
+		return 1;	// already in that column
+	for (i = direction > 0 ? 0 : split; i < menu->citem; i++)
+		if (newmenu_item_is_selectable_nk(menu, i))
+			depth++;
+	target = -1;
+	for (i = direction > 0 ? split : 0; i < (direction > 0 ? menu->nitems : split); i++)
+	{
+		if (!newmenu_item_is_selectable_nk(menu, i))
+			continue;
+		target = i;
+		if (depth-- <= 0)
+			break;
+	}
+	if (target >= 0)
+		menu->citem = target;
+	return 1;
+}
+
 static int newmenu_draw_nk(window *wind, newmenu *menu)
 {
 	grs_canvas *save_canvas = grd_curcanv;
@@ -1846,9 +1951,21 @@ static int newmenu_draw_nk(window *wind, newmenu *menu)
 
 	newmenu_fix_citem_nk(menu);
 	nk_ui_set_fixed_sections(menu->nk_fixed_sections);
+	nk_ui_set_pages("Options", menu->page_names, menu->page_count, menu->page);
 	nk_ui_newmenu_frame(menu, menu->title, menu->subtitle, menu->items, menu->nitems, menu->citem, menu->nk_refocus, menu->reorderitems, &menu->nk_collapsed, wind == window_get_front(), &changed, &selected);
+	nk_ui_set_pages(NULL, NULL, 0, 0);
 	nk_ui_set_fixed_sections(0);
 	menu->nk_refocus = 0;
+	if (menu->page_count)
+	{
+		int picked = nk_ui_take_page_pick();
+
+		if (picked >= 0)
+		{
+			newmenu_goto_page(menu, picked);
+			return 1;
+		}
+	}
 
 	if (changed < 0 && selected < 0)
 		return 1;
@@ -1861,7 +1978,12 @@ static int newmenu_draw_nk(window *wind, newmenu *menu)
 
 	if (changed >= 0)
 		newmenu_dispatch_nk(menu, EVENT_NEWMENU_CHANGED, changed);
-	if (selected >= 0 && window_exists(wind))
+	if (selected >= 0 && window_exists(wind) && menu->items[selected].type == NM_TYPE_RADIO)
+	{
+		menu->citem = selected;
+		newmenu_open_options_nk(menu);	// what Enter does on it
+	}
+	else if (selected >= 0 && window_exists(wind))
 		newmenu_dispatch_nk(menu, EVENT_NEWMENU_SELECTED, selected);
 	return 1;
 }
@@ -1897,6 +2019,10 @@ static int newmenu_key_command_nk(newmenu *menu, d_event *event)
 		case KEY_TAB + KEY_SHIFTED:
 			newmenu_switch_tab_nk(menu, key == KEY_TAB ? 1 : -1);
 			break;
+		case KEY_PAGEDOWN:	// SNG: gamepad bumpers
+		case KEY_PAGEUP:
+			newmenu_switch_tab_nk(menu, key == KEY_PAGEDOWN ? 1 : -1);
+			break;
 		case KEY_UP:
 		case KEY_PAD8:
 			newmenu_step_nk(menu, -1);
@@ -1906,10 +2032,11 @@ static int newmenu_key_command_nk(newmenu *menu, d_event *event)
 			newmenu_step_nk(menu, 1);
 			break;
 		case KEY_LEFT:
-			newmenu_adjust_nk(menu, -1);
-			break;
 		case KEY_RIGHT:
-			newmenu_adjust_nk(menu, 1);
+			if (menu->slider_grabbed)
+				newmenu_adjust_nk(menu, key == KEY_LEFT ? -1 : 1);
+			else
+				newmenu_cross_column_nk(menu, key == KEY_LEFT ? -1 : 1);
 			break;
 		case KEY_ENTER:
 		case KEY_PADENTER:
@@ -1920,13 +2047,21 @@ static int newmenu_key_command_nk(newmenu *menu, d_event *event)
 			// Except on an option run, where Enter opens or picks like Space.
 			if (menu->citem >= 0 && menu->items[menu->citem].type == NM_TYPE_RADIO)
 				newmenu_open_options_nk(menu);
+			else if (newmenu_is_slider_nk(menu))
+				menu->slider_grabbed = !menu->slider_grabbed;
+			else if (newmenu_is_input_nk(menu) && !nk_ui_text_focused())
+				menu->nk_refocus = NK_UI_REFOCUS_CLAIM;
+			else if (menu->citem >= 0 && menu->items[menu->citem].type == NM_TYPE_CHECK && newmenu_has_links_nk(menu))
+				newmenu_activate_nk(menu);	// a settings page: Enter (pad A) flips the switch
 			else if (menu->citem >= 0 && menu->items[menu->citem].type == NM_TYPE_TEXT)
 				nk_ui_toggle_section(menu->items, menu->nitems, menu->citem, &menu->nk_collapsed);
 			else if (menu->citem >= 0)
 				newmenu_dispatch_nk(menu, EVENT_NEWMENU_SELECTED, menu->citem);
 			break;
 		case KEY_SPACEBAR:
-			if (menu->citem >= 0 && menu->items[menu->citem].type != NM_TYPE_INPUT && menu->items[menu->citem].type != NM_TYPE_INPUT_MENU)
+			if (newmenu_is_slider_nk(menu))
+				menu->slider_grabbed = !menu->slider_grabbed;
+			else if (menu->citem >= 0 && menu->items[menu->citem].type != NM_TYPE_INPUT && menu->items[menu->citem].type != NM_TYPE_INPUT_MENU)
 				newmenu_activate_nk(menu);
 			break;
 	}
@@ -2064,8 +2199,14 @@ newmenu *newmenu_do4( char * title, char * subtitle, int nitems, newmenu_item * 
 	menu->nk_refocus = 1;	// claim the first field's focus on the opening frame
 	menu->nk_has_sections = nk_ui_has_sections(item, nitems);
 	menu->nk_collapsed = nk_ui_recall_sections(menu->nk_section_key, item, nitems);
+	menu->page_names = NULL;
+	menu->page_count = 0;
+	menu->slider_grabbed = 0;
 	if (menu->use_nk)
+	{
+		newmenu_claim_pages(menu);
 		nk_ui_menu_opened();
+	}
 #endif
 	Newmenu_nk_request = 0;
 

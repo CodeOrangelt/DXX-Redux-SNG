@@ -116,6 +116,7 @@ int nm_messagebox1(char *title, int (*subfunction)(newmenu *menu, d_event *event
 
 newmenu_item *newmenu_get_items(newmenu *menu);
 void newmenu_set_fixed_sections(newmenu *menu);
+void newmenu_offer_pages(const char *title, const char *const *names, int count, int active, int *next);
 int newmenu_get_nitems(newmenu *menu);
 int newmenu_get_citem(newmenu *menu);
 struct window *newmenu_get_window(newmenu *menu);

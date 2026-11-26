@@ -34,4 +34,9 @@ int nk_ui_singleplayer_setup(void)
 	return 0;
 }
 
+void newmenu_offer_pages(const char *title, const char *const *names, int count, int active, int *next)
+{
+	(void)title; (void)names; (void)count; (void)active; (void)next;
+}
+
 #endif
