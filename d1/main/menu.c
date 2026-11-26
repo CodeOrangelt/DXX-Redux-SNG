@@ -1021,66 +1021,34 @@ void do_obs_menu();
 
 // Options menu layout: the headings are plain text rows, which the menu
 // skips over, so these indices are the menu and its handler in one place.
-enum
-{
-	opt_options_head_display,
-	opt_options_graphics,
-	opt_options_resolution,
-	opt_options_head_audio,
-	opt_options_sound,
-	opt_options_head_controls,
-	opt_options_controls,
-	opt_options_autoselect,
-	opt_options_head_game,
-	opt_options_misc,
-	opt_options_observer,
-	opt_options_head_pilot,
-	opt_options_pilot,
-	opt_options_scores,
-	opt_options_credits,
-	opt_options_count
-};
 
-int options_menuset(newmenu *menu, d_event *event, void *userdata)
+enum { opt_extras_pilot, opt_extras_scores, opt_extras_credits, opt_extras_count };
+
+static int extras_menuset(newmenu *menu, d_event *event, void *userdata)
 {
-	switch (event->type)
+	if (event->type != EVENT_NEWMENU_SELECTED)
+		return 0;
+	switch (newmenu_get_citem(menu))
 	{
-		case EVENT_NEWMENU_CHANGED:
-			break;
-
-		case EVENT_NEWMENU_SELECTED:
-			switch(newmenu_get_citem(menu))
-			{
-				case opt_options_graphics:	graphics_config();	break;
-				case opt_options_resolution:	change_res();		break;
-				case opt_options_sound:		do_sound_menu();	break;
-				case opt_options_controls:	input_config();		break;
-				case opt_options_autoselect:	weapon_autoselect_menu();	break;
-				case opt_options_misc:		do_misc_menu();		break;
-				case opt_options_observer:	do_obs_menu();		break;
-				case opt_options_pilot:		RegisterPlayer();	break;
-				case opt_options_scores:	scores_view(NULL, -1);	break;
-				case opt_options_credits:	credits_show(NULL);	break;
-			}
-			return 1;	// stay in menu until escape
-			break;
-
-		case EVENT_WINDOW_CLOSE:
-		{
-			newmenu_item *items = newmenu_get_items(menu);
-			d_free(items);
-			write_player_file();
-			break;
-		}
-
-		default:
-			break;
+		case opt_extras_pilot:		RegisterPlayer();	break;
+		case opt_extras_scores:		scores_view(NULL, -1);	break;
+		case opt_extras_credits:	credits_show(NULL);	break;
 	}
-
-	userdata = userdata;		//kill warning
-
-	return 0;
+	return 1;
 }
+
+#define OPTIONS_PILOT_TITLE "Pilot & Extras"
+
+static void do_extras_menu(void)
+{
+	newmenu_item m[opt_extras_count];
+
+	m[opt_extras_pilot].type = NM_TYPE_MENU; m[opt_extras_pilot].text = TXT_CHANGE_PILOTS;
+	m[opt_extras_scores].type = NM_TYPE_MENU; m[opt_extras_scores].text = TXT_VIEW_SCORES;
+	m[opt_extras_credits].type = NM_TYPE_MENU; m[opt_extras_credits].text = TXT_CREDITS;
+	newmenu_do1_nk(NULL, OPTIONS_PILOT_TITLE, opt_extras_count, m, extras_menuset, NULL, 0);
+}
+
 
 int gcd(int a, int b)
 {
@@ -1304,7 +1272,9 @@ void input_config_sensitivity()
 	PlayerCfg.MouseInertia = m[mouseinertia].value;
 }
 
-static int opt_ic_usejoy = 0, opt_ic_usemouse = 0, opt_ic_confkey = 0, opt_ic_confjoy = 0, opt_ic_confmouse = 0, opt_ic_confweap = 0, opt_ic_mouseflightsim = 0, opt_ic_joymousesens = 0, opt_ic_grabinput = 0, opt_ic_mousefsgauge = 0, opt_ic_stickyrear = 0, opt_ic_help0 = 0, opt_ic_help1 = 0, opt_ic_help2 = 0;
+static int opt_ic_usejoy = 0, opt_ic_usemouse = 0, opt_ic_confkey = 0, opt_ic_confjoy = 0, opt_ic_confmouse = 0, opt_ic_confweap = 0, opt_ic_mouseflightsim = 0, opt_ic_joymousesens = 0, opt_ic_grabinput = 0, opt_ic_mousefsgauge = 0, opt_ic_stickyrear = 0, opt_ic_autoselect = 0, opt_ic_keyref = 0;
+static void key_reference_menu(void);
+
 int input_config_menuset(newmenu *menu, d_event *event, void *userdata)
 {
 	newmenu_item *items = newmenu_get_items(menu);
@@ -1347,12 +1317,10 @@ int input_config_menuset(newmenu *menu, d_event *event, void *userdata)
 				kconfig(3, "WEAPON KEYS");
 			if (citem == opt_ic_joymousesens)
 				input_config_sensitivity();
-			if (citem == opt_ic_help0)
-				show_help();
-			if (citem == opt_ic_help1)
-				show_netgame_help();
-			if (citem == opt_ic_help2)
-				show_newdemo_help();
+			if (citem == opt_ic_autoselect)
+				weapon_autoselect_menu();
+			if (citem == opt_ic_keyref)
+				key_reference_menu();
 			return 1;		// stay in menu
 			break;
 
@@ -1363,12 +1331,37 @@ int input_config_menuset(newmenu *menu, d_event *event, void *userdata)
 	return 0;
 }
 
+enum { opt_keyref_game, opt_keyref_netgame, opt_keyref_demo, opt_keyref_count };
+
+static int key_reference_menuset(newmenu *menu, d_event *event, void *userdata)
+{
+	if (event->type != EVENT_NEWMENU_SELECTED)
+		return 0;
+	switch (newmenu_get_citem(menu))
+	{
+		case opt_keyref_game:		show_help();		break;
+		case opt_keyref_netgame:	show_netgame_help();	break;
+		case opt_keyref_demo:		show_newdemo_help();	break;
+	}
+	return 1;
+}
+
+static void key_reference_menu(void)
+{
+	newmenu_item m[opt_keyref_count];
+
+	m[opt_keyref_game].type = NM_TYPE_MENU; m[opt_keyref_game].text = "Game keys";
+	m[opt_keyref_netgame].type = NM_TYPE_MENU; m[opt_keyref_netgame].text = "Netgame keys";
+	m[opt_keyref_demo].type = NM_TYPE_MENU; m[opt_keyref_demo].text = "Demo keys";
+	newmenu_do1_nk(NULL, "Key Reference", opt_keyref_count, m, key_reference_menuset, NULL, 0);
+}
+
 void input_config()
 {
 	newmenu_item m[23];
 	int nitems = 0;
 
-	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "DEVICES"; nitems++;
+	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "DEVICES & BINDINGS"; nitems++;
 	opt_ic_usejoy = nitems;
 	m[nitems].type = NM_TYPE_CHECK; m[nitems].text = "Use joystick"; m[nitems].value = (PlayerCfg.ControlType&CONTROL_USING_JOYSTICK); nitems++;
 	opt_ic_usemouse = nitems;
@@ -1376,7 +1369,6 @@ void input_config()
 	opt_ic_grabinput = nitems;
 	m[nitems].type = NM_TYPE_CHECK; m[nitems].text= "Keep keyboard/mouse focus"; m[nitems].value = GameCfg.Grabinput; nitems++;
 
-	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "BINDINGS"; nitems++;
 	opt_ic_confkey = nitems;
 	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Keyboard"; nitems++;
 	opt_ic_confjoy = nitems;
@@ -1387,6 +1379,8 @@ void input_config()
 	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Weapon keys"; nitems++;
 	opt_ic_joymousesens = nitems;
 	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Sensitivity & deadzone"; nitems++;
+	opt_ic_autoselect = nitems;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Weapon autoselect"; nitems++;
 
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "MOUSE"; nitems++;
 	opt_ic_mouseflightsim = nitems;
@@ -1398,17 +1392,11 @@ void input_config()
 	opt_ic_mousefsgauge = nitems;
 	m[nitems].type = NM_TYPE_CHECK; m[nitems].text= "FlightSim indicator"; m[nitems].value = PlayerCfg.MouseFSIndicator; nitems++;
 
-	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "VIEW"; nitems++;
+	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "VIEW & HELP"; nitems++;
 	opt_ic_stickyrear = nitems;
 	m[nitems].type = NM_TYPE_CHECK; m[nitems].text= "Sticky rearview"; m[nitems].value = PlayerCfg.StickyRearview; nitems++;
-
-	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "KEY REFERENCE"; nitems++;
-	opt_ic_help0 = nitems;
-	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Game system keys"; nitems++;
-	opt_ic_help1 = nitems;
-	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Netgame system keys"; nitems++;
-	opt_ic_help2 = nitems;
-	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Demo system keys"; nitems++;
+	opt_ic_keyref = nitems;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Key reference"; nitems++;
 
 	newmenu_do1_nk(NULL, TXT_CONTROLS, nitems, m, input_config_menuset, NULL, 1);
 }
@@ -1467,8 +1455,13 @@ void reticle_config()
 	PlayerCfg.ReticleSize = m[opt_ret_size].value;
 }
 
-int opt_gr_texfilt, opt_gr_brightness, opt_gr_reticlemenu, opt_gr_alphafx, opt_gr_dynlightcolor, opt_gr_vsync, opt_gr_multisample, opt_gr_fpsindi, opt_gr_mousedbg, opt_gr_disablecockpit, opt_gr_framerate, opt_gr_framerate_text, opt_gr_fov;
+int opt_gr_texfilt, opt_gr_brightness, opt_gr_reticlemenu, opt_gr_alphafx, opt_gr_dynlightcolor, opt_gr_vsync, opt_gr_multisample, opt_gr_fpsindi, opt_gr_mousedbg, opt_gr_disablecockpit, opt_gr_framerate, opt_gr_fov;
 int opt_gr_classicdepth;
+static int opt_gr_resolution = -1, opt_gr_menu_color = -1, opt_gr_ui_scale = -1;
+static char gr_menu_color_text[30], gr_ui_scale_text[40];
+static void print_ui_scale(char *text, int len);
+static void print_menu_color(char *color_string, int color_string_length, int color_value);
+static int menu_color_max(void);
 
 #define FPS_SLIDER_STEP 25
 #define FPS_SLIDER_LAST_CAPPED ((MAXIMUM_FPS - FPS_SLIDER_STEP) / FPS_SLIDER_STEP)
@@ -1490,9 +1483,9 @@ static int slider_to_fps(int position)
 static void fps_label(char *buf, size_t size, int fps)
 {
 	if (fps == FPS_UNLIMITED)
-		snprintf(buf, size, "(Unlimited)");
+		snprintf(buf, size, "Max FPS: Unlimited");
 	else
-		snprintf(buf, size, "(%d FPS)", fps);
+		snprintf(buf, size, "Max FPS: %d", fps);
 }
 int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 {
@@ -1516,10 +1509,17 @@ int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 			}
 			if ( citem == opt_gr_brightness)
 				gr_palette_set_gamma(items[citem].value);
+			if (citem == opt_gr_menu_color) {
+				GameCfg.MenuColor = items[citem].value;
+				print_menu_color(gr_menu_color_text, sizeof(gr_menu_color_text), GameCfg.MenuColor);
+#ifdef USE_NK_UI
+				nk_ui_set_menu_color(GameCfg.MenuColor);
+#endif
+			}
 			if ( citem == opt_gr_framerate) {
-				static char fps_text[16];
+				static char fps_text[24];
 				fps_label(fps_text, sizeof(fps_text), slider_to_fps(items[opt_gr_framerate].value));
-				items[opt_gr_framerate_text].text = fps_text;
+				items[opt_gr_framerate].text = fps_text;
 			}
 			if ( citem == opt_gr_fov) {
 				// Only update if not locked by multiplayer
@@ -1537,6 +1537,14 @@ int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 		case EVENT_NEWMENU_SELECTED:
 			if (citem == opt_gr_reticlemenu)
 				reticle_config();
+			if (citem == opt_gr_resolution)
+				change_res();
+#ifdef USE_NK_UI
+			if (citem == opt_gr_ui_scale) {
+				nk_ui_menu_size();
+				print_ui_scale(gr_ui_scale_text, sizeof(gr_ui_scale_text));
+			}
+#endif
 			return 1;		// stay in menu
 			break;
 
@@ -1550,10 +1558,10 @@ int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 void graphics_config()
 {
 #ifdef OGL
-	newmenu_item m[24];
+	newmenu_item m[30];
 	int i = 0;
 #else
-	newmenu_item m[14];
+	newmenu_item m[20];
 #endif
 	int nitems = 0;
 
@@ -1576,33 +1584,32 @@ void graphics_config()
 	m[nitems].type = NM_TYPE_CHECK; m[nitems].text = "Transparency Effects"; m[nitems].value = PlayerCfg.AlphaEffects; nitems++;
 	opt_gr_dynlightcolor = nitems;
 	m[nitems].type = NM_TYPE_CHECK; m[nitems].text = "Colored Dynamic Light"; m[nitems].value = PlayerCfg.DynLightColor; nitems++;
-	opt_gr_vsync = nitems;
-	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="VSync"; m[nitems].value = GameCfg.VSync; nitems++;
 	opt_gr_multisample = nitems;
 	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="4x multisampling"; m[nitems].value = GameCfg.Multisample; nitems++;
 	opt_gr_classicdepth = nitems;
 	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="Classic Depth Ordering (SP)"; m[nitems].value = GameCfg.ClassicDepth; nitems++;
-#endif
-	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "OVERLAYS"; nitems++;
-	opt_gr_fpsindi = nitems;
-	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="FPS Counter"; m[nitems].value = GameCfg.FPSIndicator; nitems++;
-	opt_gr_mousedbg = nitems;
-	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="Mouse Debug Info"; m[nitems].value = GameCfg.MouseDebugIndicator; nitems++;
-
-	opt_gr_disablecockpit = nitems;
-	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="Disable Cockpit View"; m[nitems].value = PlayerCfg.DisableCockpit; nitems++;
-#ifdef OGL
 	m[opt_gr_texfilt+GameCfg.TexFilt].value=1;
 #endif
-
-	opt_gr_framerate = nitems;
-	m[nitems].type = NM_TYPE_SLIDER; m[nitems].text = "Max FPS"; m[nitems].value = fps_to_slider(PlayerCfg.maxFps); m[nitems].min_value = 0; m[nitems].max_value = FPS_SLIDER_LAST_CAPPED + 1; nitems++;
-	opt_gr_framerate_text = nitems;
-	static char fps_display[16];
+	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "PERFORMANCE"; nitems++;
+	static char fps_display[24];
 	fps_label(fps_display, sizeof(fps_display), PlayerCfg.maxFps);
-	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = fps_display; nitems++;
+	opt_gr_framerate = nitems;
+	m[nitems].type = NM_TYPE_SLIDER; m[nitems].text = fps_display; m[nitems].value = fps_to_slider(PlayerCfg.maxFps); m[nitems].min_value = 0; m[nitems].max_value = FPS_SLIDER_LAST_CAPPED + 1; nitems++;
+#ifdef OGL
+	opt_gr_vsync = nitems;
+	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="VSync"; m[nitems].value = GameCfg.VSync; nitems++;
+#endif
+	opt_gr_fpsindi = nitems;
+	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="FPS Counter"; m[nitems].value = GameCfg.FPSIndicator; nitems++;
+	opt_gr_mousedbg = -1;
+#ifndef RELEASE
+	opt_gr_mousedbg = nitems;
+	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="Mouse Debug Info"; m[nitems].value = GameCfg.MouseDebugIndicator; nitems++;
+#endif
 
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "VIEW"; nitems++;
+	opt_gr_disablecockpit = nitems;
+	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="Disable Cockpit View"; m[nitems].value = PlayerCfg.DisableCockpit; nitems++;
 	opt_gr_fov = nitems;
 	static char fov_display[32];
 	// Check if FOV is locked by multiplayer host
@@ -1616,6 +1623,19 @@ void graphics_config()
 			snprintf(fov_display, sizeof(fov_display), "Field of View");
 		m[nitems].type = NM_TYPE_SLIDER; m[nitems].text = fov_display; m[nitems].value = GameCfg.FOVZoom; m[nitems].min_value = 0; m[nitems].max_value = 16; nitems++;
 	}
+
+	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "SCREEN & MENUS"; nitems++;
+	opt_gr_resolution = nitems;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Screen Resolution"; nitems++;
+	opt_gr_menu_color = nitems;
+	print_menu_color(gr_menu_color_text, sizeof(gr_menu_color_text), GameCfg.MenuColor);
+	m[nitems].type = NM_TYPE_SLIDER; m[nitems].text = gr_menu_color_text; m[nitems].value = GameCfg.MenuColor; m[nitems].min_value = 0; m[nitems].max_value = menu_color_max(); nitems++;
+	opt_gr_ui_scale = -1;
+#ifdef USE_NK_UI
+	opt_gr_ui_scale = nitems;
+	print_ui_scale(gr_ui_scale_text, sizeof(gr_ui_scale_text));
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = gr_ui_scale_text; nitems++;
+#endif
 
 	newmenu_do1_nk( NULL, "Graphics & Effects", nitems, m, graphics_config_menuset, NULL, 1 );
 
@@ -1636,7 +1656,9 @@ void graphics_config()
 #endif
 	GameCfg.GammaLevel = m[opt_gr_brightness].value;
 	GameCfg.FPSIndicator = m[opt_gr_fpsindi].value;
-	GameCfg.MouseDebugIndicator = m[opt_gr_mousedbg].value;
+	if (opt_gr_mousedbg >= 0)
+		GameCfg.MouseDebugIndicator = m[opt_gr_mousedbg].value;
+	GameCfg.MenuColor = m[opt_gr_menu_color].value;
 	// Only save FOV if not locked by multiplayer host
 	if (!((Game_mode & GM_MULTI) && Netgame.DisableFOVChange))
 		GameCfg.FOVZoom = m[opt_gr_fov].value;
@@ -2148,7 +2170,7 @@ void do_sound_menu()
 #endif
 
 #ifdef USE_SDLMIXER
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "MAIN MENU MUSIC";
+	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "MUSIC";
 
 	opt_sm_cm_mtype3_file1_b = nitems;
 	m[nitems].type = PATH_HEADER_TYPE; m[nitems++].text = "music file (any source but none)" BROWSE_TXT;
@@ -2158,18 +2180,14 @@ void do_sound_menu()
 
 #endif
 
-#ifdef USE_SDLMIXER
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "CD MUSIC & JUKEBOX";
-#else
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "CD MUSIC";
+#ifndef USE_SDLMIXER
+	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "MUSIC";
 #endif
 
 	opt_sm_redbook_playorder = nitems;
 	m[nitems].type = NM_TYPE_CHECK; m[nitems].text = "force mac cd track order"; m[nitems++].value = GameCfg.OrigTrackOrder;
 
 #ifdef USE_SDLMIXER
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "JUKEBOX";
-
 	opt_sm_mtype3_lmpath = nitems;
 	m[nitems].type = PATH_HEADER_TYPE; m[nitems++].text = "path for level music" BROWSE_TXT;
 
@@ -2185,8 +2203,6 @@ void do_sound_menu()
 
 	opt_sm_mtype3_lmplayorder3 = nitems;
 	m[nitems].type = NM_TYPE_RADIO; m[nitems].text = "random"; m[nitems].value = (GameCfg.CMLevelMusicPlayOrder == MUSIC_CM_PLAYORDER_RAND); m[nitems].group = 1; nitems++;
-
-	m[nitems].type = NM_TYPE_TEXT; m[nitems++].text = "NON-LEVEL MUSIC";
 
 	opt_sm_cm_mtype3_file2_b = nitems;
 	m[nitems].type = PATH_HEADER_TYPE; m[nitems++].text = "briefing" BROWSE_TXT;
@@ -2257,6 +2273,7 @@ enum
 	opt_misc_no_chat_sound,
 	opt_misc_no_rankings,
 	opt_misc_auto_download,
+	opt_misc_observer,
 
 	opt_misc_head_demo,
 	opt_misc_label_indicator,
@@ -2264,27 +2281,24 @@ enum
 	opt_misc_demo_indicator_icon,
 	opt_misc_demo_indicator_none,
 	opt_misc_label_autodemo,
+	opt_misc_autodemo_off,
 	opt_misc_autodemo_sp,
 	opt_misc_autodemo_mp,
+	opt_misc_autodemo_both,
 	opt_misc_autodemo_silent,
 
 	opt_misc_head_ship_colors,
 	opt_misc_ship_color,
 	opt_misc_missile_color,
 	opt_misc_show_custom_colors,
-
-	opt_misc_head_team_colors,
 	opt_misc_my_team_color,
 	opt_misc_other_team_color,
 	opt_misc_prefer_team_colors,
-
-	opt_misc_head_menu_style,
-	opt_misc_menu_color,
-	opt_misc_ui_scale,
 	opt_misc_count
 };
 
 #define MISC_DEMO_RADIO_GROUP 1
+#define MISC_AUTODEMO_RADIO_GROUP 2
 #define MISC_COLOR_MAX 8
 
 int menu_misc_options_handler ( newmenu *menu, d_event *event, void *userdata );
@@ -2363,8 +2377,6 @@ struct misc_menu_data {
 	char missile_color[30];
 	char my_team_color[30];
 	char other_team_color[30];
-	char menu_color[30];
-	char ui_scale[40];
 };
 
 // SNG: accent colour the menus themselves are drawn in.
@@ -2424,18 +2436,21 @@ void do_misc_menu()
 		ADD_CHECK(opt_misc_no_chat_sound, "No player chat sound", PlayerCfg.NoChatSound);
 		ADD_CHECK(opt_misc_no_rankings, "No rankings", PlayerCfg.NoRankings);
 		ADD_CHECK(opt_misc_auto_download, "Auto-download missing missions", GameCfg.AutoDownloadMissions);
+		m[opt_misc_observer].type = NM_TYPE_MENU; m[opt_misc_observer].text = "Observer Mode";
 
 		ADD_TEXT(opt_misc_head_demo, "DEMOS");
-		ADD_TEXT(opt_misc_label_indicator, "While recording, show:");
+		ADD_TEXT(opt_misc_label_indicator, "Recording indicator:");
 		ADD_RADIO(opt_misc_demo_indicator_text, "Full text", MISC_DEMO_RADIO_GROUP, PlayerCfg.DemoRecordingIndicator == 0);
 		ADD_RADIO(opt_misc_demo_indicator_icon, "Recording icon", MISC_DEMO_RADIO_GROUP, PlayerCfg.DemoRecordingIndicator == 1);
 		ADD_RADIO(opt_misc_demo_indicator_none, "Nothing", MISC_DEMO_RADIO_GROUP, PlayerCfg.DemoRecordingIndicator == 2);
-		ADD_TEXT(opt_misc_label_autodemo, "Record automatically in:");
-		ADD_CHECK(opt_misc_autodemo_sp, "Single-player", PlayerCfg.AutoDemoSp);
-		ADD_CHECK(opt_misc_autodemo_mp, "Multiplayer", PlayerCfg.AutoDemoMp);
+		ADD_TEXT(opt_misc_label_autodemo, "Auto-record:");
+		ADD_RADIO(opt_misc_autodemo_off, "Off", MISC_AUTODEMO_RADIO_GROUP, !PlayerCfg.AutoDemoSp && !PlayerCfg.AutoDemoMp);
+		ADD_RADIO(opt_misc_autodemo_sp, "Single-player", MISC_AUTODEMO_RADIO_GROUP, PlayerCfg.AutoDemoSp && !PlayerCfg.AutoDemoMp);
+		ADD_RADIO(opt_misc_autodemo_mp, "Multiplayer", MISC_AUTODEMO_RADIO_GROUP, !PlayerCfg.AutoDemoSp && PlayerCfg.AutoDemoMp);
+		ADD_RADIO(opt_misc_autodemo_both, "Both", MISC_AUTODEMO_RADIO_GROUP, PlayerCfg.AutoDemoSp && PlayerCfg.AutoDemoMp);
 		ADD_CHECK(opt_misc_autodemo_silent, "Silently (no prompts)", PlayerCfg.AutoDemoHideUi);
 
-		ADD_TEXT(opt_misc_head_ship_colors, "MY SHIP COLORS");
+		ADD_TEXT(opt_misc_head_ship_colors, "COLORS");
 		print_ship_color(misc_menu_data.preferred_color, SDL_arraysize(misc_menu_data.preferred_color),
 			PlayerCfg.ShipColor);
 		ADD_SLIDER(opt_misc_ship_color, misc_menu_data.preferred_color, PlayerCfg.ShipColor, MISC_COLOR_MAX);
@@ -2446,7 +2461,6 @@ void do_misc_menu()
 
 		ADD_CHECK(opt_misc_show_custom_colors, "Show other players' custom colors", PlayerCfg.ShowCustomColors);
 
-		ADD_TEXT(opt_misc_head_team_colors, "TEAM COLORS");
 		print_my_team_color(misc_menu_data.my_team_color, SDL_arraysize(misc_menu_data.my_team_color),
 			PlayerCfg.MyTeamColor);
 		ADD_SLIDER(opt_misc_my_team_color, misc_menu_data.my_team_color, PlayerCfg.MyTeamColor, MISC_COLOR_MAX);
@@ -2464,17 +2478,6 @@ void do_misc_menu()
 			m[opt_misc_prefer_team_colors].text = "Ignore per-game team colors";
 		}
 		m[opt_misc_prefer_team_colors].value = PlayerCfg.PreferMyTeamColors;
-
-		ADD_TEXT(opt_misc_head_menu_style, "MENU STYLE");
-		print_menu_color(misc_menu_data.menu_color, SDL_arraysize(misc_menu_data.menu_color), GameCfg.MenuColor);
-		ADD_SLIDER(opt_misc_menu_color, misc_menu_data.menu_color, GameCfg.MenuColor, menu_color_max());
-#ifdef USE_NK_UI
-		print_ui_scale(misc_menu_data.ui_scale, SDL_arraysize(misc_menu_data.ui_scale));
-		m[opt_misc_ui_scale].type = NM_TYPE_MENU;
-		m[opt_misc_ui_scale].text = misc_menu_data.ui_scale;
-#else
-		ADD_TEXT(opt_misc_ui_scale, "");
-#endif
 
 		i = newmenu_do1_nk(NULL, "Gameplay & HUD", SDL_arraysize(m), m, menu_misc_options_handler, &misc_menu_data, i);
 
@@ -2497,12 +2500,11 @@ void do_misc_menu()
 		} else if (m[opt_misc_demo_indicator_none].value) {
 			PlayerCfg.DemoRecordingIndicator = 2;
 		}
-		PlayerCfg.AutoDemoSp			= m[opt_misc_autodemo_sp].value;
-		PlayerCfg.AutoDemoMp			= m[opt_misc_autodemo_mp].value;
+		PlayerCfg.AutoDemoSp			= m[opt_misc_autodemo_sp].value || m[opt_misc_autodemo_both].value;
+		PlayerCfg.AutoDemoMp			= m[opt_misc_autodemo_mp].value || m[opt_misc_autodemo_both].value;
 		PlayerCfg.AutoDemoHideUi		= m[opt_misc_autodemo_silent].value;
 		PlayerCfg.ShowCustomColors		= m[opt_misc_show_custom_colors].value;
 		PlayerCfg.PreferMyTeamColors = (PlayerCfg.MyTeamColor == MISC_COLOR_MAX && PlayerCfg.OtherTeamColor == MISC_COLOR_MAX) ? 0 : m[opt_misc_prefer_team_colors].value;
-		GameCfg.MenuColor		= m[opt_misc_menu_color].value;
 
 	} while( i>-1 );
 
@@ -2520,13 +2522,10 @@ int menu_misc_options_handler(newmenu* menu, d_event* event, void* userdata)
 	int citem = newmenu_get_citem(menu);
 	struct misc_menu_data* menu_data = (struct misc_menu_data*)userdata;
 	
-#ifdef USE_NK_UI
-	if (event->type == EVENT_NEWMENU_SELECTED && citem == opt_misc_ui_scale) {
-		nk_ui_menu_size();
-		print_ui_scale(menu_data->ui_scale, SDL_arraysize(menu_data->ui_scale));
+	if (event->type == EVENT_NEWMENU_SELECTED && citem == opt_misc_observer) {
+		do_obs_menu();
 		return 1;
 	}
-#endif
 	if (event->type == EVENT_NEWMENU_CHANGED) {
 		if (citem == opt_misc_ship_color) {
 			PlayerCfg.ShipColor = menus[citem].value;
@@ -2544,12 +2543,6 @@ int menu_misc_options_handler(newmenu* menu, d_event* event, void* userdata)
 			PlayerCfg.OtherTeamColor = menus[citem].value;
 			print_other_team_color(menu_data->other_team_color, SDL_arraysize(menu_data->other_team_color),
 				PlayerCfg.OtherTeamColor);
-		} else if (citem == opt_misc_menu_color) {
-			GameCfg.MenuColor = menus[citem].value;
-			print_menu_color(menu_data->menu_color, SDL_arraysize(menu_data->menu_color), GameCfg.MenuColor);
-#ifdef USE_NK_UI
-			nk_ui_set_menu_color(GameCfg.MenuColor);
-#endif
 		}
 
 
@@ -2933,36 +2926,47 @@ static void do_play_menu(void)
 	run_choice_menu("Play", m, menu_choice, num_options);
 }
 
+// SNG: Options is its pages, each one of the settings menus
+enum { OPTIONS_DISPLAY, OPTIONS_AUDIO, OPTIONS_CONTROLS, OPTIONS_GAMEPLAY, OPTIONS_PILOT, OPTIONS_PAGES };
+static const char *const Options_pages[OPTIONS_PAGES] = { "Display", "Audio", "Controls", "Gameplay", "Pilot" };
+
+// each page is claimed by the title its menu opens with
+static const char *options_page_title(int page)
+{
+	switch (page)
+	{
+		case OPTIONS_DISPLAY:	return "Graphics & Effects";
+		case OPTIONS_AUDIO:	return "Sound & Music";
+		case OPTIONS_CONTROLS:	return TXT_CONTROLS;
+		case OPTIONS_GAMEPLAY:	return "Gameplay & HUD";
+	}
+	return OPTIONS_PILOT_TITLE;
+}
+
+static void run_options_page(int page)
+{
+	switch (page)
+	{
+		case OPTIONS_DISPLAY:	graphics_config();	break;
+		case OPTIONS_AUDIO:	do_sound_menu();	break;
+		case OPTIONS_CONTROLS:	input_config();		break;
+		case OPTIONS_GAMEPLAY:	do_misc_menu();		break;
+		case OPTIONS_PILOT:	do_extras_menu();	break;
+	}
+}
+
 void do_options_menu()
 {
-	newmenu_item *m;
-	newmenu *menu;
+	int page = OPTIONS_DISPLAY, next;
 
-	MALLOC(m, newmenu_item, opt_options_count);
-	if (!m)
-		return;
-
-	m[opt_options_head_display ].type = NM_TYPE_TEXT; m[opt_options_head_display ].text = "DISPLAY";
-	m[opt_options_graphics     ].type = NM_TYPE_MENU; m[opt_options_graphics     ].text = "Graphics & Effects";
-	m[opt_options_resolution   ].type = NM_TYPE_MENU; m[opt_options_resolution   ].text = "Screen Resolution";
-	m[opt_options_head_audio   ].type = NM_TYPE_TEXT; m[opt_options_head_audio   ].text = "AUDIO";
-	m[opt_options_sound        ].type = NM_TYPE_MENU; m[opt_options_sound        ].text = "Sound & Music";
-	m[opt_options_head_controls].type = NM_TYPE_TEXT; m[opt_options_head_controls].text = "CONTROLS & WEAPONS";
-	m[opt_options_controls     ].type = NM_TYPE_MENU; m[opt_options_controls     ].text = TXT_CONTROLS_;
-	m[opt_options_autoselect   ].type = NM_TYPE_MENU; m[opt_options_autoselect   ].text = "Weapon Autoselect";
-	m[opt_options_head_game    ].type = NM_TYPE_TEXT; m[opt_options_head_game    ].text = "GAMEPLAY";
-	m[opt_options_misc         ].type = NM_TYPE_MENU; m[opt_options_misc         ].text = "Gameplay & HUD";
-	m[opt_options_observer     ].type = NM_TYPE_MENU; m[opt_options_observer     ].text = "Observer Mode";
-	m[opt_options_head_pilot   ].type = NM_TYPE_TEXT; m[opt_options_head_pilot   ].text = "MISC";
-	m[opt_options_pilot        ].type = NM_TYPE_MENU; m[opt_options_pilot        ].text = TXT_CHANGE_PILOTS;
-	m[opt_options_scores       ].type = NM_TYPE_MENU; m[opt_options_scores       ].text = TXT_VIEW_SCORES;
-	m[opt_options_credits      ].type = NM_TYPE_MENU; m[opt_options_credits      ].text = TXT_CREDITS;
-
-	// Fall back to main event loop
-	// Allows clean closing and re-opening when resolution changes
-	menu = newmenu_do3_nk( NULL, TXT_OPTIONS, opt_options_count, m, options_menuset, NULL, 0, NULL );
-	if (menu && !GameCfg.UiTabs)		// with tabs on, its headings are the tabs
-		newmenu_set_fixed_sections(menu);
+	do {
+		next = -1;
+		newmenu_offer_pages(options_page_title(page), Options_pages, OPTIONS_PAGES, page, &next);
+		run_options_page(page);
+		page = next;
+	} while (page >= 0);
+	newmenu_offer_pages(NULL, NULL, 0, 0, NULL);
+	write_player_file();
 }
 
 #ifndef RELEASE
