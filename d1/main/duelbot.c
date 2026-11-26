@@ -30,6 +30,7 @@
 #include "powerup.h"
 #include "fireball.h"
 #include "cntrlcen.h"
+#include "collide.h"
 #include "physics.h"
 #include "polyobj.h"
 #include "multi.h"

@@ -112,5 +112,7 @@ extern void maybe_replace_powerup_with_energy(object *del_obj);
 
 extern int get_explosion_vclip(object *obj, int stage);
 
+int drop_powerup(int type, int id, int num, vms_vector *init_vel, vms_vector *pos, int segnum);
+
 #endif
  

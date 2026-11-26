@@ -423,6 +423,7 @@ int obj_create(enum object_type_t type, ubyte id, int segnum, vms_vector *pos,
 
 // make a copy of an object. returs num of new object
 int obj_create_copy(int objnum, vms_vector *new_pos, int newsegnum);
+object *obj_find_first_of_type(int type);
 
 // remove object from the world
 void obj_delete(int objnum);

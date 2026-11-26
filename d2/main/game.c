@@ -78,6 +78,9 @@ COPYRIGHT 1993-1999 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "gamepal.h"
 
 #include "multi.h"
+#ifdef USE_UDP
+#include "net_udp.h"
+#endif
 #include "race.h"
 #include "survival.h"
 #include "cntrlcen.h"

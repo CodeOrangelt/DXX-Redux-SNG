@@ -79,6 +79,9 @@ COPYRIGHT 1993-1998 PARALLAX SOFTWARE CORPORATION.  ALL RIGHTS RESERVED.
 #include "songs.h"
 #include "rbaudio.h"
 #include "multi.h"
+#ifdef USE_UDP
+#include "net_udp.h"
+#endif
 #include "survival.h"
 #include "cntrlcen.h"
 #include "pcx.h"
