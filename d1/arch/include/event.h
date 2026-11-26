@@ -48,6 +48,9 @@ int event_init();
 
 // Sends input events to event handlers
 void event_poll();
+union SDL_Event;
+int event_pad_as_key(union SDL_Event *event);
+int event_pad_repeat(union SDL_Event *out);
 void event_flush();
 
 // Set and call the default event handler

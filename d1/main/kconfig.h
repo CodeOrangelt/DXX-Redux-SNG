@@ -59,6 +59,7 @@ void sngmouse_apply(struct object *obj);
 extern control_info Controls;
 extern void kconfig_read_controls(d_event *event, int automap_flag);
 extern void kconfig(int n, char *title);
+extern int kconfig_binding(void);
 
 extern const ubyte DefaultKeySettingsD1X[MAX_D1X_CONTROLS];
 extern const ubyte DefaultKeySettings[3][MAX_CONTROLS];

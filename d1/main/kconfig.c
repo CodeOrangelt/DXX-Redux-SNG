@@ -501,6 +501,26 @@ static void kconfig_find_pos(kc_menu *menu, int *row, int *slot)
 	*slot = 0;
 }
 
+// SNG: stepping off a row's end crosses to the same row in the next column
+static int kconfig_hop_column(kc_menu *menu, int *row, int slot)
+{
+	int per_col = nk_ui_bind_rows_per_column();
+
+	if (per_col <= 0 || per_col >= menu->nrows)
+		return slot;
+	if (slot >= menu->rows[*row].nslots && *row + per_col < menu->nrows)
+	{
+		*row += per_col;
+		return 0;
+	}
+	if (slot < 0 && *row - per_col >= 0)
+	{
+		*row -= per_col;
+		return menu->rows[*row].nslots - 1;
+	}
+	return slot;
+}
+
 static void kconfig_move(kc_menu *menu, int drow, int dslot)
 {
 	int row, slot;
@@ -511,6 +531,7 @@ static void kconfig_move(kc_menu *menu, int drow, int dslot)
 	if (drow)
 		row = (row + drow + menu->nrows) % menu->nrows;
 	slot += dslot;
+	slot = kconfig_hop_column(menu, &row, slot);
 	if (slot < 0)
 		slot = 0;
 	if (slot >= menu->rows[row].nslots)
@@ -551,9 +572,43 @@ static const char *kconfig_hint(kc_menu *menu)
 	return "";
 }
 
-// The weapon-key screen binds the same action on all three devices, so its
-// slots are worth naming; everywhere else they are just alternatives.
-static const char *const kc_d1x_slot_names[KC_MAX_SLOTS] = { "KEYBOARD", "JOYSTICK", "MOUSE" };
+static const char *kc_device_name(int type)
+{
+	switch (type)
+	{
+		case BT_KEY:		return "KEYBOARD";
+		case BT_MOUSE_BUTTON:
+		case BT_MOUSE_AXIS:	return "MOUSE";
+		case BT_JOY_BUTTON:
+		case BT_JOY_AXIS:	return "JOYSTICK";
+		case BT_INVERT:		return "INVERT";
+	}
+	return "";
+}
+
+// SNG: every slot column is headed by its device; repeats read "KEYBOARD 2"
+static void kconfig_slot_names(kc_menu *menu, char names[KC_MAX_SLOTS][KC_BINDING_LEN], const char *out[KC_MAX_SLOTS])
+{
+	int r, s, t;
+
+	for (s = 0; s < KC_MAX_SLOTS; s++)
+	{
+		const char *device = "";
+		int repeat = 1;
+
+		for (r = 0; r < menu->nrows && !device[0]; r++)
+			if (s < menu->rows[r].nslots)
+				device = kc_device_name(menu->items[menu->rows[r].slot[s]].type);
+		for (t = 0; t < s; t++)
+			if (!strncmp(out[t], device, strlen(device)) && device[0])
+				repeat++;
+		if (repeat > 1)
+			snprintf(names[s], KC_BINDING_LEN, "%s %d", device, repeat);
+		else
+			snprintf(names[s], KC_BINDING_LEN, "%s", device);
+		out[s] = names[s];
+	}
+}
 
 void kconfig_draw(kc_menu *menu)
 {
@@ -561,6 +616,8 @@ void kconfig_draw(kc_menu *menu)
 	char text[KC_MAX_ROWS][KC_MAX_SLOTS][KC_BINDING_LEN];
 	int current_row, current_slot, picked_row, picked_slot;
 	int r, s, action;
+	char slot_text[KC_MAX_SLOTS][KC_BINDING_LEN];
+	const char *slot_names[KC_MAX_SLOTS];
 
 	for (r = 0; r < menu->nrows; r++)
 	{
@@ -578,9 +635,10 @@ void kconfig_draw(kc_menu *menu)
 		}
 	}
 
+	kconfig_slot_names(menu, slot_text, slot_names);
 	kconfig_find_pos(menu, &current_row, &current_slot);
 	action = nk_ui_bind_frame(menu, menu->title, kconfig_hint(menu), rows, menu->nrows,
-		menu->items == kc_d1x ? kc_d1x_slot_names : NULL,
+		slot_names,
 		current_row, current_slot, menu->changing, &picked_row, &picked_slot);
 
 	switch (action)
@@ -751,6 +809,14 @@ int kconfig_key_command(window *wind, d_event *event, kc_menu *menu)
 	return 0;
 }
 
+static kc_menu *s_open_kc;
+
+// SNG: a bind in progress needs the raw pad, not menu navigation
+int kconfig_binding(void)
+{
+	return s_open_kc && s_open_kc->changing;
+}
+
 int kconfig_handler(window *wind, d_event *event, kc_menu *menu)
 {
 	int i;
@@ -825,6 +891,8 @@ int kconfig_handler(window *wind, d_event *event, kc_menu *menu)
 			
 		case EVENT_WINDOW_CLOSE:
 			nk_ui_menu_closed();
+			if (s_open_kc == menu)
+				s_open_kc = NULL;
 			d_free(menu);
 			
 			// Update save values...
@@ -875,6 +943,7 @@ void kconfig_sub(kc_item * items,int nitems, char *title)
 		d_free(menu);
 		return;
 	}
+	s_open_kc = menu;
 	nk_ui_menu_opened();
 }
 

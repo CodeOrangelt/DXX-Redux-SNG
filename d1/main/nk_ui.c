@@ -1803,8 +1803,12 @@ static int nk_ui_frame(const char *title, struct nk_vec2 size_frac, void (*build
 			nk_input_end(s_ctx);
 			return 0;
 		}
+		if (!GameArg.CtlNoJoystick && !event_pad_as_key(&evt))
+			continue;
 		nk_ui_handle_event(&evt);
 	}
+	if (!GameArg.CtlNoJoystick && event_pad_repeat(&evt))
+		nk_ui_handle_event(&evt);
 	nk_input_end(s_ctx);
 
 	if (s_escape_pressed)
@@ -5676,6 +5680,36 @@ static void nk_ui_bind_head(struct nk_context *ctx, const char *const *slot_name
 static const void *s_bind_hint_id;
 static float s_bind_hint_w;
 
+#define NK_UI_BIND_MIN_ROWS_PER_COL 8
+
+static int s_bind_per_col;
+
+int nk_ui_bind_rows_per_column(void)
+{
+	return s_bind_per_col;
+}
+
+// SNG: a panel widened by its hint spreads the rows over the spare width
+// and stretches the slots to fill what is left
+static void nk_ui_bind_fill_width(float panel_w, int nrows, int max_slots, int *ncols, int *per_col, float *col_w, float *slot_w)
+{
+	float spacing = s_ctx->style.window.spacing.x;
+	float inner = panel_w - s_ctx->style.window.padding.x * 2;
+	int fit = (int)((inner + spacing) / (*col_w + spacing));
+	int most = max(1, nrows / NK_UI_BIND_MIN_ROWS_PER_COL);
+	float avail;
+
+	if (fit > *ncols)
+		*ncols = min(fit, max(*ncols, most));
+	*per_col = (nrows + *ncols - 1) / *ncols;
+	avail = (inner - spacing * (*ncols - 1)) / *ncols;
+	if (avail > *col_w && max_slots > 0)
+	{
+		*slot_w += (avail - *col_w) / max_slots;
+		*col_w = avail;
+	}
+}
+
 int nk_ui_bind_frame(const void *id, const char *title, const char *hint,
 	const struct nk_ui_bind_row *rows, int nrows, const char *const *slot_names,
 	int current_row, int current_slot, int changing, int *picked_row, int *picked_slot)
@@ -5719,6 +5753,8 @@ int nk_ui_bind_frame(const void *id, const char *title, const char *hint,
 	s_bind_hint_w = max(s_bind_hint_w, nk_ui_text_width(&s_body_font, hint));
 	panel_w = max(panel_w, min(s_bind_hint_w + s_ctx->style.window.padding.x * 4,
 		layout_w * NK_UI_MAX_SCREEN_FRAC));
+	nk_ui_bind_fill_width(panel_w, nrows, max_slots, &ncols, &per_col, &col_w, &slot_w);
+	s_bind_per_col = per_col;
 	panel_h = nk_ui_menu_height(NK_UI_BIND_HEAD_ROWS + per_col + (slot_names ? 1 : 0), height);
 	column_h = panel_h - NK_UI_MENU_CHROME_HEIGHT - NK_UI_BIND_HEAD_ROWS * row_stride
 		+ s_ctx->style.window.padding.y * 2;

@@ -17,6 +17,7 @@
 
 #include "joy.h"
 #include "nk_ui.h"
+#include "kconfig.h"
 
 extern void key_handler(SDL_KeyboardEvent *event);
 extern void mouse_button_handler(SDL_MouseButtonEvent *mbe);
@@ -24,6 +25,164 @@ extern void mouse_motion_handler(SDL_MouseMotionEvent *mme);
 extern void mouse_cursor_autohide();
 
 static int initialised=0;
+
+// SNG: gamepads drive menus by posing as the keyboard
+#define PAD_BUTTON_ACCEPT	0
+#define PAD_BUTTON_BACK		1
+#define PAD_BUTTON_PREV_TAB	4
+#define PAD_BUTTON_NEXT_TAB	5
+#define PAD_BUTTON_SELECT	6
+#define PAD_BUTTON_START	7
+#define PAD_AXIS_DEADZONE	16000
+#define PAD_DIRECTIONS		4
+
+#define PAD_AXIS_MAX		32767
+#define PAD_REPEAT_DELAY_MS	280
+#define PAD_REPEAT_SLOW_MS	160
+#define PAD_REPEAT_FAST_MS	35
+
+static int pad_held[PAD_DIRECTIONS];
+static int pad_deflect[PAD_DIRECTIONS];		// hats count as half-way
+static Uint32 pad_next_repeat[PAD_DIRECTIONS];
+
+static void pad_key_event(SDL_Event *out, int sym, int down)
+{
+	memset(out, 0, sizeof(*out));
+	out->type = down ? SDL_KEYDOWN : SDL_KEYUP;
+	out->key.state = down ? SDL_PRESSED : SDL_RELEASED;
+	out->key.keysym.sym = sym;
+}
+
+static int pad_button_sym(int button)
+{
+	switch (button)
+	{
+		case PAD_BUTTON_ACCEPT:
+		case PAD_BUTTON_START:
+			return SDLK_RETURN;
+		case PAD_BUTTON_BACK:
+		case PAD_BUTTON_SELECT:
+			return SDLK_ESCAPE;
+		case PAD_BUTTON_PREV_TAB:
+			return SDLK_PAGEUP;
+		case PAD_BUTTON_NEXT_TAB:
+			return SDLK_PAGEDOWN;
+	}
+	return 0;
+}
+
+static const int pad_direction_sym[PAD_DIRECTIONS] = { SDLK_UP, SDLK_DOWN, SDLK_LEFT, SDLK_RIGHT };
+
+// One direction changes per event; the caller re-polls for the rest.
+static int pad_direction_event(SDL_Event *out, const int wanted[PAD_DIRECTIONS])
+{
+	int dir;
+
+	for (dir = 0; dir < PAD_DIRECTIONS; dir++)
+	{
+		if (wanted[dir] == pad_held[dir])
+			continue;
+		pad_held[dir] = wanted[dir];
+		pad_next_repeat[dir] = SDL_GetTicks() + PAD_REPEAT_DELAY_MS;
+		pad_key_event(out, pad_direction_sym[dir], wanted[dir]);
+		return 1;
+	}
+	return 0;
+}
+
+static int pad_axis_event(SDL_Event *out, const SDL_JoyAxisEvent *axis)
+{
+	int wanted[PAD_DIRECTIONS], vertical;
+
+	// sticks and d-pad-as-axes only; triggers rest at full negative
+	if (axis->axis != 0 && axis->axis != 1 && axis->axis != 6 && axis->axis != 7)
+		return 0;
+	vertical = axis->axis & 1;
+	pad_deflect[vertical ? 0 : 2] = pad_deflect[vertical ? 1 : 3] = abs(axis->value);
+	memcpy(wanted, pad_held, sizeof(wanted));
+	wanted[vertical ? 0 : 2] = axis->value < -PAD_AXIS_DEADZONE;
+	wanted[vertical ? 1 : 3] = axis->value > PAD_AXIS_DEADZONE;
+	return pad_direction_event(out, wanted);
+}
+
+static int pad_hat_event(SDL_Event *out, const SDL_JoyHatEvent *hat)
+{
+	int wanted[PAD_DIRECTIONS];
+
+	pad_deflect[0] = pad_deflect[1] = pad_deflect[2] = pad_deflect[3] = (PAD_AXIS_DEADZONE + PAD_AXIS_MAX) / 2;
+	wanted[0] = !!(hat->value & SDL_HAT_UP);
+	wanted[1] = !!(hat->value & SDL_HAT_DOWN);
+	wanted[2] = !!(hat->value & SDL_HAT_LEFT);
+	wanted[3] = !!(hat->value & SDL_HAT_RIGHT);
+	return pad_direction_event(out, wanted);
+}
+
+// Rewrites a pad event in place as a key event. Returns 0 for pad input
+// with no menu meaning, which the caller drops.
+static int pad_to_key(SDL_Event *event)
+{
+	int sym;
+
+	switch (event->type)
+	{
+		case SDL_JOYBUTTONDOWN:
+		case SDL_JOYBUTTONUP:
+			sym = pad_button_sym(event->jbutton.button);
+			if (!sym)
+				return 0;
+			pad_key_event(event, sym, event->type == SDL_JOYBUTTONDOWN);
+			return 1;
+		case SDL_JOYAXISMOTION:
+			return pad_axis_event(event, &event->jaxis);
+		case SDL_JOYHATMOTION:
+			return pad_hat_event(event, &event->jhat);
+	}
+	return 0;
+}
+
+extern window *Game_wind;
+
+static int pad_drives_menus(window *front)
+{
+	return front && front != Game_wind && !GameArg.CtlNoJoystick && !kconfig_binding();
+}
+
+static int pad_event(const SDL_Event *event)
+{
+	return event->type == SDL_JOYBUTTONDOWN || event->type == SDL_JOYBUTTONUP ||
+		event->type == SDL_JOYAXISMOTION || event->type == SDL_JOYHATMOTION;
+}
+
+// further from centre, faster: the stick scrolls menus like a drag
+static Uint32 pad_repeat_interval(int deflect)
+{
+	int over = max(0, min(deflect, PAD_AXIS_MAX) - PAD_AXIS_DEADZONE);
+
+	return PAD_REPEAT_SLOW_MS - over * (PAD_REPEAT_SLOW_MS - PAD_REPEAT_FAST_MS) / (PAD_AXIS_MAX - PAD_AXIS_DEADZONE);
+}
+
+// A held direction's next auto-repeat key press, once it is due.
+int event_pad_repeat(SDL_Event *out)
+{
+	Uint32 now = SDL_GetTicks();
+	int dir;
+
+	for (dir = 0; dir < PAD_DIRECTIONS; dir++)
+	{
+		if (!pad_held[dir] || (Sint32)(now - pad_next_repeat[dir]) < 0)
+			continue;
+		pad_next_repeat[dir] = now + pad_repeat_interval(pad_deflect[dir]);
+		pad_key_event(out, pad_direction_sym[dir], 1);
+		return 1;
+	}
+	return 0;
+}
+
+// 0: pad input with no menu meaning, to drop
+int event_pad_as_key(SDL_Event *event)
+{
+	return !pad_event(event) || pad_to_key(event);
+}
 
 void event_poll()
 {
@@ -47,6 +206,8 @@ void event_poll()
 #endif
 	while ((wind == window_get_front()) && SDL_PollEvent(&event))
 	{
+		if (pad_drives_menus(wind) && !event_pad_as_key(&event))
+			continue;
 #ifdef USE_NK_UI
 		if (nk_menu_input)
 			nk_ui_feed_event(&event);
@@ -125,6 +286,21 @@ void event_poll()
 				idle = 0;
 			} break;
 		}
+	}
+
+	if (wind == window_get_front() && pad_drives_menus(wind) && event_pad_repeat(&event))
+	{
+#ifdef USE_NK_UI
+		if (nk_menu_input)
+			nk_ui_feed_event(&event);
+#endif
+		event.type = SDL_KEYUP;		// key_handler drops repeats when key repeat is off
+		event.key.state = SDL_RELEASED;
+		key_handler((SDL_KeyboardEvent *)&event);
+		event.type = SDL_KEYDOWN;
+		event.key.state = SDL_PRESSED;
+		key_handler((SDL_KeyboardEvent *)&event);
+		idle = 0;
 	}
 
 #ifdef USE_NK_UI
