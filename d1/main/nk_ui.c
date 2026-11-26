@@ -77,6 +77,7 @@ static void nk_ui_note(const char *text, float extra_rows);
 #include "mission.h"
 #include "text.h"
 #include "playsave.h"
+#include "gauges.h"
 #include "weapon.h"
 #include "powerup.h"
 #include "laser.h"
@@ -2148,6 +2149,292 @@ void nk_ui_weapon_autoselect(void)
 		if (!nk_ui_frame("Weapon Autoselect", nk_vec2(0.62f, 0.66f), nk_ui_build_weapon_autoselect, &running))
 			break;
 	}
+}
+
+// ==============================
+// Reticle: style, colour and size beside a live preview
+// ==============================
+
+#define RETICLE_STYLES		RET_TYPE_COUNT
+#define RETICLE_SIZE_MAX	4
+#define RETICLE_CHANNEL_MAX	32	// PlayerCfg.ReticleRGBA runs 0..32
+#define RETICLE_SIZE_BASE	32
+#define RETICLE_SIZE_STEP	4
+#define RETICLE_PREVIEW_FRAC	0.45f
+#define RETICLE_LINE_W		2.0f
+
+static void nk_ui_section(struct nk_context *ctx, const char *title);
+
+static const char *const Reticle_names[RETICLE_STYLES] = {
+	"Classic", "Classic Reboot", "None", "X", "Dot", "Circle", "Cross V1", "Cross V2", "Angle",
+	"Chevron", "Brackets", "Diamond", "Ring & Dot", "Tripod", "Gap Cross", "Halo"
+};
+
+static struct nk_color nk_ui_reticle_color(void)
+{
+	int c[4], i;
+
+	for (i = 0; i < 4; i++)
+		c[i] = NK_CLAMP(0, PlayerCfg.ReticleRGBA[i], RETICLE_CHANNEL_MAX) * 255 / RETICLE_CHANNEL_MAX;
+	return nk_rgba(c[0], c[1], c[2], 255 - c[3]);	// the game stores a fade: 0 is solid
+}
+
+// in-game size, in pixels of the real screen, as show_reticle() works it out
+static float nk_ui_reticle_px(void)
+{
+	return (float)grd_curscreen->sc_h / (RETICLE_SIZE_BASE - PlayerCfg.ReticleSize * RETICLE_SIZE_STEP);
+}
+
+static void nk_ui_line(struct nk_command_buffer *b, float x0, float y0, float x1, float y1, struct nk_color c)
+{
+	nk_stroke_line(b, x0, y0, x1, y1, RETICLE_LINE_W, c);
+}
+
+#define RETICLE_PARTS		3
+#define RETICLE_REBOOT_BASE	270
+#define RETICLE_REBOOT_STEP	20
+#define RETICLE_REBOOT_UNIT	65536.0f
+#define RETICLE_CIRCLE_SEGS	16
+
+// the classic reticle: the game's own bitmaps, placed as show_reticle() does
+static void nk_ui_reticle_classic(struct nk_command_buffer *b, float x, float y)
+{
+	struct nk_image img;
+	grs_bitmap *bm;
+	int part, dx, dy, w, h;
+
+	for (part = 0; part < RETICLE_PARTS; part++)
+	{
+		bm = gauges_classic_reticle_part(part, &dx, &dy, &w, &h);
+		if (!bm || !bm->gltexture)
+			continue;
+		img = nk_subimage_id((int)bm->gltexture->handle, (unsigned short)bm->gltexture->tw, (unsigned short)bm->gltexture->th,
+			nk_rect(0, 0, (float)bm->bm_w, (float)bm->bm_h));
+		nk_draw_image(b, nk_rect(x + dx, y + dy, (float)w, (float)h), &img, nk_rgba(255, 255, 255, 255));
+	}
+}
+
+static struct nk_vec2 nk_ui_reboot_point(float x, float y, float k, float vx, float vy)
+{
+	return nk_vec2(x + vx * k, y - vy * k);	// GL y runs up
+}
+
+// Classic Reboot: ogl_draw_vertex_reticle()'s vertices, ready to fire
+static void nk_ui_reticle_reboot(struct nk_command_buffer *b, float x, float y, struct nk_color c)
+{
+	static const float cross[8][2] = { {-4,2}, {-2,0}, {-3,-4}, {-2,-3}, {4,2}, {2,0}, {3,-4}, {2,-3} };
+	static const float bars[4][4][2] = {
+		{ {-5.5f,-5}, {-6.5f,-7.5f}, {-10,-7}, {-10,-8.7f} },
+		{ {-10,-7}, {-10,-8.7f}, {-15,-8.5f}, {-15,-9.5f} },
+		{ {5.5f,-5}, {6.5f,-7.5f}, {10,-7}, {10,-8.7f} },
+		{ {10,-7}, {10,-8.7f}, {15,-8.5f}, {15,-9.5f} }
+	};
+	static const float circles[2][2] = { {-10, -2}, {10, -2} };
+	float k = (RETICLE_REBOOT_BASE + PlayerCfg.ReticleSize * RETICLE_REBOOT_STEP) / RETICLE_REBOOT_UNIT * grd_curscreen->sc_h;
+	struct nk_color dark = nk_rgba(c.r / 2, c.g / 2, c.b / 2, c.a / 2);
+	float quad[8];
+	int i, j;
+
+	for (i = 0; i < 8; i += 2)
+	{
+		struct nk_vec2 p0 = nk_ui_reboot_point(x, y, k, cross[i][0], cross[i][1]);
+		struct nk_vec2 p1 = nk_ui_reboot_point(x, y, k, cross[i + 1][0], cross[i + 1][1]);
+
+		nk_stroke_line(b, p0.x, p0.y, p1.x, p1.y, RETICLE_LINE_W, c);
+	}
+	for (i = 0; i < 4; i++)
+	{
+		static const int strip_order[4] = { 0, 1, 3, 2 };
+
+		for (j = 0; j < 4; j++)
+		{
+			struct nk_vec2 p = nk_ui_reboot_point(x, y, k, bars[i][strip_order[j]][0], bars[i][strip_order[j]][1]);
+
+			quad[j * 2] = p.x;
+			quad[j * 2 + 1] = p.y;
+		}
+		nk_fill_polygon(b, quad, 4, (i % 2) ? dark : c);	// inner bar lit: one shot ready
+	}
+	for (i = 0; i < 2; i++)
+	{
+		struct nk_vec2 p = nk_ui_reboot_point(x, y, k, circles[i][0], circles[i][1]);
+
+		nk_stroke_circle(b, nk_rect(p.x - 2 * k, p.y - 2 * k, 4 * k, 4 * k), RETICLE_LINE_W, i ? dark : c);
+	}
+}
+
+static void nk_ui_reticle_shape(struct nk_command_buffer *b, int type, float x, float y, float s, struct nk_color c)
+{
+	struct reticle_prim p[RET_PRIM_MAX];
+	int i, n = reticle_shape(type, s, p);
+
+	for (i = 0; i < n; i++)
+	{
+		float r = p[i].x1;
+
+		if (p[i].kind == RET_PRIM_LINE)
+			nk_ui_line(b, x + p[i].x0, y + p[i].y0, x + p[i].x1, y + p[i].y1, c);
+		else if (p[i].kind == RET_PRIM_CIRCLE)
+			nk_stroke_circle(b, nk_rect(x + p[i].x0 - r, y + p[i].y0 - r, r * 2, r * 2), RETICLE_LINE_W, c);
+		else
+		{
+			r = max(r, 1.5f);
+			nk_fill_circle(b, nk_rect(x + p[i].x0 - r, y + p[i].y0 - r, r * 2, r * 2), c);
+		}
+	}
+}
+
+// mirrors the shapes show_reticle() draws for each style
+static void nk_ui_draw_reticle(struct nk_command_buffer *b, int type, float x, float y, float s, struct nk_color c)
+{
+	float h = s / 2, f = s / 5, t = s / 6;
+
+	switch (type)
+	{
+		case RET_TYPE_CLASSIC:
+			nk_ui_reticle_classic(b, x, y);
+			break;
+		case RET_TYPE_CLASSIC_REBOOT:
+			nk_ui_reticle_reboot(b, x, y, c);
+			break;
+		case RET_TYPE_X:
+			nk_ui_line(b, x - h, y - h, x - f, y - f, c);
+			nk_ui_line(b, x + h, y - h, x + f, y - f, c);
+			nk_ui_line(b, x - h, y + h, x - f, y + f, c);
+			nk_ui_line(b, x + h, y + h, x + f, y + f, c);
+			break;
+		case RET_TYPE_DOT:
+			nk_fill_circle(b, nk_rect(x - f, y - f, f * 2, f * 2), c);
+			break;
+		case RET_TYPE_CIRCLE:
+			nk_stroke_circle(b, nk_rect(x - s / 4, y - s / 4, s / 2, s / 2), RETICLE_LINE_W, c);
+			break;
+		case RET_TYPE_CROSS_V1:
+			nk_ui_line(b, x, y - h, x, y + h, c);
+			nk_ui_line(b, x - h, y, x + h, y, c);
+			break;
+		case RET_TYPE_CROSS_V2:
+			nk_ui_line(b, x, y - h, x, y - t, c);
+			nk_ui_line(b, x, y + h, x, y + t, c);
+			nk_ui_line(b, x - h, y, x - t, y, c);
+			nk_ui_line(b, x + h, y, x + t, y, c);
+			break;
+		case RET_TYPE_ANGLE:
+			nk_ui_line(b, x, y, x, y + h, c);
+			nk_ui_line(b, x, y, x + h, y, c);
+			break;
+		default:
+			nk_ui_reticle_shape(b, type, x, y, s, c);
+			break;
+	}
+}
+
+// a dark "space" box with a few stars and the reticle at its true size
+static void nk_ui_reticle_preview(struct nk_context *ctx, float h)
+{
+	static const float stars[][2] = { {0.12f,0.2f}, {0.8f,0.15f}, {0.3f,0.75f}, {0.7f,0.8f}, {0.9f,0.55f}, {0.05f,0.6f}, {0.55f,0.1f} };
+	struct nk_command_buffer *b;
+	struct nk_rect r;
+	unsigned i;
+
+	nk_layout_row_dynamic(ctx, h, 1);
+	if (!nk_widget(&r, ctx))
+		return;
+	b = nk_window_get_canvas(ctx);
+	nk_fill_rect(b, r, NK_UI_ROUNDING, nk_rgba(6, 8, 14, 255));
+	nk_stroke_rect(b, r, NK_UI_ROUNDING, 1.0f, nk_ui_shade(30));
+	for (i = 0; i < sizeof(stars) / sizeof(stars[0]); i++)
+		nk_fill_rect(b, nk_rect(r.x + r.w * stars[i][0], r.y + r.h * stars[i][1], 2, 2), 0.0f, nk_rgba(150, 150, 170, 255));
+	nk_ui_draw_reticle(b, PlayerCfg.ReticleType, r.x + r.w / 2, r.y + r.h / 2, nk_ui_reticle_px(), nk_ui_reticle_color());
+}
+
+// "<  Cross V2  >" as one control: Left/Right or a click on either half
+// steps through the styles, wrapping; A steps forward
+static void nk_ui_reticle_style_row(struct nk_context *ctx)
+{
+	static const float split[] = { 0.42f, 0.58f };
+	const struct nk_user_font *font = ctx->style.font;
+	struct nk_command_buffer *canvas;
+	struct nk_input *in = &ctx->input;
+	char text[40];
+	struct nk_rect r;
+	int focused, step = 0;
+	float w;
+
+	nk_layout_row(ctx, NK_DYNAMIC, NK_UI_ROW_HEIGHT, 2, split);
+	nk_label(ctx, "Style", NK_TEXT_LEFT);
+	focused = nk_ui_nav_add(ctx, NAV_CYCLE, &r);
+	if (!nk_widget(&r, ctx))
+		return;
+	canvas = nk_window_get_canvas(ctx);
+	if (nk_input_is_mouse_click_in_rect(in, NK_BUTTON_LEFT, r))
+		step = in->mouse.pos.x < r.x + r.w / 2 ? -1 : 1;
+	if (focused && s_nav.adjust)
+		step = s_nav.adjust;
+	if (focused && s_nav.activate)
+		step = 1;
+	PlayerCfg.ReticleType = (PlayerCfg.ReticleType + RETICLE_STYLES + step) % RETICLE_STYLES;
+	nk_fill_rect(canvas, r, NK_UI_ROUNDING, nk_input_is_mouse_hovering_rect(in, r) ? nk_ui_shade(22) : nk_ui_shade(14));
+	snprintf(text, sizeof(text), "<   %s   >", Reticle_names[PlayerCfg.ReticleType]);
+	w = font->width(font->userdata, font->height, text, nk_strlen(text));
+	nk_draw_text(canvas, nk_rect(r.x + (r.w - w) / 2, r.y + (r.h - font->height) / 2, w, font->height),
+		text, nk_strlen(text), font, nk_rgba(0, 0, 0, 0), NK_UI_ACCENT_BRIGHT);
+	if (focused)
+		nk_ui_nav_outline(ctx, r);
+}
+
+static void nk_ui_reticle_slider(struct nk_context *ctx, const char *label, int *value, int max, int step)
+{
+	static const float split[] = { 0.42f, 0.58f };
+
+	nk_layout_row(ctx, NK_DYNAMIC, NK_UI_ROW_HEIGHT, 2, split);
+	nk_label(ctx, label, NK_TEXT_LEFT);
+	nk_ui_slider_int(ctx, 0, value, max, step);
+}
+
+static void nk_ui_build_reticle(struct nk_context *ctx, void *userdata)
+{
+	static const float panes[] = { 1.0f - RETICLE_PREVIEW_FRAC, RETICLE_PREVIEW_FRAC };
+	int *running = (int *)userdata;
+	float pane_h = nk_window_get_content_region(ctx).h - (NK_UI_ROW_HEIGHT + ctx->style.window.spacing.y) * 2;
+
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	if (nk_button_label(ctx, "Done") || nk_ui_take_enter())
+		*running = 0;
+	nk_layout_row(ctx, NK_DYNAMIC, max(pane_h, NK_UI_ROW_HEIGHT * 8), 2, panes);
+	if (nk_group_begin(ctx, "reticle settings", 0))
+	{
+		nk_ui_section(ctx, "STYLE");
+		nk_ui_reticle_style_row(ctx);
+		nk_ui_reticle_slider(ctx, "Size", &PlayerCfg.ReticleSize, RETICLE_SIZE_MAX, 1);
+		nk_ui_section(ctx, "COLOR");
+		nk_ui_reticle_slider(ctx, "Red", &PlayerCfg.ReticleRGBA[0], RETICLE_CHANNEL_MAX, 2);
+		nk_ui_reticle_slider(ctx, "Green", &PlayerCfg.ReticleRGBA[1], RETICLE_CHANNEL_MAX, 2);
+		nk_ui_reticle_slider(ctx, "Blue", &PlayerCfg.ReticleRGBA[2], RETICLE_CHANNEL_MAX, 2);
+		{
+			int opacity = RETICLE_CHANNEL_MAX - PlayerCfg.ReticleRGBA[3];
+
+			nk_ui_reticle_slider(ctx, "Opacity", &opacity, RETICLE_CHANNEL_MAX, 2);
+			PlayerCfg.ReticleRGBA[3] = RETICLE_CHANNEL_MAX - opacity;
+		}
+		nk_group_end(ctx);
+	}
+	if (nk_group_begin(ctx, "reticle preview", NK_WINDOW_NO_SCROLLBAR))
+	{
+		nk_ui_section(ctx, "PREVIEW");
+		nk_ui_reticle_preview(ctx, max(pane_h - NK_UI_ROW_HEIGHT * 3, NK_UI_ROW_HEIGHT * 5));
+		nk_group_end(ctx);
+	}
+}
+
+void nk_ui_reticle_menu(void)
+{
+	int running = 1;
+
+	nk_ui_init_once();
+	while (running)
+		if (!nk_ui_frame("Reticle", nk_vec2(0.62f, 0.6f), nk_ui_build_reticle, &running))
+			break;
 }
 
 // ==============================

@@ -1403,6 +1403,10 @@ void input_config()
 
 void reticle_config()
 {
+#ifdef USE_NK_UI
+	nk_ui_reticle_menu();	// SNG: one screen with a live preview
+	return;
+#endif
 #ifdef OGL
 	newmenu_item m[18];
 #else
@@ -1433,6 +1437,8 @@ void reticle_config()
 	m[nitems].type = NM_TYPE_SLIDER; m[nitems].text = "Size"; m[nitems].value = PlayerCfg.ReticleSize; m[nitems].min_value = 0; m[nitems].max_value = 4; nitems++;
 
 	i = PlayerCfg.ReticleType;
+	if (i > RET_TYPE_ANGLE)
+		i = RET_TYPE_CLASSIC;	// the newer styles live in the nk screen
 #ifndef OGL
 	if (i > 1) i--;
 #endif
