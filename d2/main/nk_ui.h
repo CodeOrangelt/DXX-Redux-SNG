@@ -35,6 +35,7 @@ void nk_ui_draw_menu_logo(float left_px, float menu_top_px);
 // limits, etc). Returns 1 if the player started the game, 0 if they
 // cancelled out. Mirrors the contract of the legacy net_udp_setup_game().
 int nk_ui_hosting_setup(void);
+#define NK_UI_START_SOLO_RACE 2	// Singleplayer picked Race: start it offline
 int nk_ui_singleplayer_setup(void);
 
 // Runs the "join a game" browser: discovers LAN/tracker games, shows each

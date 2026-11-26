@@ -6482,6 +6482,14 @@ int net_udp_setup_singleplayer(void)
 
 	Solo_game = 1;
 	started = nk_ui_singleplayer_setup();
+#ifdef OGL
+	if (started == NK_UI_START_SOLO_RACE)
+	{
+		Solo_game = 0;
+		net_udp_close();
+		return race_sp_start(Netgame.levelnum);
+	}
+#endif
 	if (!started)
 	{
 		Solo_game = 0;

@@ -66,6 +66,7 @@
 #include "vecmat.h"
 
 #define RACE_DEFAULT_LAPS       3
+#define RACE_MAX_LAPS           10
 #define RACE_COUNTDOWN_SECONDS  3	// "3, 2, 1, GO"
 
 #define RACE_MAX_BOXES          64

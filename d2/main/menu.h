@@ -29,6 +29,7 @@ extern int RegisterPlayer();
 // returns number of item chosen
 extern int DoMenu();
 extern void do_options_menu();
+int race_sp_start(int level);
 extern void d2x_options_menu();
 extern int select_demo(void);
 

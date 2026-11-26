@@ -98,6 +98,7 @@ static void nk_ui_note(const char *text, float extra_rows);
 #include "vers_id.h"
 #include "physfsx.h"
 #include "duelbot.h"
+#include "racebot.h"
 
 // Declared in mouse.h. Without touching this, the cursor-autohide timer in
 // mouse_cursor_autohide() (driven by event_poll(), which we bypass with our
@@ -3185,6 +3186,37 @@ static void nk_ui_build_cpu_opponents(struct nk_context *ctx)
 	Netgame.CpuSkill = (ubyte)v;
 }
 
+static void nk_ui_solo_race_advanced_options(void)
+{
+	net_udp_race_advanced_options(&Race_allowed_items, Race_item_chance);
+}
+
+#define SOLO_RACE_DEFAULT_BOTS	3
+
+// Singleplayer race: racebots on an offline track, not CPU pilots
+static void nk_ui_build_solo_race(struct nk_context *ctx)
+{
+	static const char *const skill_names[RACE_NUM_SKILLS] = { "Rookie", "Pro", "Ace" };
+	int bots = Race_bot_count > 0 ? min(Race_bot_count, RACE_MAX_BOTS) : SOLO_RACE_DEFAULT_BOTS;
+	int skill = (Race_bot_skill >= 0 && Race_bot_skill < RACE_NUM_SKILLS) ? Race_bot_skill : RACE_SKILL_PRO;
+	int laps = max(1, min(Race_laps_to_win, RACE_MAX_LAPS));
+
+	nk_ui_section(ctx, "RACE FIELD");
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	nk_labelf(ctx, NK_TEXT_LEFT, "Opponents: %d", bots);
+	nk_ui_slider_int(ctx, 1, &bots, RACE_MAX_BOTS, 1);
+	nk_labelf(ctx, NK_TEXT_LEFT, "Skill: %s", skill_names[skill]);
+	nk_ui_slider_int(ctx, 0, &skill, RACE_NUM_SKILLS - 1, 1);
+	nk_labelf(ctx, NK_TEXT_LEFT, "Laps: %d", laps);
+	nk_ui_slider_int(ctx, 1, &laps, RACE_MAX_LAPS, 1);
+	if (nk_button_label(ctx, "Advanced Race Options..."))
+		nk_ui_defer(nk_ui_solo_race_advanced_options);
+
+	Race_bot_count = bots;
+	Race_bot_skill = skill;
+	Race_laps_to_win = laps;
+}
+
 static void nk_ui_build_access(struct nk_context *ctx)
 {
 	int closed = (Netgame.game_flags & NETGAME_FLAG_CLOSED) != 0;
@@ -3212,7 +3244,7 @@ static void nk_ui_build_mode_panel(struct nk_context *ctx, int current)
 	nk_label(ctx, m->blurb, NK_TEXT_LEFT);
 	if (m->flags & MODE_TEAMS)
 		nk_ui_build_team_rules(ctx);
-	if (m->rules)
+	if (m->rules && !(net_udp_solo() && m->gamemode == NETGAME_RACE))
 		m->rules(ctx);
 }
 
@@ -3266,7 +3298,9 @@ static void nk_ui_build_hosting(struct nk_context *ctx, void *userdata)
 	if (nk_group_begin(ctx, "settings", NK_WINDOW_BORDER))
 	{
 		nk_ui_build_mode_panel(ctx, current);
-		if (st->solo)
+		if (st->solo && Netgame.gamemode == NETGAME_RACE)
+			nk_ui_build_solo_race(ctx);
+		else if (st->solo)
 			nk_ui_build_cpu_opponents(ctx);
 		else
 		{
@@ -3305,7 +3339,12 @@ static int nk_ui_run_hosting(const char *title, int solo)
 		if (st.start_requested)
 		{
 			st.start_requested = 0;
-			if (net_udp_start_game())
+			if (solo && Netgame.gamemode == NETGAME_RACE)
+			{
+				st.started = NK_UI_START_SOLO_RACE;
+				st.running = 0;
+			}
+			else if (net_udp_start_game())
 			{
 				st.started = 1;
 				st.running = 0;

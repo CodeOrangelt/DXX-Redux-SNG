@@ -112,7 +112,6 @@ enum MENUS
     MENU_JOIN_LIST_UDP_NETGAME,
     MENU_DXMA_MISSIONS,
     #endif
-    MENU_RACE_GAME,
     MENU_PLAY,
     MENU_CAMPAIGN,
     MENU_CAMPAIGN_NEW_GAME,
@@ -135,7 +134,6 @@ static window *menus[16] = { NULL };
 // Function Prototypes added after LINTING
 int do_option(int select);
 int do_new_game_menu(void);
-int do_race_game_menu(void);
 void do_multi_player_menu();
 static void do_play_menu(void);
 static void do_campaign_menu(void);
@@ -602,9 +600,6 @@ int do_option ( int select)
 			Race_sp_pending = 0;
 			select_mission(0, "New Game\n\nSelect mission", do_new_game_menu);
 			break;
-		case MENU_RACE_GAME:
-			select_mission(0, "Race\n\nSelect track", do_race_game_menu);
-			break;
 		case MENU_GAME:
 			break;
 		case MENU_DEMO_PLAY:
@@ -845,138 +840,18 @@ int do_difficulty_menu()
 	return 0;
 }
 
-// Single-player race: pick how big a field to race and how hard it races,
-// then start the mission's first level in race mode. Everything else about a
-// race -- the class picker on the grid, the mystery boxes, the standings --
-// is the same code the netgame runs; the only difference is who is driving
-// the other ships.
-
-#define RACE_MENU_OPPONENTS 1
-#define RACE_MENU_SKILL     2
-#define RACE_MENU_LAPS      3
-#define RACE_MENU_ADVANCED  4
-#define RACE_MENU_START     6
-
-// The slider labels carry their own value, so they have to be rewritten as the
-// sliders move. They are padded to a fixed width because newmenu measures the
-// menu once, when it is built, and a label that grows afterwards runs into the
-// slider bar. The buffers are static because newmenu keeps the pointers.
-static char Race_menu_bots_text[32];
-static char Race_menu_skill_text[32];
-static char Race_menu_laps_text[32];
-
-static void race_menu_labels(const newmenu_item *items)
+// SNG: offline race against racebots, set up from Singleplayer
+int race_sp_start(int level)
 {
-	static const char *const skill_text[RACE_NUM_SKILLS] = { "ROOKIE", "PRO", "ACE" };
-	int skill = items[RACE_MENU_SKILL].value;
-
-	if (skill < 0 || skill >= RACE_NUM_SKILLS)
-		skill = RACE_SKILL_PRO;
-
-	snprintf(Race_menu_bots_text, sizeof(Race_menu_bots_text),
-			 "Opponents: %d", items[RACE_MENU_OPPONENTS].value);
-	snprintf(Race_menu_skill_text, sizeof(Race_menu_skill_text),
-			 "Skill: %-6s", skill_text[skill]);
-	snprintf(Race_menu_laps_text, sizeof(Race_menu_laps_text),
-			 "Laps: %d", items[RACE_MENU_LAPS].value + 1);
-}
-
-static int race_menu_handler(newmenu *menu, d_event *event, void *userdata)
-{
-	newmenu_item *items = newmenu_get_items(menu);
-	int citem = newmenu_get_citem(menu);
-
-	userdata = userdata;
-
-	switch (event->type)
-	{
-		case EVENT_NEWMENU_CHANGED:
-			race_menu_labels(items);
-			return 0;
-
-		case EVENT_NEWMENU_SELECTED:
-			// ENTER on a slider used to start the race, which made the two
-			// settings impossible to adjust without launching. Only the START
-			// line closes the menu now; anything else stays put.
-			if (citem == RACE_MENU_ADVANCED)
-			{
-				net_udp_race_advanced_options(&Race_allowed_items, Race_item_chance);
-				return 1;		// handled: stay in the menu
-			}
-
-			if (citem != RACE_MENU_START)
-				return 1;		// handled: stay in the menu
-
-			return 0;
-
-		default:
-			return 0;
-	}
-}
-
-int do_race_game_menu()
-{
-	newmenu_item m[9];
-	int bots = Race_bot_count > 0 ? Race_bot_count : 3;
-	int skill = Race_bot_skill;
-	int laps = Race_laps_to_win;
-	int choice, i = 0;
-
-	if (bots < 1)
-		bots = 1;
-	if (bots > RACE_MAX_BOTS)
-		bots = RACE_MAX_BOTS;
-	if (skill < 0 || skill >= RACE_NUM_SKILLS)
-		skill = RACE_SKILL_PRO;
-	if (laps < 1) laps = RACE_DEFAULT_LAPS;
-	if (laps > 10) laps = 10;
-
-	memset(m, 0, sizeof(m));
-
-	m[i].type = NM_TYPE_TEXT;   m[i].text = "Race the CPU field on this track."; i++;
-	Assert(i == RACE_MENU_OPPONENTS);
-	m[i].type = NM_TYPE_SLIDER; m[i].text = Race_menu_bots_text; m[i].value = bots;
-	m[i].min_value = 1; m[i].max_value = RACE_MAX_BOTS; i++;
-	Assert(i == RACE_MENU_SKILL);
-	m[i].type = NM_TYPE_SLIDER; m[i].text = Race_menu_skill_text; m[i].value = skill;
-	m[i].min_value = 0; m[i].max_value = RACE_NUM_SKILLS - 1; i++;
-	Assert(i == RACE_MENU_LAPS);
-	m[i].type = NM_TYPE_SLIDER; m[i].text = Race_menu_laps_text; m[i].value = laps - 1;
-	m[i].min_value = 0; m[i].max_value = 9; i++;
-	Assert(i == RACE_MENU_ADVANCED);
-	m[i].type = NM_TYPE_MENU;   m[i].text = "Advanced Options..."; i++;
-	m[i].type = NM_TYPE_TEXT;   m[i].text = ""; i++;
-	Assert(i == RACE_MENU_START);
-	m[i].type = NM_TYPE_MENU;   m[i].text = "START RACE"; i++;
-
-	race_menu_labels(m);
-
-	// Opens on the opponents slider, so left/right adjust straight away.
-	choice = newmenu_do1_nk(NULL, "RACE SETUP", i, m, race_menu_handler, NULL,
-						 RACE_MENU_OPPONENTS);
-
-	if (choice != RACE_MENU_START)
-		return 0;			// escaped out; back to the mission list
-
-	Race_bot_count = m[RACE_MENU_OPPONENTS].value;
-	Race_bot_skill = m[RACE_MENU_SKILL].value;
-	Race_laps_to_win = m[RACE_MENU_LAPS].value + 1;
-
-	if (Race_bot_count < 1)
-		Race_bot_count = 1;
-	if (Race_bot_count > RACE_MAX_BOTS)
-		Race_bot_count = RACE_MAX_BOTS;
+	Race_bot_count = max(1, min(Race_bot_count, RACE_MAX_BOTS));
 	if (Race_bot_skill < 0 || Race_bot_skill >= RACE_NUM_SKILLS)
 		Race_bot_skill = RACE_SKILL_PRO;
-	if (Race_laps_to_win < 1)
-		Race_laps_to_win = 1;
+	Race_laps_to_win = max(1, min(Race_laps_to_win, RACE_MAX_LAPS));
 
 	Difficulty_level = PlayerCfg.DefaultDifficulty;
 	Race_sp_pending = 1;
-
-	StartNewGame(1);
-
-	return 1;	// exit mission listbox
+	StartNewGame(level);
+	return 1;
 }
 
 int do_new_game_menu()
@@ -2931,7 +2806,6 @@ static void do_play_menu(void)
 	if (!alloc_choice_menu(&menu_choice, &m))
 		return;
 	ADD_ITEM("Campaign", MENU_CAMPAIGN, KEY_C);
-	ADD_ITEM("Race vs bots", MENU_RACE_GAME, KEY_R);
 #ifdef USE_UDP
 	ADD_ITEM("Singleplayer", MENU_SINGLEPLAYER, KEY_S);
 	ADD_ITEM("Multiplayer", MENU_MULTIPLAYER, KEY_M);
