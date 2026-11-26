@@ -1368,7 +1368,7 @@ void reticle_config()
 	PlayerCfg.ReticleSize = m[opt_ret_size].value;
 }
 
-int opt_gr_texfilt, opt_gr_movietexfilt, opt_gr_brightness, opt_gr_reticlemenu, opt_gr_alphafx, opt_gr_dynlightcolor, opt_gr_vsync, opt_gr_multisample, opt_gr_fpsindi, opt_gr_mousedbg, opt_gr_fov, opt_gr_disablecockpit;
+int opt_gr_framerate, opt_gr_texfilt, opt_gr_movietexfilt, opt_gr_brightness, opt_gr_reticlemenu, opt_gr_alphafx, opt_gr_dynlightcolor, opt_gr_vsync, opt_gr_multisample, opt_gr_fpsindi, opt_gr_mousedbg, opt_gr_fov, opt_gr_disablecockpit;
 int opt_gr_classicdepth;
 static int opt_gr_resolution = -1, opt_gr_menu_color = -1, opt_gr_ui_scale = -1;
 static char gr_menu_color_text[30], gr_ui_scale_text[40];
@@ -1376,6 +1376,30 @@ static void print_ui_scale(char *text, int len);
 static void print_menu_color(char *color_string, int color_string_length, int color_value);
 static int menu_color_max(void);
 
+#define FPS_SLIDER_STEP 25
+#define FPS_SLIDER_LAST_CAPPED ((MAXIMUM_FPS - FPS_SLIDER_STEP) / FPS_SLIDER_STEP)
+
+static int fps_to_slider(int fps)
+{
+	if (fps == FPS_UNLIMITED)
+		return FPS_SLIDER_LAST_CAPPED + 1;
+	return (fps - FPS_SLIDER_STEP) / FPS_SLIDER_STEP;
+}
+
+static int slider_to_fps(int position)
+{
+	if (position > FPS_SLIDER_LAST_CAPPED)
+		return FPS_UNLIMITED;
+	return FPS_SLIDER_STEP + position * FPS_SLIDER_STEP;
+}
+
+static void fps_label(char *buf, size_t size, int fps)
+{
+	if (fps == FPS_UNLIMITED)
+		snprintf(buf, size, "Max FPS: Unlimited");
+	else
+		snprintf(buf, size, "Max FPS: %d", fps);
+}
 int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 {
 	newmenu_item *items = newmenu_get_items(menu);
@@ -1404,6 +1428,11 @@ int graphics_config_menuset(newmenu *menu, d_event *event, void *userdata)
 #ifdef USE_NK_UI
 				nk_ui_set_menu_color(GameCfg.MenuColor);
 #endif
+			}
+			if ( citem == opt_gr_framerate) {
+				static char fps_text[24];
+				fps_label(fps_text, sizeof(fps_text), slider_to_fps(items[opt_gr_framerate].value));
+				items[opt_gr_framerate].text = fps_text;
 			}
 			if ( citem == opt_gr_fov) {
 				// Only update if not locked by multiplayer
@@ -1477,10 +1506,10 @@ void graphics_config()
 	m[opt_gr_texfilt+GameCfg.TexFilt].value=1;
 #endif
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "PERFORMANCE"; nitems++;
-	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "Framerate (0 = unlimited)"; nitems++;
-	char framerate_string[5];
-	snprintf(framerate_string, sizeof(framerate_string), "%d", PlayerCfg.maxFps);
-	m[nitems].type = NM_TYPE_INPUT; m[nitems].text = framerate_string; m[nitems].text_len = sizeof(framerate_string) - 1; nitems++;
+	static char fps_display[24];
+	fps_label(fps_display, sizeof(fps_display), PlayerCfg.maxFps);
+	opt_gr_framerate = nitems;
+	m[nitems].type = NM_TYPE_SLIDER; m[nitems].text = fps_display; m[nitems].value = fps_to_slider(PlayerCfg.maxFps); m[nitems].min_value = 0; m[nitems].max_value = FPS_SLIDER_LAST_CAPPED + 1; nitems++;
 #ifdef OGL
 	opt_gr_vsync = nitems;
 	m[nitems].type = NM_TYPE_CHECK; m[nitems].text="VSync"; m[nitems].value = GameCfg.VSync; nitems++;
@@ -1550,14 +1579,7 @@ void graphics_config()
 		GameCfg.FOVZoom = m[opt_gr_fov].value;
 	PlayerCfg.DisableCockpit = m[opt_gr_disablecockpit].value;
 
-	PlayerCfg.maxFps=atoi(framerate_string);
-
-	if (PlayerCfg.maxFps != FPS_UNLIMITED) {
-		if (PlayerCfg.maxFps < 25)
-			PlayerCfg.maxFps = 25;
-		else if (PlayerCfg.maxFps > MAXIMUM_FPS)
-			PlayerCfg.maxFps = MAXIMUM_FPS;
-	}
+	PlayerCfg.maxFps = slider_to_fps(m[opt_gr_framerate].value);
 
 #ifdef OGL
 	gr_set_attributes();
