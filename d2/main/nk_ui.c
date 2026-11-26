@@ -6657,7 +6657,9 @@ int nk_ui_draw_backdrop(void)
 extern const unsigned char menu_logo_png[];
 extern const unsigned int menu_logo_png_len;
 
-#define NK_UI_LOGO_WIDTH_FRAC 0.36f
+// SNG: D2's picture is D1's 1200px DESCENT plus the II; widths scale by it
+#define NK_UI_LOGO_WIDE_SCALE (1473.0f / 1200.0f)
+#define NK_UI_LOGO_WIDTH_FRAC (0.36f * NK_UI_LOGO_WIDE_SCALE)
 // Gap between the logo and the menu text below it.
 #define NK_UI_LOGO_GAP_FRAC 0.02f
 #define NK_UI_LOGO_MIN_TOP_FRAC 0.02f
@@ -6668,7 +6670,7 @@ extern const unsigned int menu_logo_png_len;
 #define NK_UI_LOGO_LETTERS_BOTTOM_FRAC 0.73f
 // Where the first letter starts, as a fraction of the picture's width, so
 // the version line can line up with the letters rather than the padding.
-#define NK_UI_LOGO_LETTERS_LEFT_FRAC 0.012f
+#define NK_UI_LOGO_LETTERS_LEFT_FRAC (0.012f / NK_UI_LOGO_WIDE_SCALE)
 
 #define NK_UI_LAVA_FRAMES 4
 #define NK_UI_LAVA_TILE 64
