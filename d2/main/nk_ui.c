@@ -1638,8 +1638,50 @@ static int nk_ui_fit_title_scale(const char *title, float avail)
 
 // The big Descent font is very wide, so a long title steps down in size and
 // finally falls back to the body font rather than running off the panel.
+// SNG: a panel whose content overflowed last frame keeps a footer row, so
+// the scroll hint and the size grip sit under the scrollbar, not on items
+#define NK_UI_FOOTER_SLOTS	8
+#define NK_UI_MORE_SLACK	2.0f
+static struct nk_window *s_footer_wins[NK_UI_FOOTER_SLOTS];
+static int s_footer_next;
+
+static int nk_ui_footer_slot(const struct nk_window *win)
+{
+	int i;
+
+	for (i = 0; win && i < NK_UI_FOOTER_SLOTS; i++)
+		if (s_footer_wins[i] == win)
+			return i;
+	return -1;
+}
+
+static int nk_ui_has_footer(struct nk_context *ctx)
+{
+	struct nk_panel *layout = ctx->current->layout;
+
+	return nk_ui_footer_slot(ctx->current) >= 0 && layout->footer_height >= s_row_h;
+}
+
+// judged against the view as it would be without the footer, so it can't flicker
+static void nk_ui_note_overflow(struct nk_context *ctx)
+{
+	struct nk_panel *layout = ctx->current->layout;
+	float view_bottom = layout->bounds.y + layout->bounds.h + (nk_ui_has_footer(ctx) ? layout->footer_height : 0.0f);
+	int overflows = layout->at_y + layout->row.height > view_bottom + NK_UI_MORE_SLACK;
+	int slot = nk_ui_footer_slot(ctx->current);
+
+	if (overflows && slot < 0)
+	{
+		s_footer_wins[s_footer_next] = ctx->current;
+		s_footer_next = (s_footer_next + 1) % NK_UI_FOOTER_SLOTS;
+	}
+	else if (!overflows && slot >= 0)
+		s_footer_wins[slot] = NULL;
+}
+
 static int nk_ui_begin_panel(const char *name, const char *title, struct nk_rect bounds, nk_flags flags)
 {
+	float footer_h = s_ctx->style.window.scrollbar_size.y;
 	float avail = bounds.w - (s_ctx->style.window.header.padding.x
 		+ s_ctx->style.window.header.label_padding.x) * 2 - s_ctx->style.window.border * 2;
 	int fit = s_title_font.ready ? nk_ui_fit_title_scale(title, avail) : 0;
@@ -1650,7 +1692,10 @@ static int nk_ui_begin_panel(const char *name, const char *title, struct nk_rect
 
 	if (font)
 		nk_style_push_font(s_ctx, &font->handle);
+	if (!(flags & NK_WINDOW_NO_SCROLLBAR) && nk_ui_footer_slot(nk_window_find(s_ctx, name)) >= 0)
+		s_ctx->style.window.scrollbar_size.y = (float)s_row_h;	// nuklear sizes the footer from this
 	opened = nk_begin_titled(s_ctx, name, title, bounds, flags);
+	s_ctx->style.window.scrollbar_size.y = footer_h;
 	if (font)
 		nk_style_pop_font(s_ctx);
 	if (s_title_font.ready)
@@ -4447,13 +4492,12 @@ int nk_ui_take_page_pick(void)
 #define NK_UI_MORE_TEXT		"Scroll down for more"
 #define NK_UI_MORE_BOUNCE_MS	900
 #define NK_UI_MORE_BOUNCE_FRAC	0.15f
-#define NK_UI_MORE_SLACK	2.0f
 
 static int nk_ui_has_more_below(struct nk_context *ctx)
 {
 	struct nk_panel *layout = ctx->current->layout;
 
-	return layout->at_y + layout->row.height > layout->clip.y + layout->clip.h + NK_UI_MORE_SLACK;
+	return layout->at_y + layout->row.height - (float)*layout->offset_y > layout->clip.y + layout->clip.h + NK_UI_MORE_SLACK;
 }
 
 // bouncing "scroll down for more" and a down arrow, centred in `area`
@@ -4479,13 +4523,18 @@ static void nk_ui_draw_more(struct nk_context *ctx, struct nk_rect area, int fil
 	nk_fill_triangle(canvas, x, y, x + arrow, y, x + arrow * 0.5f, y + arrow, fg);
 }
 
-// SNG: a pane with no room below it says so over its last line
+// SNG: a scrolling panel says so in its footer, left of the size grip
 static void nk_ui_more_below(struct nk_context *ctx)
 {
-	struct nk_rect clip = ctx->current->layout->clip;
+	struct nk_panel *layout = ctx->current->layout;
+	struct nk_rect footer = nk_rect(layout->bounds.x, layout->bounds.y + layout->bounds.h,
+		layout->bounds.w - s_row_h, layout->footer_height);
 
-	if (nk_ui_has_more_below(ctx))
-		nk_ui_draw_more(ctx, nk_rect(clip.x, clip.y + clip.h - s_row_h, clip.w, (float)s_row_h), 1);
+	nk_ui_note_overflow(ctx);
+	if (!nk_ui_has_footer(ctx) || !nk_ui_has_more_below(ctx))
+		return;
+	nk_push_scissor(nk_window_get_canvas(ctx), nk_rect(-8192.0f, -8192.0f, 16384.0f, 16384.0f));
+	nk_ui_draw_more(ctx, footer, 0);
 }
 
 // The tabbed panes keep a line of their own under them for the hint.
