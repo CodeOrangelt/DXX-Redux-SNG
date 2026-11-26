@@ -35,6 +35,10 @@ build_app() {
     for i in libvorbisfile-3.dll libvorbis-0.dll libogg-0.dll libmikmod-3.dll libopenal-1.dll; do cp -p $dlldir/$i $outdir/; done
     cp -p $dlldir/libFLAC.dll $outdir/libFLAC-8.dll
 
+    # CLANG64's SDL.dll is sdl12-compat, which loads SDL2.dll at run time,
+    # so ntldd never sees it
+    cp -p $dlldir/SDL2.dll $outdir/
+
     # Copy in other resources
     cp ../COPYING.txt ${outdir}/
     cp ../${inipath} ${outdir}/
