@@ -2516,20 +2516,6 @@ static int nk_ui_tab_cell(struct nk_context *ctx, const char *name, int index, i
 	return nk_selectable_label(ctx, name, NK_TEXT_CENTERED, &on) && on;
 }
 
-static void nk_ui_tab_strip(struct nk_context *ctx, const char *const *names, int count, int *active)
-{
-	int i;
-
-	// SNG: gamepad bumpers arrive as Page Up/Down
-	if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_DOWN))
-		*active = (*active + 1) % count;
-	if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_UP))
-		*active = (*active + count - 1) % count;
-	for (i = 0; i < count; i++)
-		if (nk_ui_tab_cell(ctx, names[i], i, count, i == *active))
-			*active = i;
-}
-
 static void nk_ui_build_team_rules(struct nk_context *ctx)
 {
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
@@ -2674,16 +2660,37 @@ static const char *const Advanced_tabs[ADV_TABS] = { "Game Rules", "Powerups & W
 static int s_advanced_tab;
 
 // tab strip on top; the open tab fills the group the caller begins below it
+#define ADV_TAB_LIST_FRAC	0.27f
+
+// SNG: tabs listed down the left, the open tab's group fills the right
 static int nk_ui_advanced_tabs(struct nk_context *ctx)
 {
+	static const float widths[] = { ADV_TAB_LIST_FRAC, 1.0f - ADV_TAB_LIST_FRAC };
 	float row = NK_UI_ROW_HEIGHT + ctx->style.window.spacing.y;
 	int tabs = net_udp_solo() ? ADV_TAB_NETWORK : ADV_TABS;	// offline: no Network tab
-	float pane_h = nk_window_get_content_region(ctx).h - row * (1 + nk_ui_tab_strip_rows(tabs)) - ctx->style.window.padding.y * 2;
+	float pane_h = nk_window_get_content_region(ctx).h - row - ctx->style.window.padding.y * 2;
+	int i;
 
 	if (s_advanced_tab >= tabs)
 		s_advanced_tab = 0;
-	nk_ui_tab_strip(ctx, Advanced_tabs, tabs, &s_advanced_tab);
-	nk_layout_row_dynamic(ctx, max(pane_h, row * 6), 1);
+	// gamepad bumpers arrive as Page Up/Down
+	if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_DOWN))
+		s_advanced_tab = (s_advanced_tab + 1) % tabs;
+	if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_UP))
+		s_advanced_tab = (s_advanced_tab + tabs - 1) % tabs;
+	nk_layout_row(ctx, NK_DYNAMIC, max(pane_h, row * 6), 2, widths);
+	if (nk_group_begin(ctx, "advtabs", NK_WINDOW_BORDER | NK_WINDOW_NO_SCROLLBAR))
+	{
+		nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+		for (i = 0; i < tabs; i++)
+		{
+			nk_bool on = i == s_advanced_tab;
+
+			if (nk_selectable_label(ctx, Advanced_tabs[i], NK_TEXT_LEFT, &on) && on)
+				s_advanced_tab = i;
+		}
+		nk_group_end(ctx);
+	}
 	return s_advanced_tab;
 }
 
