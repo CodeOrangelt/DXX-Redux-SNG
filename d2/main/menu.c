@@ -2476,107 +2476,128 @@ struct obs_menu_data
 #define OBS_MENU_MODE_SWITCHED -2
 #define OBS_MENU_OVERWRITE_MODES -3
 
+// Observer menu layout. Grouped under all-caps headings so the menu lays
+// itself out in columns instead of one column taller than the screen.
+enum
+{
+	opt_obs_mode,
+	opt_obs_switch,
+	opt_obs_share,
+
+	opt_obs_head_view,
+	opt_obs_turbo,
+	opt_obs_cockpit,
+	opt_obs_transparent_ship,
+	opt_obs_third_person_dist,
+	opt_obs_hide_muzzle,
+
+	opt_obs_head_scoreboard,
+	opt_obs_sb_shield_text,
+	opt_obs_sb_shield_bar,
+	opt_obs_sb_ammo_bars,
+	opt_obs_sb_primary,
+	opt_obs_sb_secondary,
+
+	opt_obs_head_players,
+	opt_obs_names,
+	opt_obs_damage,
+	opt_obs_shield_text,
+	opt_obs_shield_bar,
+
+	opt_obs_head_info,
+	opt_obs_kill_feed,
+	opt_obs_death_summary,
+	opt_obs_streaks,
+	opt_obs_kill_graph,
+	opt_obs_breakdown,
+	opt_obs_obs_list,
+	opt_obs_chat,
+	opt_obs_player_chat,
+	opt_obs_bomb_times,
+	opt_obs_count
+};
+
 void do_obs_menu()
 {
-	newmenu_item m[33];
+	newmenu_item m[opt_obs_count];
 	struct obs_menu_data obs_menu_data;
 	obs_menu_data.mode = is_observer() ? get_observer_game_mode() : 0;
 	int i = 0;
 
 	do {
 		int cmode = obs_menu_data.mode;
-
 		char mode_text[40];
-		snprintf(mode_text, SDL_arraysize(mode_text), "Currently configuring: %s",
+		snprintf(mode_text, SDL_arraysize(mode_text), "Configuring: %s",
 			PlayerCfg.ObsShareSettings ? "All" : Obs_mode_names[cmode]);
-		m[0].type = NM_TYPE_TEXT;
-		m[0].text = mode_text;
+		ADD_TEXT(opt_obs_mode, mode_text);
 
 		if (PlayerCfg.ObsShareSettings) {
-			m[1].type = NM_TYPE_TEXT;
-			m[1].text = "Switch Game Mode (N/A)";
+			m[opt_obs_switch].type = NM_TYPE_TEXT;
+			m[opt_obs_switch].text = "Switch Game Mode (N/A)";
 		} else {
-			m[1].type = NM_TYPE_MENU;
-			m[1].text = "Switch Game Mode";
+			m[opt_obs_switch].type = NM_TYPE_MENU;
+			m[opt_obs_switch].text = "Switch Game Mode";
 		}
+		ADD_CHECK(opt_obs_share, "Share Settings Across Modes", PlayerCfg.ObsShareSettings);
 
-		ADD_CHECK(2, "Share Settings Across Modes", PlayerCfg.ObsShareSettings);
+		ADD_TEXT(opt_obs_head_view, "VIEW");
+		ADD_CHECK(opt_obs_turbo, "Fly fast", PlayerCfg.ObsTurbo[cmode]);
+		ADD_CHECK(opt_obs_cockpit, "Cockpit in first person", PlayerCfg.ObsShowCockpit[cmode]);
+		ADD_CHECK(opt_obs_transparent_ship, "Transparent third-person ship", PlayerCfg.ObsTransparentThirdPerson[cmode]);
+		ADD_CHECK(opt_obs_third_person_dist, "Increase third-person distance", PlayerCfg.ObsIncreaseThirdPersonDist[cmode]);
+		ADD_CHECK(opt_obs_hide_muzzle, "Hide energy weapon muzzle", PlayerCfg.ObsHideEnergyWeaponMuzzle[cmode]);
 
-		m[3].type = NM_TYPE_TEXT;
-		m[3].text = "";
+		ADD_TEXT(opt_obs_head_scoreboard, "SCOREBOARD");
+		ADD_CHECK(opt_obs_sb_shield_text, "Shield text", PlayerCfg.ObsShowScoreboardShieldText[cmode]);
+		ADD_CHECK(opt_obs_sb_shield_bar, "Shield bar", PlayerCfg.ObsShowScoreboardShieldBar[cmode]);
+		ADD_CHECK(opt_obs_sb_ammo_bars, "Energy and ammo bars", PlayerCfg.ObsShowAmmoBars[cmode]);
+		ADD_CHECK(opt_obs_sb_primary, "Primary weapon", PlayerCfg.ObsShowPrimary[cmode]);
+		ADD_CHECK(opt_obs_sb_secondary, "Secondary weapon", PlayerCfg.ObsShowSecondary[cmode]);
 
-		ADD_CHECK(4, "Fly Fast", PlayerCfg.ObsTurbo[cmode]);
-		ADD_CHECK(5, "Show Cockpit in First Person", PlayerCfg.ObsShowCockpit[cmode]);
+		ADD_TEXT(opt_obs_head_players, "ON PLAYERS");
+		ADD_CHECK(opt_obs_names, "Player names", PlayerCfg.ObsShowNames[cmode]);
+		ADD_CHECK(opt_obs_damage, "Damage text", PlayerCfg.ObsShowDamage[cmode]);
+		ADD_CHECK(opt_obs_shield_text, "Shield text", PlayerCfg.ObsShowShieldText[cmode]);
+		ADD_CHECK(opt_obs_shield_bar, "Shield bar", PlayerCfg.ObsShowShieldBar[cmode]);
 
-		m[6].type = NM_TYPE_TEXT;
-		m[6].text = "";
+		ADD_TEXT(opt_obs_head_info, "INFORMATION");
+		ADD_CHECK(opt_obs_kill_feed, "Kill feed", PlayerCfg.ObsShowKillFeed[cmode]);
+		ADD_CHECK(opt_obs_death_summary, "Death summary", PlayerCfg.ObsShowDeathSummary[cmode]);
+		ADD_CHECK(opt_obs_streaks, "Streaks and runs", PlayerCfg.ObsShowStreaks[cmode]);
+		ADD_CHECK(opt_obs_kill_graph, "Kills over time graph", PlayerCfg.ObsShowKillGraph[cmode]);
+		ADD_CHECK(opt_obs_breakdown, "Damage breakdown", PlayerCfg.ObsShowBreakdown[cmode]);
+		ADD_CHECK(opt_obs_obs_list, "List of observers", PlayerCfg.ObsShowObs[cmode]);
+		ADD_CHECK(opt_obs_chat, "Observer chat", PlayerCfg.ObsChat[cmode]);
+		ADD_CHECK(opt_obs_player_chat, "Player chat", PlayerCfg.ObsPlayerChat[cmode]);
+		ADD_CHECK(opt_obs_bomb_times, "Bomb/mine countdowns", PlayerCfg.ObsShowBombTimes[cmode]);
 
-		m[7].type = NM_TYPE_TEXT;
-		m[7].text = "Show on Scoreboard:";
+		i = newmenu_do1_nk(NULL, "Observer Mode", SDL_arraysize(m), m, menu_obs_options_handler, &obs_menu_data, i);
 
-		ADD_CHECK(8, "Shield Text", PlayerCfg.ObsShowScoreboardShieldText[cmode]);
-		ADD_CHECK(9, "Shield Bar", PlayerCfg.ObsShowScoreboardShieldBar[cmode]);
-		ADD_CHECK(10, "Energy and Ammo Bars", PlayerCfg.ObsShowAmmoBars[cmode]);
-		ADD_CHECK(11, "Primary Weapon", PlayerCfg.ObsShowPrimary[cmode]);
-		ADD_CHECK(12, "Secondary Weapon", PlayerCfg.ObsShowSecondary[cmode]);
-
-		m[13].type = NM_TYPE_TEXT;
-		m[13].text = "";
-
-		m[14].type = NM_TYPE_TEXT;
-		m[14].text = "Show on Player:";
-
-		ADD_CHECK(15, "Player Names", PlayerCfg.ObsShowNames[cmode]);
-		ADD_CHECK(16, "Damage Text", PlayerCfg.ObsShowDamage[cmode]);
-		ADD_CHECK(17, "Shield Text", PlayerCfg.ObsShowShieldText[cmode]);
-		ADD_CHECK(18, "Shield Bar", PlayerCfg.ObsShowShieldBar[cmode]);
-
-		m[19].type = NM_TYPE_TEXT;
-		m[19].text = "";
-
-		m[20].type = NM_TYPE_TEXT;
-		m[20].text = "Show Information:";
-
-		ADD_CHECK(21, "Kill Feed", PlayerCfg.ObsShowKillFeed[cmode]);
-		ADD_CHECK(22, "Death Summary", PlayerCfg.ObsShowDeathSummary[cmode]);
-		ADD_CHECK(23, "Streaks and Runs", PlayerCfg.ObsShowStreaks[cmode]);
-		ADD_CHECK(24, "Kills over Time Graph", PlayerCfg.ObsShowKillGraph[cmode]);
-		ADD_CHECK(25, "Damage Breakdown", PlayerCfg.ObsShowBreakdown[cmode]);
-		ADD_CHECK(26, "List of Observers", PlayerCfg.ObsShowObs[cmode]);
-		ADD_CHECK(27, "Observer Chat", PlayerCfg.ObsChat[cmode]);
-		ADD_CHECK(28, "Player Chat", PlayerCfg.ObsPlayerChat[cmode]);
-		ADD_CHECK(29, "Bomb/Mine Countdowns", PlayerCfg.ObsShowBombTimes[cmode]);
-		ADD_CHECK(30, "Transparent third person ship", PlayerCfg.ObsTransparentThirdPerson[cmode]);
-		ADD_CHECK(31, "Increase third person distance", PlayerCfg.ObsIncreaseThirdPersonDist[cmode]);
-		ADD_CHECK(32, "Hide energy weapon muzzle", PlayerCfg.ObsHideEnergyWeaponMuzzle[cmode]);
-
-		i = newmenu_do1_nk(NULL, "JinX Mode Options", SDL_arraysize(m), m, menu_obs_options_handler, &obs_menu_data, i);
-
-		PlayerCfg.ObsShareSettings = m[2].value;
+		PlayerCfg.ObsShareSettings = m[opt_obs_share].value;
 		// Note: obs_menu_data.mode may have changed; we kept a copy in cmode which we use here
-		PlayerCfg.ObsTurbo[cmode] = m[4].value;
-		PlayerCfg.ObsShowCockpit[cmode] = m[5].value;
-		PlayerCfg.ObsShowScoreboardShieldText[cmode] = m[8].value;
-		PlayerCfg.ObsShowScoreboardShieldBar[cmode] = m[9].value;
-		PlayerCfg.ObsShowAmmoBars[cmode] = m[10].value;
-		PlayerCfg.ObsShowPrimary[cmode] = m[11].value;
-		PlayerCfg.ObsShowSecondary[cmode] = m[12].value;
-		PlayerCfg.ObsShowNames[cmode] = m[15].value;
-		PlayerCfg.ObsShowDamage[cmode] = m[16].value;
-		PlayerCfg.ObsShowShieldText[cmode] = m[17].value;
-		PlayerCfg.ObsShowShieldBar[cmode] = m[18].value;
-		PlayerCfg.ObsShowKillFeed[cmode] = m[21].value;
-		PlayerCfg.ObsShowDeathSummary[cmode] = m[22].value;
-		PlayerCfg.ObsShowStreaks[cmode] = m[23].value;
-		PlayerCfg.ObsShowKillGraph[cmode] = m[24].value;
-		PlayerCfg.ObsShowBreakdown[cmode] = m[25].value;
-		PlayerCfg.ObsShowObs[cmode] = m[26].value;
-		PlayerCfg.ObsChat[cmode] = m[27].value;
-		PlayerCfg.ObsPlayerChat[cmode] = m[28].value;
-		PlayerCfg.ObsShowBombTimes[cmode] = m[29].value;
-		PlayerCfg.ObsTransparentThirdPerson[cmode] = m[30].value;
-		PlayerCfg.ObsIncreaseThirdPersonDist[cmode] = m[31].value;
-		PlayerCfg.ObsHideEnergyWeaponMuzzle[cmode] = m[32].value;
+		PlayerCfg.ObsTurbo[cmode] = m[opt_obs_turbo].value;
+		PlayerCfg.ObsShowCockpit[cmode] = m[opt_obs_cockpit].value;
+		PlayerCfg.ObsTransparentThirdPerson[cmode] = m[opt_obs_transparent_ship].value;
+		PlayerCfg.ObsIncreaseThirdPersonDist[cmode] = m[opt_obs_third_person_dist].value;
+		PlayerCfg.ObsHideEnergyWeaponMuzzle[cmode] = m[opt_obs_hide_muzzle].value;
+		PlayerCfg.ObsShowScoreboardShieldText[cmode] = m[opt_obs_sb_shield_text].value;
+		PlayerCfg.ObsShowScoreboardShieldBar[cmode] = m[opt_obs_sb_shield_bar].value;
+		PlayerCfg.ObsShowAmmoBars[cmode] = m[opt_obs_sb_ammo_bars].value;
+		PlayerCfg.ObsShowPrimary[cmode] = m[opt_obs_sb_primary].value;
+		PlayerCfg.ObsShowSecondary[cmode] = m[opt_obs_sb_secondary].value;
+		PlayerCfg.ObsShowNames[cmode] = m[opt_obs_names].value;
+		PlayerCfg.ObsShowDamage[cmode] = m[opt_obs_damage].value;
+		PlayerCfg.ObsShowShieldText[cmode] = m[opt_obs_shield_text].value;
+		PlayerCfg.ObsShowShieldBar[cmode] = m[opt_obs_shield_bar].value;
+		PlayerCfg.ObsShowKillFeed[cmode] = m[opt_obs_kill_feed].value;
+		PlayerCfg.ObsShowDeathSummary[cmode] = m[opt_obs_death_summary].value;
+		PlayerCfg.ObsShowStreaks[cmode] = m[opt_obs_streaks].value;
+		PlayerCfg.ObsShowKillGraph[cmode] = m[opt_obs_kill_graph].value;
+		PlayerCfg.ObsShowBreakdown[cmode] = m[opt_obs_breakdown].value;
+		PlayerCfg.ObsShowObs[cmode] = m[opt_obs_obs_list].value;
+		PlayerCfg.ObsChat[cmode] = m[opt_obs_chat].value;
+		PlayerCfg.ObsPlayerChat[cmode] = m[opt_obs_player_chat].value;
+		PlayerCfg.ObsShowBombTimes[cmode] = m[opt_obs_bomb_times].value;
 
 		// Only update other modes *after* we update the current one; user may have changed something
 		if (i == OBS_MENU_OVERWRITE_MODES || PlayerCfg.ObsShareSettings)
@@ -2624,7 +2645,7 @@ int menu_obs_options_handler ( newmenu *menu, d_event *event, void *userdata )
 	switch (event->type)
 	{
 		case EVENT_NEWMENU_CHANGED:
-			if (citem == 2) {
+			if (citem == opt_obs_share) {
 				newmenu_item* item = &newmenu_get_items(obs_menu_data->menu)[citem];
 				if (item->value == 1) {
 					// The user enabled sharing settings. Double-check that this is what they want
@@ -2651,7 +2672,7 @@ int menu_obs_options_handler ( newmenu *menu, d_event *event, void *userdata )
 			break;
 
 		case EVENT_NEWMENU_SELECTED:
-			if (citem == 1) {
+			if (citem == opt_obs_switch) {
 				newmenu_listbox1("Select Game Mode", SDL_arraysize(Obs_mode_names), (char **)Obs_mode_names,
 					1, cmode, select_obs_game_mode_handler, obs_menu_data);
 				return 1;
