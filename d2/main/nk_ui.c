@@ -1300,7 +1300,7 @@ static void nk_ui_apply_theme(struct nk_context *ctx)
 	table[NK_COLOR_TOGGLE_CURSOR] = accent;
 	table[NK_COLOR_SELECT] = nk_ui_shade(12);
 	table[NK_COLOR_SELECT_ACTIVE] = NK_UI_ACCENT_DIM;
-	table[NK_COLOR_SLIDER] = nk_ui_shade(12);
+	table[NK_COLOR_SLIDER] = nk_ui_shade(28);	// must show on a card (shade 10)
 	table[NK_COLOR_SLIDER_CURSOR] = accent;
 	table[NK_COLOR_SLIDER_CURSOR_HOVER] = bright;
 	table[NK_COLOR_SLIDER_CURSOR_ACTIVE] = bright;
@@ -4963,6 +4963,7 @@ static int nk_ui_reorder_row(struct nk_context *ctx, newmenu_item *items, int ni
 }
 
 #define NK_UI_INLINE_LABEL_FRAC	0.42f
+#define NK_UI_INLINE_LABEL_MAX_FRAC	0.7f
 
 // Settings menus draw their links as slim rows, not full-width buttons.
 static int s_link_rows;
@@ -5205,8 +5206,15 @@ static int nk_ui_menu_item_widget(struct nk_context *ctx, newmenu_item *items, i
 
 		case NM_TYPE_SLIDER:
 		{
-			static const float split[] = { NK_UI_INLINE_LABEL_FRAC, 1.0f - NK_UI_INLINE_LABEL_FRAC };
+			const struct nk_user_font *font = ctx->style.font;
+			float row_w = NK_MAX(nk_window_get_content_region(ctx).w, 1.0f);
+			float label_w = font->width(font->userdata, font->height, item->text, nk_strlen(item->text))
+				+ ctx->style.text.padding.x * 2 + ctx->style.window.spacing.x;
+			float frac = NK_CLAMP(NK_UI_INLINE_LABEL_FRAC, label_w / row_w, NK_UI_INLINE_LABEL_MAX_FRAC);
+			float split[2];
 
+			split[0] = frac;	// a long label pushes the bar over rather than being cut
+			split[1] = 1.0f - frac;
 			nk_ui_drop_empty_row(ctx);
 			nk_layout_row(ctx, NK_DYNAMIC, (float)s_row_h, 2, split);
 			nk_label(ctx, item->text, NK_TEXT_LEFT);
@@ -5527,13 +5535,29 @@ int nk_ui_pane_split(const void *items)
 #define NK_UI_MAX_CARDS			32
 
 // one card per section: the rows from a heading up to the next
+static int nk_ui_section_shown(const newmenu_item *items, int nitems, int first, int last)
+{
+	unsigned int collapsed = nk_ui_collapsed_mask();
+	int i;
+
+	for (i = first; i < last; i++)
+		if (!nk_ui_item_is_folded(items, nitems, i, collapsed))
+			return 1;
+	return 0;
+}
+
+// sections folded away (the closed tabs) get no card
 static int nk_ui_section_starts(const newmenu_item *items, int nitems, int *starts, int most)
 {
-	int i, count = 0;
+	int i, next, count = 0;
 
-	for (i = 0; i < nitems && count < most; i++)
-		if (i == 0 || nk_ui_is_section_head(&items[i]))
+	for (i = 0; i < nitems && count < most; i = next)
+	{
+		for (next = i + 1; next < nitems && !nk_ui_is_section_head(&items[next]); next++)
+			;
+		if (nk_ui_section_shown(items, nitems, i, next))
 			starts[count++] = i;
+	}
 	return count;
 }
 
