@@ -1709,42 +1709,60 @@ fix64	Last_laser_fired_time = 0;
 #define GAUSS_HEAT_COOL_SECS	3
 #define GAUSS_HEAT_SLOWEST	2
 #define GAUSS_HEAT_SHAKE	8	// rotvel kick divisor, as Vulcan Overheat's
-#define GAUSS_HEAT_RED_MAX	4	// palette red added per shot at full heat
+#define GAUSS_HEAT_RED_BASE	3	// palette red added per shot when cold
+#define GAUSS_HEAT_RED_MAX	12	// extra red per shot at full heat
+#define GAUSS_SPREAD_COLD	5	// spread divisor: stock gauss is 1/5 of vulcan's
 
-static fix Gauss_heat;
-static fix64 Gauss_last_shot;
+// per player, so every machine sprays a hot gun's shots alike
+static fix Gauss_heat[MAX_PLAYERS];
+static fix64 Gauss_last_shot[MAX_PLAYERS];
 
 static int gauss_overheat_on(void)
 {
 	return (Game_mode & GM_MULTI) && Netgame.GaussOverheat;
 }
 
-// the base wait, stretched by heat
-static fix gauss_heated_wait(fix wait)
+// the base wait, stretched by a player's heat
+static fix gauss_heated_wait(int pnum, fix wait)
 {
-	return fixmul(wait, F1_0 + Gauss_heat * (GAUSS_HEAT_SLOWEST - 1));
+	return fixmul(wait, F1_0 + Gauss_heat[pnum] * (GAUSS_HEAT_SLOWEST - 1));
 }
 
-// called once per gauss shot, before the next wait is set
-static void gauss_heat_shot(fix wait)
+// every gauss shot by any player, as each machine sees it fired
+static void gauss_heat_shot(int pnum)
 {
-	fix idle = (fix)(GameTime64 - Gauss_last_shot) - gauss_heated_wait(wait);
-	vms_vector kick;
+	fix wait = Weapon_info[GAUSS_ID].fire_wait;
+	fix idle = (fix)(GameTime64 - Gauss_last_shot[pnum]) - gauss_heated_wait(pnum, wait);
 
 	if (idle > 0)
-		Gauss_heat -= fixdiv(idle, i2f(GAUSS_HEAT_COOL_SECS));
-	if (Gauss_heat < 0)
-		Gauss_heat = 0;
-	Gauss_heat += fixdiv(gauss_heated_wait(wait), i2f(GAUSS_HEAT_FULL_SECS));
-	if (Gauss_heat > F1_0)
-		Gauss_heat = F1_0;
-	Gauss_last_shot = GameTime64;
+		Gauss_heat[pnum] -= fixdiv(idle, i2f(GAUSS_HEAT_COOL_SECS));
+	if (Gauss_heat[pnum] < 0)
+		Gauss_heat[pnum] = 0;
+	Gauss_heat[pnum] += fixdiv(gauss_heated_wait(pnum, wait), i2f(GAUSS_HEAT_FULL_SECS));
+	if (Gauss_heat[pnum] > F1_0)
+		Gauss_heat[pnum] = F1_0;
+	Gauss_last_shot[pnum] = GameTime64;
+}
+
+// a hot gun sprays: the spread widens from stock gauss to vulcan's
+static int gauss_spread_divisor(object *objp)
+{
+	if (objp->type != OBJ_PLAYER || !gauss_overheat_on())
+		return GAUSS_SPREAD_COLD;
+	gauss_heat_shot(objp->id);
+	return GAUSS_SPREAD_COLD - f2i(Gauss_heat[objp->id] * (GAUSS_SPREAD_COLD - 1));
+}
+
+// what the shooter alone feels: the kick and the red glow
+static void gauss_heat_feel(void)
+{
+	vms_vector kick;
 
 	ConsoleObject->mtype.phys_info.rotvel.x += (d_rand() - 16384) / GAUSS_HEAT_SHAKE;
 	ConsoleObject->mtype.phys_info.rotvel.y += (d_rand() - 16384) / GAUSS_HEAT_SHAKE;
 	make_random_vector(&kick);
 	bump_one_object(ConsoleObject, &kick, 10);
-	PALETTE_FLASH_ADD(1 + f2i(Gauss_heat * GAUSS_HEAT_RED_MAX), 0, 0);
+	PALETTE_FLASH_ADD(GAUSS_HEAT_RED_BASE + f2i(Gauss_heat[Player_num] * GAUSS_HEAT_RED_MAX), 0, 0);
 }
 
 extern int Player_fired_laser_this_frame;
@@ -1799,8 +1817,8 @@ void do_laser_firing_player(void)
 				Next_laser_fire_time = GameTime64 + (F1_0/25) - fire_frame_overhead;
 			else if (Players[Player_num].primary_weapon == GAUSS_INDEX && gauss_overheat_on())
 			{
-				gauss_heat_shot(Weapon_info[weapon_index].fire_wait);
-				Next_laser_fire_time = GameTime64 + gauss_heated_wait(Weapon_info[weapon_index].fire_wait) - fire_frame_overhead;
+				Next_laser_fire_time = GameTime64 + gauss_heated_wait(Player_num, Weapon_info[weapon_index].fire_wait) - fire_frame_overhead;
+				gauss_heat_feel();
 			}
 			else
 				Next_laser_fire_time = GameTime64 + Weapon_info[weapon_index].fire_wait - fire_frame_overhead;
@@ -2014,14 +2032,15 @@ int do_laser_firing(int objnum, int weapon_num, int level, int flags, int nfires
 		case GAUSS_INDEX: {
 			//	Only make sound for 1/4 of vulcan bullets.
 			int	make_sound = 1;
+			int	spread = gauss_spread_divisor(objp);
 			//if (d_rand() > 24576)
 			//	make_sound = 1;
 
-			Laser_player_fire_spread( objp, GAUSS_ID, 6, (d_rand()/8 - 32767/16)/5, (d_rand()/8 - 32767/16)/5, make_sound, 0, shot_orientation);
+			Laser_player_fire_spread( objp, GAUSS_ID, 6, (d_rand()/8 - 32767/16)/spread, (d_rand()/8 - 32767/16)/spread, make_sound, 0, shot_orientation);
 			if (nfires > 1) {
-				Laser_player_fire_spread( objp, GAUSS_ID, 6, (d_rand()/8 - 32767/16)/5, (d_rand()/8 - 32767/16)/5, 0, 0, shot_orientation);
+				Laser_player_fire_spread( objp, GAUSS_ID, 6, (d_rand()/8 - 32767/16)/spread, (d_rand()/8 - 32767/16)/spread, 0, 0, shot_orientation);
 				if (nfires > 2) {
-					Laser_player_fire_spread( objp, GAUSS_ID, 6, (d_rand()/8 - 32767/16)/5, (d_rand()/8 - 32767/16)/5, 0, 0, shot_orientation);
+					Laser_player_fire_spread( objp, GAUSS_ID, 6, (d_rand()/8 - 32767/16)/spread, (d_rand()/8 - 32767/16)/spread, 0, 0, shot_orientation);
 				}
 			}
 			break;
