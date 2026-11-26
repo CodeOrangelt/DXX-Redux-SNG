@@ -62,6 +62,12 @@ typedef struct Cfg
 	int ClassicDepth;
 	int BorderlessWindow;
 	int MenuColor;	// SNG: accent colour family of the menus, see nk_ui.c
+	int UiScale;	// SNG: menu size in percent, see nk_ui_scale()
+	int UiTextScale;	// SNG: text size relative to UiScale, percent
+	int UiRowSpacing;	// SNG: gap between rows, percent of stock
+	int UiPanelWidth;	// SNG: menu panel width, percent of stock
+	int UiFitMenus;	// SNG: shrink a menu taller than the screen instead of scrolling
+	int UiTabs;	// SNG: menu sections as tabs across the top instead of fold-outs
 	char MenuBackground[MENU_BACKGROUND_LEN];	// SNG: screenshot file in SCRNS_DIR, empty = stock
 } __pack__ Cfg;
 

@@ -616,6 +616,25 @@ void free_mission(void)
 //fills in the global list of missions.  Returns the number of missions
 //in the list.  If anarchy_mode is set, then also add anarchy-only missions.
 
+// SNG: the mission the game shipped with, whichever edition is installed
+const char *builtin_mission_name(void)
+{
+	int size = PHYSFSX_fsize("descent2.hog");
+
+	if (size == -1)
+		size = PHYSFSX_fsize("d2demo.hog");
+	switch (size)
+	{
+		case SHAREWARE_MISSION_HOGSIZE:
+		case MAC_SHARE_MISSION_HOGSIZE:
+			return SHAREWARE_MISSION_FILENAME;
+		case OEM_MISSION_HOGSIZE:
+			return OEM_MISSION_FILENAME;
+		default:
+			return FULL_MISSION_FILENAME;
+	}
+}
+
 mle *build_mission_list(int anarchy_mode)
 {
 	mle *mission_list;

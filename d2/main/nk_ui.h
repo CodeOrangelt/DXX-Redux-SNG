@@ -35,6 +35,7 @@ void nk_ui_draw_menu_logo(float left_px, float menu_top_px);
 // limits, etc). Returns 1 if the player started the game, 0 if they
 // cancelled out. Mirrors the contract of the legacy net_udp_setup_game().
 int nk_ui_hosting_setup(void);
+int nk_ui_singleplayer_setup(void);
 
 // Runs the "join a game" browser: discovers LAN/tracker games, shows each
 // with a Host|Avg ping column, and hands a selected row to the existing
@@ -79,6 +80,8 @@ int nk_ui_has_sections(const struct newmenu_item *items, int nitems);
 unsigned int nk_ui_recall_sections(const char *title, const struct newmenu_item *items, int nitems);
 void nk_ui_remember_sections(const char *title, unsigned int mask);
 int nk_ui_is_collapsible_head(const struct newmenu_item *items, int nitems, int index);
+int nk_ui_tabs_active(const struct newmenu_item *items, int nitems);
+int nk_ui_next_tab(const struct newmenu_item *items, int nitems, unsigned int *collapsed, int direction);
 void nk_ui_toggle_section(const struct newmenu_item *items, int nitems, int index, unsigned int *collapsed);
 int nk_ui_radio_chosen(const struct newmenu_item *items, int start, int end);
 
@@ -86,6 +89,14 @@ int nk_ui_radio_chosen(const struct newmenu_item *items, int start, int end);
 int nk_ui_menu_color_count(void);
 const char *nk_ui_menu_color_name(int index);
 void nk_ui_set_menu_color(int index);
+
+// Menu size: GUI 1-4 presets, or any percent set by dragging a panel corner.
+#define NK_UI_SCALE_MIN		50
+#define NK_UI_SCALE_MAX		300
+int nk_ui_scale_preset_count(void);
+int nk_ui_scale_preset(int index);
+int nk_ui_scale_nearest_preset(int percent);
+void nk_ui_menu_size(void);
 
 // Presents the panels built this frame; see nk_ui.c.
 void nk_ui_flush(void);

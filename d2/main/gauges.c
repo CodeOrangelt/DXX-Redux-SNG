@@ -4001,7 +4001,7 @@ void hud_show_kill_list()
 				x0 -= FSPACX(18);
 			}
 
-			if(Show_network_stats) {
+			if(Show_network_stats && !net_udp_solo()) {
 				x1 -= FSPACX(45);
 				x0 -= FSPACX(45);
 
@@ -4122,7 +4122,7 @@ void hud_show_kill_list()
 		}
 
 
-		if((Show_network_stats && !is_observer()) && player_num != Player_num && Players[player_num].connected && Show_kill_list != 3) {
+		if((Show_network_stats && !is_observer() && !net_udp_solo()) && player_num != Player_num && Players[player_num].connected && Show_kill_list != 3) {
 			int lag = -1;
 
 			if(Netgame.RetroProtocol) {

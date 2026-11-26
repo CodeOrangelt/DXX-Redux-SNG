@@ -6143,7 +6143,7 @@ static int load_server_map(int *level, int *skill)
 	if (find_map(DEFAULT_MAP, mission, sizeof(mission), &why) && load_mission_by_name(mission))
 		return 1;
 	con_printf(CON_URGENT, "DEDICATED: no %s (%s), using the built-in mission\n", DEFAULT_MAP, why);
-	return load_mission_by_name(FULL_MISSION_FILENAME);
+	return load_mission_by_name((char *)builtin_mission_name());
 }
 
 void duelbot_frame(void)
@@ -6428,7 +6428,7 @@ static int load_bench_mission(void)
 {
 	const char *mission = arg_string("-duelmission");
 
-	return load_mission_by_name(mission ? (char *)mission : FULL_MISSION_FILENAME);
+	return load_mission_by_name((char *)(mission ? mission : builtin_mission_name()));
 }
 
 int duelbot_headless(void)

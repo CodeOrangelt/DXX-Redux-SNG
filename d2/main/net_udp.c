@@ -224,7 +224,13 @@ int num_active_udp_games = 0;
 int num_active_udp_changed = 0;
 static int UDP_Socket[3] = { -1, -1, -1 };
 // SNG: Play-menu Survival -- a netgame no one else can see or join
-static int Solo_survival = 0;
+static int Solo_game = 0;
+
+// SNG: Singleplayer -- a netgame in name only; no one else can ever be in it
+int net_udp_solo(void)
+{
+	return Solo_game;
+}
 static int Auto_host = 0;		// headless CPU test host: no lobby, no UPnP
 static int Auto_host_watches;	// dedicated server: the host only observes
 static int Auto_host_lobby;	// dedicated server: form until a human joins
@@ -2544,7 +2550,7 @@ void net_udp_init()
 
 void net_udp_close()
 {
-	Solo_survival = 0;
+	Solo_game = 0;
 
 #ifdef _WIN32
 	WSACleanup();
@@ -4263,7 +4269,7 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 
 static void net_udp_broadcast_game_info(ubyte info_upid)
 {
-	if (Solo_survival)
+	if (Solo_game)
 		return;
 
 	net_udp_send_game_info(GBcast, info_upid, 0, 0);
@@ -4749,7 +4755,7 @@ void net_udp_process_request(UDP_sequence_packet *their)
 
 void net_udp_process_packet(ubyte *data, struct _sockaddr sender_addr, int length, int is_proxy )
 {
-	if (Solo_survival)
+	if (Solo_game)
 		return;
 
 	UDP_sequence_packet their;
@@ -6454,8 +6460,12 @@ int net_udp_setup_game()
 	return choice >= 0;
 }
 
-int net_udp_setup_solo_survival(void)
+// SNG: Singleplayer. A netgame nobody can reach -- port 0, never listed --
+// so every mode plays offline against CPUs. Leaves the multiplayer profile alone.
+int net_udp_setup_singleplayer(void)
 {
+	int started;
+
 	net_udp_init();
 	net_udp_reset_connection_statuses();
 	change_playernum_to(0);
@@ -6466,18 +6476,18 @@ int net_udp_setup_solo_survival(void)
 	strcpy(Netgame.mission_name, Current_mission_filename);
 	strcpy(Netgame.mission_title, Current_mission_longname);
 	Netgame.levelnum = 1;
-	Netgame.gamemode = NETGAME_SURVIVAL;
-	Netgame.max_numplayers = 1;
 	Netgame.max_numobservers = 0;
 	Netgame.game_flags |= NETGAME_FLAG_CLOSED;
 	Netgame.Tracker = 0;
 
-	Solo_survival = 1;
-	if (net_udp_start_game())
-		return 1;
-
-	net_udp_close();
-	return 0;
+	Solo_game = 1;
+	started = nk_ui_singleplayer_setup();
+	if (!started)
+	{
+		Solo_game = 0;
+		net_udp_close();
+	}
+	return started;
 }
 
 // SNG: an always-open 1v1 server on RDL solo defaults. Either the host's own
@@ -6836,6 +6846,8 @@ int net_udp_send_sync(void)
 			Netgame.locations[i]=np;
 		}
 	}
+	if (Netgame.gamemode == NETGAME_CAPTURE_FLAG)
+		ctf_assign_home_starts(Netgame.locations);
 
 	// Push current data into the sync packet
 
@@ -7068,6 +7080,12 @@ static int lobby_ready(fix64 *first_join_at)
 	return timer_query() - *first_join_at >= LOBBY_FILL_WAIT;
 }
 
+static int net_udp_picks_teams(void)
+{
+	return Netgame.gamemode == NETGAME_TEAM_ANARCHY || Netgame.gamemode == NETGAME_CAPTURE_FLAG ||
+		Netgame.gamemode == NETGAME_TEAM_HOARD;
+}
+
 static int net_udp_dedicated_lobby(void)
 {
 	fix64 first_join_at = 0;
@@ -7122,7 +7140,7 @@ net_udp_select_players(void)
 
 	if (Auto_host_lobby)
 		return net_udp_dedicated_lobby();
-	if (Solo_survival || Auto_host)
+	if (Solo_game || Auto_host)
 		return net_udp_solo_roster();
 
 	for (i=0; i< MAX_PLAYERS+4; i++ ) {
@@ -7243,9 +7261,7 @@ abort:
 		Netgame.players[i].rank=0;
 	}
 
-	if (Netgame.gamemode == NETGAME_TEAM_ANARCHY ||
-	    Netgame.gamemode == NETGAME_CAPTURE_FLAG ||
-		 Netgame.gamemode == NETGAME_TEAM_HOARD)
+	if (net_udp_picks_teams())
 		 if (!net_udp_select_teams())
 			goto abort;
 
@@ -7256,19 +7272,21 @@ int net_udp_start_game(void)
 {
 	int i;
 
-	i = udp_open_socket(0, Solo_survival ? 0 : atoi(UDP_MyPort)); // port 0: ephemeral, nothing can reach it
+	if (Solo_game)
+		Netgame.Tracker = 0;	// a loaded preset may have turned it back on
+	i = udp_open_socket(0, Solo_game ? 0 : atoi(UDP_MyPort)); // port 0: ephemeral, nothing can reach it
 
 	if (i != 0)
 		return 0;
 	
-	if (!Solo_survival && !duelbot_no_lan() && atoi(UDP_MyPort) != UDP_PORT_DEFAULT)
+	if (!Solo_game && !duelbot_no_lan() && atoi(UDP_MyPort) != UDP_PORT_DEFAULT)
 		i = udp_open_socket(1, UDP_PORT_DEFAULT); // Default port open for Broadcasts
 
 	if (i != 0)
 		return 0;
 
 #ifdef USE_UPNP
-	if (!Solo_survival && (!Auto_host || Auto_host_watches))
+	if (!Solo_game && (!Auto_host || Auto_host_watches))
 	{
 		// UPnP discovery is a blocking network round-trip (up to a couple
 		// seconds, more if it has to retry across several interfaces) --
@@ -7319,6 +7337,12 @@ int net_udp_start_game(void)
 	if(net_udp_select_players())
 	{
 		duelbot_claim_net_slots();
+		// Singleplayer skips the roster, so the team screen comes here, CPUs and all
+		if (Solo_game && net_udp_picks_teams() && !net_udp_select_teams())
+		{
+			Game_mode = GM_GAME_OVER;
+			return 0;
+		}
 		StartNewLevel(Netgame.levelnum);
 	}
 	else
@@ -9431,7 +9455,7 @@ static void net_udp_slk_start(int game_port)
 {
 	int slk_port = game_port ? game_port + SLK_PORT_OFFSET : 0;
 
-	if (Solo_survival || duelbot_benching())
+	if (Solo_game || duelbot_benching())
 		return;
 	slk_bridge_start(slk_port, GameArg.MplSlkFacilitatorAddr, GameArg.MplSlkFacilitatorPort);
 }

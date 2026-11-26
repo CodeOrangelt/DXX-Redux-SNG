@@ -129,6 +129,7 @@ extern Mission *Current_mission; // current mission
 //Returns true if mission loaded ok, else false.
 int load_mission_by_name (char *mission_name);
 int find_mission_by_stem(const char *stem, char *filename, int len);
+const char *builtin_mission_name(void);
 
 //Handles creating and selecting from the mission list.
 //Returns 1 if a mission was loaded.

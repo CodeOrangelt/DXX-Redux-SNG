@@ -114,7 +114,9 @@ enum MENUS
     #endif
     MENU_RACE_GAME,
     MENU_PLAY,
-    MENU_PLAY_SURVIVAL,
+    MENU_CAMPAIGN,
+    MENU_CAMPAIGN_NEW_GAME,
+    MENU_SINGLEPLAYER,
     #ifdef USE_NK_UI
     MENU_SCREENSHOTS,
     #endif
@@ -136,6 +138,7 @@ int do_new_game_menu(void);
 int do_race_game_menu(void);
 void do_multi_player_menu();
 static void do_play_menu(void);
+static void do_campaign_menu(void);
 #ifndef RELEASE
 void do_sandbox_menu();
 #endif
@@ -586,6 +589,15 @@ int do_option ( int select)
 		case MENU_PLAY:
 			do_play_menu();
 			break;
+		case MENU_CAMPAIGN:
+			do_campaign_menu();
+			break;
+		case MENU_CAMPAIGN_NEW_GAME:
+			// Descent II as it shipped: the built-in mission, no picker
+			Race_sp_pending = 0;
+			if (load_mission_by_name((char *)builtin_mission_name()))
+				do_new_game_menu();
+			break;
 		case MENU_NEW_GAME:
 			Race_sp_pending = 0;
 			select_mission(0, "New Game\n\nSelect mission", do_new_game_menu);
@@ -636,9 +648,9 @@ int do_option ( int select)
 			multi_protocol = MULTI_PROTO_UDP;
 			select_mission(1, TXT_MULTI_MISSION, net_udp_setup_game);
 			break;
-		case MENU_PLAY_SURVIVAL:
+		case MENU_SINGLEPLAYER:
 			multi_protocol = MULTI_PROTO_UDP;
-			select_mission(1, "Survival\n\nSelect mission", net_udp_setup_solo_survival);
+			select_mission(1, "Singleplayer\n\nSelect mission", net_udp_setup_singleplayer);
 			break;
 		case MENU_JOIN_MANUAL_UDP_NETGAME:
 			multi_protocol = MULTI_PROTO_UDP;
@@ -2287,11 +2299,30 @@ struct misc_menu_data {
 	char missile_color[30];
 	char my_team_color[30];
 	char other_team_color[30];
+	char ui_scale[40];
 };
+
+#define MISC_UI_SCALE	48
+#define ADD_TEXT(n,txt)     do { m[n].type=NM_TYPE_TEXT; m[n].text=txt;} while (0)
+
+// SNG: menu size, a preset or whatever a dragged corner left
+static void print_ui_scale(char *text, int len)
+{
+#ifdef USE_NK_UI
+	int preset = nk_ui_scale_nearest_preset(GameCfg.UiScale);
+
+	if (nk_ui_scale_preset(preset) == GameCfg.UiScale)
+		snprintf(text, len, "Menu Size: GUI %d (%d%%)...", preset + 1, GameCfg.UiScale);
+	else
+		snprintf(text, len, "Menu Size: Custom (%d%%)...", GameCfg.UiScale);
+#else
+	snprintf(text, len, "GUI Scale: %d%%", GameCfg.UiScale);
+#endif
+}
 
 void do_misc_menu()
 {
-	newmenu_item m[48];
+	newmenu_item m[49];
 	int i = 0;
 	struct misc_menu_data misc_menu_data;
 
@@ -2424,6 +2455,13 @@ void do_misc_menu()
 		// what the command line or ini asked for.
 		ADD_CHECK(44, "Never Auto-Play A Demo At The Menu", PlayerCfg.DisableIdleDemo);
 		ADD_CHECK(47, "Auto-download missing missions (Multi)", GameCfg.AutoDownloadMissions);
+#ifdef USE_NK_UI
+		print_ui_scale(misc_menu_data.ui_scale, SDL_arraysize(misc_menu_data.ui_scale));
+		m[MISC_UI_SCALE].type = NM_TYPE_MENU;
+		m[MISC_UI_SCALE].text = misc_menu_data.ui_scale;
+#else
+		ADD_TEXT(MISC_UI_SCALE, "");
+#endif
 
 		i = newmenu_do1_nk(NULL, "Misc Options", SDL_arraysize(m), m, menu_misc_options_handler, &misc_menu_data, i);
 
@@ -2483,6 +2521,13 @@ int menu_misc_options_handler(newmenu* menu, d_event* event, void* userdata)
 	int citem = newmenu_get_citem(menu);
 	struct misc_menu_data* menu_data = (struct misc_menu_data*)userdata;
 	
+#ifdef USE_NK_UI
+	if (event->type == EVENT_NEWMENU_SELECTED && citem == MISC_UI_SCALE) {
+		nk_ui_menu_size();
+		print_ui_scale(menu_data->ui_scale, SDL_arraysize(menu_data->ui_scale));
+		return 1;
+	}
+#endif
 	if (event->type == EVENT_NEWMENU_CHANGED) {
 		if (citem == 32) {
 			PlayerCfg.ShipColor = menus[citem].value;
@@ -2813,32 +2858,56 @@ static int play_menu_handler(newmenu *menu, d_event *event, int *menu_choice)
 	return 0;
 }
 
+#define PLAY_MENU_ITEMS	4
+
+static void run_choice_menu(char *title, newmenu_item *m, int *menu_choice, int num_options)
+{
+	newmenu_do3_nk( NULL, title, num_options, m, (int (*)(newmenu *, d_event *, void *))play_menu_handler, menu_choice, 0, NULL );
+}
+
+static int alloc_choice_menu(int **menu_choice, newmenu_item **m)
+{
+	MALLOC(*menu_choice, int, PLAY_MENU_ITEMS);
+	if (!*menu_choice)
+		return 0;
+	MALLOC(*m, newmenu_item, PLAY_MENU_ITEMS);
+	if (!*m)
+	{
+		d_free(*menu_choice);
+		return 0;
+	}
+	return 1;
+}
+
+// Campaign: the levels as Descent II shipped them, start to finish
+static void do_campaign_menu(void)
+{
+	int *menu_choice;
+	newmenu_item *m;
+	int num_options = 0;
+
+	if (!alloc_choice_menu(&menu_choice, &m))
+		return;
+	ADD_ITEM("New Game", MENU_CAMPAIGN_NEW_GAME, KEY_N);
+	ADD_ITEM("Load Game", MENU_LOAD_GAME, KEY_L);
+	run_choice_menu("Campaign", m, menu_choice, num_options);
+}
+
 static void do_play_menu(void)
 {
 	int *menu_choice;
 	newmenu_item *m;
 	int num_options = 0;
 
-	MALLOC(menu_choice, int, 5);
-	if (!menu_choice)
+	if (!alloc_choice_menu(&menu_choice, &m))
 		return;
-
-	MALLOC(m, newmenu_item, 5);
-	if (!m)
-	{
-		d_free(menu_choice);
-		return;
-	}
-
-	ADD_ITEM("New Game", MENU_NEW_GAME, KEY_N);
+	ADD_ITEM("Campaign", MENU_CAMPAIGN, KEY_C);
 	ADD_ITEM("Race vs bots", MENU_RACE_GAME, KEY_R);
-	ADD_ITEM("Load Game", MENU_LOAD_GAME, KEY_L);
 #ifdef USE_UDP
-	ADD_ITEM("Survival", MENU_PLAY_SURVIVAL, KEY_S);
-	ADD_ITEM("Multiplayer", MENU_MULTIPLAYER, -1);
+	ADD_ITEM("Singleplayer", MENU_SINGLEPLAYER, KEY_S);
+	ADD_ITEM("Multiplayer", MENU_MULTIPLAYER, KEY_M);
 #endif
-
-	newmenu_do3_nk( NULL, "Play", num_options, m, (int (*)(newmenu *, d_event *, void *))play_menu_handler, menu_choice, 0, NULL );
+	run_choice_menu("Play", m, menu_choice, num_options);
 }
 
 void do_options_menu()
@@ -2869,7 +2938,7 @@ void do_options_menu()
 	// Fall back to main event loop
 	// Allows clean closing and re-opening when resolution changes
 	menu = newmenu_do3_nk( NULL, TXT_OPTIONS, opt_options_count, m, options_menuset, NULL, 0, NULL );
-	if (menu)
+	if (menu && !GameCfg.UiTabs)		// with tabs on, its headings are the tabs
 		newmenu_set_fixed_sections(menu);
 }
 
