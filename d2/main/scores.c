@@ -377,8 +377,7 @@ int scores_handler(window *wind, d_event *event, scores_menu *menu)
 			}
 			break;
 
-		case EVENT_MOUSE_BUTTON_DOWN:
-		case EVENT_MOUSE_BUTTON_UP:
+		case EVENT_MOUSE_BUTTON_DOWN:	// not UP: the menu that opened this acted on the press
 			if (event_mouse_get_button(event) == MBTN_LEFT || event_mouse_get_button(event) == MBTN_RIGHT)
 			{
 				window_close(wind);
