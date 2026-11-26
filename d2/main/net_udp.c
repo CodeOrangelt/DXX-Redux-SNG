@@ -65,9 +65,7 @@
 #include "rbaudio.h"
 #include "config.h"
 #include "vers_id.h"
-#ifdef OGL
 #include "nk_ui.h"
-#endif
 
 #ifdef _WIN32
 #include <Windows.h>
