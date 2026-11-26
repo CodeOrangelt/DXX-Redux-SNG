@@ -75,6 +75,7 @@ static const char UiRowSpacingStr[] ="UiRowSpacing";
 static const char UiPanelWidthStr[] ="UiPanelWidth";
 static const char UiFitMenusStr[] ="UiFitMenus";
 static const char UiTabsStr[] ="UiTabs";
+static const char PadPauseStr[] ="PadPauseButton";
 
 int ReadConfigFile()
 {
@@ -135,6 +136,7 @@ int ReadConfigFile()
 	GameCfg.UiPanelWidth = 100;
 	GameCfg.UiFitMenus = 1;
 	GameCfg.UiTabs = 1;
+	GameCfg.PadPause = PAD_PAUSE_DEFAULT;
 	snprintf(GameCfg.MenuBackground, sizeof(GameCfg.MenuBackground), "%s", MENU_BACKGROUND_DEFAULT);
 
 	infile = PHYSFSX_openReadBuffered("descent.cfg");
@@ -271,6 +273,8 @@ int ReadConfigFile()
 				GameCfg.UiFitMenus = strtol(value, NULL, 10);
 			else if (!strcmp(token, UiTabsStr))
 				GameCfg.UiTabs = strtol(value, NULL, 10);
+			else if (!strcmp(token, PadPauseStr))
+				GameCfg.PadPause = strtol(value, NULL, 10);
 			else if (!strcmp(token, MenuBackgroundStr))	{
 				char * p;
 				snprintf(GameCfg.MenuBackground, sizeof(GameCfg.MenuBackground), "%s", value);
@@ -343,6 +347,7 @@ int WriteConfigFile()
 	PHYSFSX_printf(infile, "%s=%i\n", UiPanelWidthStr, GameCfg.UiPanelWidth);
 	PHYSFSX_printf(infile, "%s=%i\n", UiFitMenusStr, GameCfg.UiFitMenus);
 	PHYSFSX_printf(infile, "%s=%i\n", UiTabsStr, GameCfg.UiTabs);
+	PHYSFSX_printf(infile, "%s=%i\n", PadPauseStr, GameCfg.PadPause);
 	PHYSFSX_printf(infile, "%s=%s\n", MenuBackgroundStr, GameCfg.MenuBackground);
 
 	PHYSFS_close(infile);

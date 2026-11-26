@@ -1272,7 +1272,7 @@ void input_config_sensitivity()
 	PlayerCfg.MouseInertia = m[mouseinertia].value;
 }
 
-static int opt_ic_usejoy = 0, opt_ic_usemouse = 0, opt_ic_confkey = 0, opt_ic_confjoy = 0, opt_ic_confmouse = 0, opt_ic_confweap = 0, opt_ic_mouseflightsim = 0, opt_ic_joymousesens = 0, opt_ic_grabinput = 0, opt_ic_mousefsgauge = 0, opt_ic_stickyrear = 0, opt_ic_autoselect = 0, opt_ic_keyref = 0;
+static int opt_ic_usejoy = 0, opt_ic_usemouse = 0, opt_ic_confkey = 0, opt_ic_confjoy = 0, opt_ic_confmouse = 0, opt_ic_confweap = 0, opt_ic_mouseflightsim = 0, opt_ic_joymousesens = 0, opt_ic_grabinput = 0, opt_ic_mousefsgauge = 0, opt_ic_stickyrear = 0, opt_ic_autoselect = 0, opt_ic_keyref = 0, opt_ic_padmenu = -1;
 static void key_reference_menu(void);
 
 int input_config_menuset(newmenu *menu, d_event *event, void *userdata)
@@ -1319,6 +1319,10 @@ int input_config_menuset(newmenu *menu, d_event *event, void *userdata)
 				input_config_sensitivity();
 			if (citem == opt_ic_autoselect)
 				weapon_autoselect_menu();
+#ifdef USE_NK_UI
+			if (citem == opt_ic_padmenu)
+				nk_ui_pad_buttons_menu();
+#endif
 			if (citem == opt_ic_keyref)
 				key_reference_menu();
 			return 1;		// stay in menu
@@ -1381,6 +1385,10 @@ void input_config()
 	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Sensitivity & deadzone"; nitems++;
 	opt_ic_autoselect = nitems;
 	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Weapon autoselect"; nitems++;
+#ifdef USE_NK_UI
+	opt_ic_padmenu = nitems;
+	m[nitems].type = NM_TYPE_MENU; m[nitems].text = "Controller game-menu button"; nitems++;
+#endif
 
 	m[nitems].type = NM_TYPE_TEXT; m[nitems].text = "MOUSE"; nitems++;
 	opt_ic_mouseflightsim = nitems;
