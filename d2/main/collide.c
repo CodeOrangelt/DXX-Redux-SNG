@@ -1896,7 +1896,12 @@ void drop_missile_1_or_4(object *playerobj,int missile_index, ubyte force)
 
 
 void drop_player_eggs_remote(object *playerobj, ubyte remote);
+void multi_powcap_adjust_remote_cap(int pnum);
+
 void drop_player_eggs(object *playerobj) {
+	// SNG: the host spews for its CPUs, and counts it as every other machine does
+	if (multi_cpu_slot(playerobj->id))
+		multi_powcap_adjust_remote_cap(playerobj->id);
 	drop_player_eggs_remote(playerobj, 0); 
 }
 
