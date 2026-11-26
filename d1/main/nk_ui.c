@@ -5950,6 +5950,7 @@ void nk_ui_newmenu_frame(const void *id, const char *title, const char *subtitle
 // capture state machine; this only draws and reports clicks.
 // ==============================
 
+#define NK_UI_BIND_MIN_SLOT_ROWS	2.0f
 #define NK_UI_BIND_SLOT_ROWS 3.2f
 #define NK_UI_BIND_HEAD_ROWS 2
 #define NK_UI_BIND_MIN_LABEL_ROWS 6
@@ -6068,9 +6069,10 @@ static void nk_ui_bind_fill_width(float panel_w, int nrows, int max_slots, int *
 		*ncols = min(fit, max(*ncols, most));
 	*per_col = (nrows + *ncols - 1) / *ncols;
 	avail = (inner - spacing * (*ncols - 1)) / *ncols;
-	if (avail > *col_w && max_slots > 0)
+	if (max_slots > 0)
 	{
-		*slot_w += (avail - *col_w) / max_slots;
+		// grow to fill, or shrink so the last slot isn't cut off
+		*slot_w = max(*slot_w + (avail - *col_w) / max_slots, (float)s_row_h * NK_UI_BIND_MIN_SLOT_ROWS);
 		*col_w = avail;
 	}
 }
@@ -6097,7 +6099,7 @@ int nk_ui_bind_frame(const void *id, const char *title, const char *hint,
 	label_w = nk_ui_bind_label_width(rows, nrows);
 	slot_w = (float)s_row_h * NK_UI_BIND_SLOT_ROWS;
 	max_slots = nk_ui_bind_max_slots(rows, nrows);
-	col_w = label_w + max_slots * (slot_w + s_ctx->style.window.spacing.x);
+	col_w = label_w + max_slots * (slot_w + s_ctx->style.window.spacing.x) + s_ctx->style.window.group_padding.x * 2;
 
 	rows_per_col = (int)((height * NK_UI_MENU_MAX_HEIGHT_FRAC - NK_UI_MENU_CHROME_HEIGHT) / row_stride)
 		- NK_UI_BIND_HEAD_ROWS - (slot_names ? 1 : 0);
