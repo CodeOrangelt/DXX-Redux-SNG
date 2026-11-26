@@ -3920,10 +3920,14 @@ static uint32_t net_udp_lite_sng_toggles(void)
 	if (Netgame.FairColors)         bits |= LITE_SNG_ALL_BLUE;
 	if (Netgame.BlackAndWhitePyros) bits |= LITE_SNG_ALT_COLORS;
 	if (Netgame.StaticPowerups || Netgame.StaticFusion || Netgame.StaticPlasma || Netgame.StaticVulcan ||
-	    Netgame.StaticSpread || Netgame.StaticLasers)
+	    Netgame.StaticSpread || Netgame.StaticLasers || Netgame.StaticGauss || Netgame.StaticHelix ||
+	    Netgame.StaticPhoenix || Netgame.StaticOmega)
 		bits |= LITE_SNG_STATIC_WEAPONS;
 	if (Netgame.FusionSpawn || Netgame.VulcanSpawn || Netgame.LasersSpawn || Netgame.PlasmaSpawn ||
-	    Netgame.SpreadSpawn || Netgame.SmartsSpawn || Netgame.HomersSpawn || Netgame.BombsSpawn || Netgame.MegasSpawn)
+	    Netgame.SpreadSpawn || Netgame.SmartsSpawn || Netgame.HomersSpawn || Netgame.BombsSpawn || Netgame.MegasSpawn ||
+	    Netgame.GaussSpawn || Netgame.HelixSpawn || Netgame.PhoenixSpawn || Netgame.OmegaSpawn ||
+	    Netgame.FlashSpawn || Netgame.GuidedSpawn || Netgame.SmartMineSpawn || Netgame.MercurySpawn ||
+	    Netgame.EarthshakerSpawn)
 		bits |= LITE_SNG_START_WITH;
 	return bits;
 }

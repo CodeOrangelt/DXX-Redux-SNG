@@ -410,6 +410,7 @@ static struct
 } s_nav = { NULL, 0, 0, 0, 0, -1 };
 
 static void nk_ui_more_below(struct nk_context *ctx);
+static void nk_ui_section(struct nk_context *ctx, const char *text);
 static void nk_ui_drop_empty_row(struct nk_context *ctx);
 
 // Claims this frame's arrow steps for a list, leaving none for the scroller.
@@ -1959,21 +1960,36 @@ static void nk_ui_build_spawn_with_weapons(struct nk_context *ctx, void *userdat
 	if (nk_button_label(ctx, "Back"))
 		*running = 0;
 
-	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	nk_ui_checkbox_ubyte(ctx, "Fusion", &Netgame.FusionSpawn);
-	nk_ui_checkbox_ubyte(ctx, "Vulcan", &Netgame.VulcanSpawn);
-	nk_ui_checkbox_ubyte(ctx, "Plasma", &Netgame.PlasmaSpawn);
-	nk_ui_checkbox_ubyte(ctx, "Spread", &Netgame.SpreadSpawn);
-
 	v = Netgame.LasersSpawn;
-	nk_labelf(ctx, NK_TEXT_LEFT, "Quad Laser Level: %d", Netgame.LasersSpawn);
-	nk_ui_slider_int(ctx, 0, &v, 4, 1);
+	nk_ui_section(ctx, "PRIMARIES");
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
+	if (v)
+		nk_labelf(ctx, NK_TEXT_LEFT, "Quad Lasers: level %d%s", v, v > MAX_LASER_LEVEL + 1 ? " (Super)" : "");
+	else
+		nk_label(ctx, "Quad Lasers: off", NK_TEXT_LEFT);
+	nk_ui_slider_int(ctx, 0, &v, MAX_SUPER_LASER_LEVEL + 1, 1);
 	Netgame.LasersSpawn = (ubyte)v;
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
+	nk_ui_checkbox_ubyte(ctx, "Vulcan", &Netgame.VulcanSpawn);
+	nk_ui_checkbox_ubyte(ctx, "Gauss", &Netgame.GaussSpawn);
+	nk_ui_checkbox_ubyte(ctx, "Spreadfire", &Netgame.SpreadSpawn);
+	nk_ui_checkbox_ubyte(ctx, "Helix", &Netgame.HelixSpawn);
+	nk_ui_checkbox_ubyte(ctx, "Plasma", &Netgame.PlasmaSpawn);
+	nk_ui_checkbox_ubyte(ctx, "Phoenix", &Netgame.PhoenixSpawn);
+	nk_ui_checkbox_ubyte(ctx, "Fusion", &Netgame.FusionSpawn);
+	nk_ui_checkbox_ubyte(ctx, "Omega", &Netgame.OmegaSpawn);
 
+	nk_ui_section(ctx, "SECONDARIES");
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
 	nk_ui_checkbox_ubyte(ctx, "Homers", &Netgame.HomersSpawn);
+	nk_ui_checkbox_ubyte(ctx, "Flash", &Netgame.FlashSpawn);
+	nk_ui_checkbox_ubyte(ctx, "Proximity Bombs", &Netgame.BombsSpawn);
+	nk_ui_checkbox_ubyte(ctx, "Guided", &Netgame.GuidedSpawn);
 	nk_ui_checkbox_ubyte(ctx, "Smarts", &Netgame.SmartsSpawn);
+	nk_ui_checkbox_ubyte(ctx, "Smart Mines", &Netgame.SmartMineSpawn);
 	nk_ui_checkbox_ubyte(ctx, "Megas", &Netgame.MegasSpawn);
-	nk_ui_checkbox_ubyte(ctx, "Bombs", &Netgame.BombsSpawn);
+	nk_ui_checkbox_ubyte(ctx, "Mercury", &Netgame.MercurySpawn);
+	nk_ui_checkbox_ubyte(ctx, "Earthshaker", &Netgame.EarthshakerSpawn);
 }
 
 static void nk_ui_spawn_with_weapons(void)
@@ -1984,7 +2000,7 @@ static void nk_ui_spawn_with_weapons(void)
 
 	while (running)
 	{
-		if (!nk_ui_frame("Spawn Weapons", nk_vec2(0.35f, 0.5f), nk_ui_build_spawn_with_weapons, &running))
+		if (!nk_ui_frame("Spawn Weapons", nk_vec2(0.45f, 0.7f), nk_ui_build_spawn_with_weapons, &running))
 			break;
 	}
 }
@@ -2001,11 +2017,16 @@ static void nk_ui_build_static_weapons(struct nk_context *ctx, void *userdata)
 
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	nk_ui_checkbox_ubyte(ctx, "All Weapons", &Netgame.StaticPowerups);
-	nk_ui_checkbox_ubyte(ctx, "Fusion", &Netgame.StaticFusion);
-	nk_ui_checkbox_ubyte(ctx, "Spreadfire", &Netgame.StaticSpread);
-	nk_ui_checkbox_ubyte(ctx, "Vulcan", &Netgame.StaticVulcan);
-	nk_ui_checkbox_ubyte(ctx, "Plasma", &Netgame.StaticPlasma);
+	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
 	nk_ui_checkbox_ubyte(ctx, "Lasers", &Netgame.StaticLasers);
+	nk_ui_checkbox_ubyte(ctx, "Gauss", &Netgame.StaticGauss);
+	nk_ui_checkbox_ubyte(ctx, "Vulcan", &Netgame.StaticVulcan);
+	nk_ui_checkbox_ubyte(ctx, "Helix", &Netgame.StaticHelix);
+	nk_ui_checkbox_ubyte(ctx, "Spreadfire", &Netgame.StaticSpread);
+	nk_ui_checkbox_ubyte(ctx, "Phoenix", &Netgame.StaticPhoenix);
+	nk_ui_checkbox_ubyte(ctx, "Plasma", &Netgame.StaticPlasma);
+	nk_ui_checkbox_ubyte(ctx, "Omega", &Netgame.StaticOmega);
+	nk_ui_checkbox_ubyte(ctx, "Fusion", &Netgame.StaticFusion);
 }
 
 static void nk_ui_static_weapons(void)
@@ -2905,6 +2926,8 @@ void nk_ui_advanced_options(void)
 	X(WeaponStun) X(PurpleFlash) X(VulcanShake) X(FusionShake) X(FastDoor) X(QuietFan) \
 	X(DarkSmartBlobs) X(SmallerSpawn) X(CpuCount) X(CpuSkill) \
 	X(StaticPowerups) X(StaticFusion) X(StaticPlasma) X(StaticVulcan) X(StaticSpread) X(StaticLasers) \
+	X(StaticGauss) X(StaticHelix) X(StaticPhoenix) X(StaticOmega) \
+	X(GaussSpawn) X(HelixSpawn) X(PhoenixSpawn) X(OmegaSpawn) X(FlashSpawn) X(GuidedSpawn) X(SmartMineSpawn) X(MercurySpawn) X(EarthshakerSpawn) \
 	X(FusionSpawn) X(VulcanSpawn) X(LasersSpawn) X(PlasmaSpawn) X(SpreadSpawn) X(SmartsSpawn) X(HomersSpawn) X(BombsSpawn) X(MegasSpawn)
 
 #define NK_UI_PRESET_EXT ".ngs"
