@@ -892,8 +892,31 @@ static int dxma_libcurl_download(const char *url, const char *dest)
 	return 1;
 }
 
-static int dxma_try_download(const char *url, const char *dest)
+#define DXMA_MAX_URL 1024
+
+// DXMA file names contain raw spaces; libcurl rejects them
+static void dxma_encode_spaces(const char *src, char *dst, size_t dst_size)
 {
+	size_t out = 0;
+
+	for (; *src && out + 3 < dst_size; src++)
+	{
+		if (*src != ' ')
+		{
+			dst[out++] = *src;
+			continue;
+		}
+		memcpy(dst + out, "%20", 3);
+		out += 3;
+	}
+	dst[out] = '\0';
+}
+
+static int dxma_try_download(const char *raw_url, const char *dest)
+{
+	char url[DXMA_MAX_URL];
+
+	dxma_encode_spaces(raw_url, url, sizeof(url));
 	if (dxma_libcurl_download(url, dest)) return 1;
 
 #ifdef _WIN32
