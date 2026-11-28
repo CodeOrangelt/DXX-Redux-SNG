@@ -299,8 +299,12 @@ void event_poll()
 	if (nk_menu_input)
 		nk_ui_input_begin();
 #endif
+	if (!GameArg.CtlNoJoystick)
+		joy_mirror_scan(kconfig_binding());
 	while ((wind == window_get_front()) && SDL_PollEvent(&event))
 	{
+		if (!GameArg.CtlNoJoystick && joy_mirror_drop(&event))
+			continue;
 		if (!pad_drives_menus(wind))
 			pad_forget_held();
 		else if (!event_pad_as_key(&event))

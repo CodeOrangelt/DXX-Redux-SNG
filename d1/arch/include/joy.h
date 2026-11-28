@@ -34,6 +34,8 @@ extern int joy_axisbutton_handler(SDL_JoyAxisEvent *jae);
 extern int joy_apply_deadzone(int value, int deadzone);
 extern int joy_axis_get(int axis);
 extern void joy_axis_track(SDL_JoyAxisEvent *jae);
+extern void joy_mirror_scan(int binding);
+extern int joy_mirror_drop(const SDL_Event *event);
 extern int joy_button_is_axis(int button);
 extern int joy_axis_half_button(int axis, int positive);
 extern int joy_axis_half_level(int axis, int positive);

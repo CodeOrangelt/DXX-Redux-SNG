@@ -239,6 +239,117 @@ int joy_button_is_axis(int button)
 	return 0;
 }
 
+// SNG: a paddle that an onboard profile maps (Xbox Elite) reports itself and
+// the button it copies in the same instant. A button that never arrives
+// without the same lower-numbered partner is such a paddle; drop the copy.
+#define MIRROR_UNSEEN	-2
+#define MIRROR_NONE	-1
+#define MIRROR_CONFIRM	2	// presses before play trusts the pair; a bind trusts the first
+#define MIRROR_BATCH	64
+
+static struct {
+	signed char partner[MAX_BUTTONS_PER_JOYSTICK];
+	ubyte together[MAX_BUTTONS_PER_JOYSTICK];
+	ubyte masked[MAX_BUTTONS_PER_JOYSTICK];
+	ubyte drop_down[MAX_BUTTONS_PER_JOYSTICK];
+	ubyte down_now[MAX_BUTTONS_PER_JOYSTICK];
+} Mirror[MAX_JOYSTICKS];
+
+static void mirror_reset(void)
+{
+	int joy;
+
+	memset(Mirror, 0, sizeof(Mirror));
+	for (joy = 0; joy < MAX_JOYSTICKS; joy++)
+		memset(Mirror[joy].partner, MIRROR_UNSEEN, sizeof(Mirror[joy].partner));
+}
+
+static int mirror_peek(SDL_Event *batch)
+{
+#if SDL_VERSION_ATLEAST(2, 0, 0)
+	return SDL_PeepEvents(batch, MIRROR_BATCH, SDL_PEEKEVENT, SDL_JOYBUTTONDOWN, SDL_JOYBUTTONDOWN);
+#else
+	return SDL_PeepEvents(batch, MIRROR_BATCH, SDL_PEEKEVENT, SDL_JOYBUTTONDOWNMASK);
+#endif
+}
+
+static int mirror_lower_down(int joy, int button)
+{
+	int partner = Mirror[joy].partner[button], lower;
+
+	if (partner >= 0)
+		return Mirror[joy].down_now[partner] ? partner : -1;
+	for (lower = button - 1; lower >= 0; lower--)
+		if (Mirror[joy].down_now[lower])
+			return lower;
+	return -1;
+}
+
+static void mirror_learn(int joy, int button, int binding)
+{
+	signed char *partner = &Mirror[joy].partner[button];
+	int lower = mirror_lower_down(joy, button);
+
+	if (*partner == MIRROR_NONE)
+		return;
+	if (lower < 0)
+	{
+		*partner = MIRROR_NONE;	// pressed alone: a real button
+		return;
+	}
+	*partner = lower;
+	if (Mirror[joy].together[button] < 255)
+		Mirror[joy].together[button]++;
+	if (binding || Mirror[joy].together[button] >= MIRROR_CONFIRM)
+		Mirror[joy].drop_down[lower] = 1;
+}
+
+// once per poll, before the events are handled
+void joy_mirror_scan(int binding)
+{
+	SDL_Event batch[MIRROR_BATCH];
+	int count, i, joy, button;
+
+	SDL_PumpEvents();
+	count = mirror_peek(batch);
+
+	for (joy = 0; joy < num_joysticks; joy++)
+	{
+		memset(Mirror[joy].down_now, 0, sizeof(Mirror[joy].down_now));
+		memset(Mirror[joy].drop_down, 0, sizeof(Mirror[joy].drop_down));
+	}
+	for (i = 0; i < count; i++)
+		if (batch[i].jbutton.which < num_joysticks && batch[i].jbutton.button < MAX_BUTTONS_PER_JOYSTICK)
+			Mirror[batch[i].jbutton.which].down_now[batch[i].jbutton.button] = 1;
+	for (joy = 0; joy < num_joysticks; joy++)
+		for (button = 0; button < SDL_Joysticks[joy].n_buttons; button++)
+			if (Mirror[joy].down_now[button])
+				mirror_learn(joy, button, binding);
+}
+
+int joy_mirror_drop(const SDL_Event *event)
+{
+	int joy, button;
+
+	if (event->type != SDL_JOYBUTTONDOWN && event->type != SDL_JOYBUTTONUP)
+		return 0;
+	joy = event->jbutton.which;
+	button = event->jbutton.button;
+	if (joy >= num_joysticks || button >= MAX_BUTTONS_PER_JOYSTICK)
+		return 0;
+	if (event->type == SDL_JOYBUTTONDOWN && Mirror[joy].drop_down[button])
+	{
+		Mirror[joy].masked[button] = 1;
+		return 1;
+	}
+	if (event->type == SDL_JOYBUTTONUP && Mirror[joy].masked[button])
+	{
+		Mirror[joy].masked[button] = 0;
+		return 1;
+	}
+	return 0;
+}
+
 /* ----------------------------------------------- */
 
 void joy_init()
@@ -252,6 +363,7 @@ void joy_init()
 	}
 
 	memset(&Joystick,0,sizeof(Joystick));
+	mirror_reset();
 	memset(joyaxis_text, 0, JOY_MAX_AXES * sizeof(char *));
 	memset(joybutton_text, 0, JOY_MAX_BUTTONS * sizeof(char *));
 
