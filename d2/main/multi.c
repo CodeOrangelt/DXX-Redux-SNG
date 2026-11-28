@@ -6466,10 +6466,9 @@ void multi_send_damage(fix damage, fix shields, ubyte killer_type, ubyte killer_
 {
 	if (is_observer()) { return; }
 
-	// Sending damage to the host isn't interesting if there cannot be any
-	// observers -- unless the tracker also wants it, in which case the host
-	// still needs this packet even with no observers connected.
-	if (Netgame.max_numobservers == 0 && !Netgame.host_is_obs && !Netgame.Tracker) { return; }
+	// SNG: always report. Netgame.Tracker and max_numobservers never
+	// reach clients, so gating on them here meant clients never reported and
+	// the tracker could credit no weapon for any kill on a client.
 
 	if (Player_is_dead || ConsoleObject->flags & OF_SHOULD_BE_DEAD) { return; }
 
