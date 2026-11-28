@@ -321,5 +321,6 @@ typedef struct connection_status {
 } connection_status;
 
 extern int Observer_num;
+extern int Host_watches;
 
 void netgame_set_defaults(void);

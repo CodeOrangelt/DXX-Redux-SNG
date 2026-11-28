@@ -3196,15 +3196,21 @@ static void nk_ui_build_mode_list(struct nk_context *ctx, int current)
 static void nk_ui_build_players(struct nk_context *ctx)
 {
 	int limit = Netgame.gamemode == NETGAME_COOPERATIVE ? 4 : Netgame.max_numobservers ? 7 : 8;
+	int watching = !!Host_watches;
 	int v;
 
-	Netgame.max_numplayers = max(2, min(Netgame.max_numplayers, limit));
 	nk_ui_section(ctx, "PLAYERS");
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
-	v = Netgame.max_numplayers;
-	nk_labelf(ctx, NK_TEXT_LEFT, "Maximum players: %d", Netgame.max_numplayers);
-	nk_ui_slider_int(ctx, 2, &v, limit, 1);
-	Netgame.max_numplayers = (ubyte)v;
+	v = Host_watches;
+	nk_checkbox_label(ctx, "Host as an observer", &v);
+	Host_watches = watching = v;
+
+	// SNG: a watching host still holds slot 0, so seats are one fewer
+	Netgame.max_numplayers = max(2 + watching, min(Netgame.max_numplayers, limit));
+	v = Netgame.max_numplayers - watching;
+	nk_labelf(ctx, NK_TEXT_LEFT, "Maximum players: %d", v);
+	nk_ui_slider_int(ctx, 2, &v, limit - watching, 1);
+	Netgame.max_numplayers = (ubyte)(v + watching);
 
 	// SNG: CPUs take seats at start; a human joining a full game bumps one
 	Netgame.CpuCount = min(Netgame.CpuCount, Netgame.max_numplayers - 1);

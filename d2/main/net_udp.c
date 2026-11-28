@@ -232,7 +232,9 @@ int net_udp_solo(void)
 static int Auto_host = 0;		// headless CPU test host: no lobby, no UPnP
 static int Auto_host_watches;	// dedicated server: the host only observes
 static int Auto_host_lobby;	// dedicated server: form until a human joins
+int Host_watches;	// SNG: host chose to observe; keeps slot 0 as a ghost
 static int human_seats(void);
+static int host_takes_no_seat(void);
 static char UDP_MyPort[6] = "";
 
 // Accessor for the Nuklear-based advanced-options UI (nk_ui.c), which lives
@@ -4037,8 +4039,8 @@ void net_udp_send_game_info(struct _sockaddr sender_addr, ubyte info_upid, ubyte
 			}
 		}
 		buf[len] = tmpvar;								len++;
-		buf[len] = max(1, Netgame.numconnected - !!Netgame.host_is_obs) + lobby_cpu_slots();	len++;	// SNG: a watching host is no seat; 0 delists
-		buf[len] = Netgame.max_numplayers - !!Netgame.host_is_obs;		len++;
+		buf[len] = max(1, Netgame.numconnected - host_takes_no_seat()) + lobby_cpu_slots();	len++;	// SNG: a watching host is no seat; 0 delists
+		buf[len] = Netgame.max_numplayers - host_takes_no_seat();		len++;
 		buf[len] = Netgame.game_flags;							len++;
 
 		{
@@ -5135,6 +5137,11 @@ int net_udp_sync_poll( newmenu *menu, d_event *event, void *userdata )
 }
 
 // SNG: CPUs hold their seats from the lobby on; humans get the rest
+static int host_takes_no_seat(void)
+{
+	return Netgame.host_is_obs || (Host_watches && multi_i_am_master());
+}
+
 static int human_seats(void)
 {
 	return max(1, Netgame.max_numplayers - Netgame.CpuCount);
@@ -7186,14 +7193,18 @@ net_udp_select_players(void)
 		m[i].type = NM_TYPE_CHECK; m[i].text = text[i]; m[i].value = 0;
 	}
 
-	m[0].value = 1;                         // Assume server will play...
+	m[0].value = !Host_watches;
 
 	if (PlayerCfg.NoRankings)
 		sprintf( text[0], "%d. %-20s", 1, Players[Player_num].callsign );
 	else
 		sprintf( text[0], "%d. %s%-20s", 1, RankStrings[Netgame.players[Player_num].rank],Players[Player_num].callsign );
 
-	sprintf( title, "%s %d %s", TXT_TEAM_SELECT, human_seats(), TXT_TEAM_PRESS_ENTER );
+	if (Netgame.CpuCount)
+		snprintf(title, sizeof(title), "%d human seat%s + %d CPU%s\nPress ENTER to begin.",
+			human_seats(), human_seats() == 1 ? "" : "s", Netgame.CpuCount, Netgame.CpuCount == 1 ? "" : "s");
+	else
+		snprintf(title, sizeof(title), "%s %d %s", TXT_TEAM_SELECT, human_seats(), TXT_TEAM_PRESS_ENTER);
 	if (Netgame.CpuCount)
 		lobby_show_cpus(m);
 
