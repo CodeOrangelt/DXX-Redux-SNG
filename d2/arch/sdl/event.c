@@ -255,6 +255,8 @@ void event_pad_capture_end(void)
 // 0: pad input with no menu meaning, to drop
 int event_pad_as_key(SDL_Event *event)
 {
+	if (event->type == SDL_JOYAXISMOTION && !GameArg.CtlNoJoystick)
+		joy_axis_track(&event->jaxis);
 	if (pad_capture != -2 && pad_event(event))
 	{
 		if (pad_capture == -1 && event->type == SDL_JOYBUTTONDOWN)

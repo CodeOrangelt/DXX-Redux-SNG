@@ -133,6 +133,8 @@ typedef struct kc_menu
 	kc_row	rows[KC_MAX_ROWS];
 	int	nrows;
 	int	old_jaxis[JOY_MAX_AXES];
+	int	bind_peak[JOY_MAX_AXES];	// SNG: furthest each axis moved this bind
+	fix64	bind_armed_at;
 	int	old_maxis[3];
 	ubyte	changing;
 	ubyte	mouse_state;
@@ -317,6 +319,7 @@ void kc_change_key( kc_menu *menu, d_event *event, kc_item * item );
 void kc_change_joybutton( kc_menu *menu, d_event *event, kc_item * item );
 void kc_change_mousebutton( kc_menu *menu, d_event *event, kc_item * item );
 void kc_change_joyaxis( kc_menu *menu, d_event *event, kc_item * item );
+static void kc_axis_as_button(kc_menu *menu, d_event *event, kc_item *item);
 void kc_change_mouseaxis( kc_menu *menu, d_event *event, kc_item * item );
 void kc_change_invert( kc_menu *menu, kc_item * item );
 
@@ -659,6 +662,39 @@ void kconfig_draw(kc_menu *menu)
 	}
 }
 
+// SNG: a bind takes only a deliberate input, not the press that opened it or a nudge
+#define BIND_ARM_DELAY		(F1_0/4)
+#define BIND_AXIS_TRAVEL	64	// of 128
+#define BIND_AXIS_BUTTON_LEVEL	96	// a stick half must be pushed 75% to bind as a button
+
+static void kconfig_arm_binding(kc_menu *menu)
+{
+	int axis;
+
+	for (axis = 0; axis < joy_num_axes; axis++)
+		menu->old_jaxis[axis] = joy_axis_get(axis);
+	memset(menu->bind_peak, 0, sizeof(menu->bind_peak));
+	menu->bind_armed_at = timer_query() + BIND_ARM_DELAY;
+}
+
+static int kconfig_bind_armed(kc_menu *menu)
+{
+	return timer_query() >= menu->bind_armed_at;
+}
+
+// one axis clearly ahead of every other, so a diagonal doesn't bind a guess
+static int kconfig_axis_dominant(kc_menu *menu, int axis)
+{
+	int other;
+
+	if (menu->bind_peak[axis] < BIND_AXIS_TRAVEL)
+		return 0;
+	for (other = 0; other < joy_num_axes; other++)
+		if (other != axis && menu->bind_peak[other] * 3 > menu->bind_peak[axis] * 2)
+			return 0;
+	return 1;
+}
+
 void kconfig_start_changing(kc_menu *menu)
 {
 	if (menu->items[menu->citem].type == BT_INVERT)
@@ -667,6 +703,7 @@ void kconfig_start_changing(kc_menu *menu)
 		return;
 	}
 
+	kconfig_arm_binding(menu);
 	menu->changing = 1;
 }
 
@@ -859,11 +896,16 @@ int kconfig_handler(window *wind, d_event *event, kc_menu *menu)
 			break;
 
 		case EVENT_JOYSTICK_BUTTON_DOWN:
+			if (menu->changing && !kconfig_bind_armed(menu))
+				break;
 			if (menu->changing && menu->items[menu->citem].type == BT_JOY_BUTTON) kc_change_joybutton(menu, event, &menu->items[menu->citem]);
 			break;
 
 		case EVENT_JOYSTICK_MOVED:
+			if (menu->changing && !kconfig_bind_armed(menu))
+				break;
 			if (menu->changing && menu->items[menu->citem].type == BT_JOY_AXIS) kc_change_joyaxis(menu, event, &menu->items[menu->citem]);
+			else if (menu->changing && menu->items[menu->citem].type == BT_JOY_BUTTON) kc_axis_as_button(menu, event, &menu->items[menu->citem]);
 			else
 			{
 				int axis, value;
@@ -975,12 +1017,39 @@ void kc_change_key( kc_menu *menu, d_event *event, kc_item * item )
 	menu->changing = 0;
 }
 
+static void kc_set_joybutton(kc_menu *menu, kc_item *item, int button);
+
+// a trigger pull or a firm stick push binds as a button
+static void kc_axis_as_button(kc_menu *menu, d_event *event, kc_item *item)
+{
+	int axis, value, positive, button;
+
+	event_joystick_get_axis(event, &axis, &value);
+	menu->bind_peak[axis] = max(menu->bind_peak[axis], abs(value - menu->old_jaxis[axis]));
+	if (!kconfig_axis_dominant(menu, axis))
+		return;
+	positive = value > menu->old_jaxis[axis];
+	if (joy_axis_half_level(axis, positive) < BIND_AXIS_BUTTON_LEVEL)
+		return;
+	button = joy_axis_half_button(axis, positive);
+	if (button >= 0)
+		kc_set_joybutton(menu, item, button);
+}
+
 void kc_change_joybutton( kc_menu *menu, d_event *event, kc_item * item )
 {
-	int n,i,button = 255;
+	int button = 255;
 
 	Assert(event->type == EVENT_JOYSTICK_BUTTON_DOWN);
 	button = event_joystick_get_button(event);
+	if (joy_button_is_axis(button))
+		return;	// axis halves bind from kc_axis_as_button, once pushed far enough
+	kc_set_joybutton(menu, item, button);
+}
+
+static void kc_set_joybutton(kc_menu *menu, kc_item *item, int button)
+{
+	int n, i;
 
 	for (i=0; i<menu->nitems; i++ )
 	{
@@ -1016,7 +1085,8 @@ void kc_change_joyaxis( kc_menu *menu, d_event *event, kc_item * item )
 	Assert(event->type == EVENT_JOYSTICK_MOVED);
 	event_joystick_get_axis( event, &axis, &value );
 
-	if ( abs(value-menu->old_jaxis[axis])<32 )
+	menu->bind_peak[axis] = max(menu->bind_peak[axis], abs(value - menu->old_jaxis[axis]));
+	if (!kconfig_axis_dominant(menu, axis))
 		return;
 	con_printf(CON_DEBUG, "Axis Movement detected: Axis %i\n", axis);
 

@@ -189,6 +189,56 @@ int joy_axisbutton_handler(SDL_JoyAxisEvent *jae)
 }
 
 
+// SNG: menus eat axis events; keep the values current for binding baselines
+void joy_axis_track(SDL_JoyAxisEvent *jae)
+{
+	Joystick.axis_value[SDL_Joysticks[jae->which].axis_map[jae->axis]] = jae->value / 256;
+}
+
+int joy_axis_get(int axis)
+{
+	return Joystick.axis_value[axis];
+}
+
+static int axis_owner(int axis, int *joy, int *raw)
+{
+	for (*joy = 0; *joy < num_joysticks; (*joy)++)
+		for (*raw = 0; *raw < SDL_Joysticks[*joy].n_axes; (*raw)++)
+			if (SDL_Joysticks[*joy].axis_map[*raw] == axis)
+				return 1;
+	return 0;
+}
+
+// SNG: how far one half of an axis is pushed, 0..128; a trigger's half is its pull
+int joy_axis_half_level(int axis, int positive)
+{
+	int joy, raw, level = Joystick.axis_value[axis];
+
+	if (axis_owner(axis, &joy, &raw) && SDL_Joysticks[joy].axis_is_trigger[raw])
+		level = (level + 128) / 2;
+	return max(0, positive ? level : -level);
+}
+
+int joy_axis_half_button(int axis, int positive)
+{
+	int joy, raw;
+
+	if (!axis_owner(axis, &joy, &raw))
+		return -1;
+	return SDL_Joysticks[joy].axis_button_map[raw] + (positive ? 0 : 1);
+}
+
+int joy_button_is_axis(int button)
+{
+	int joy, raw;
+
+	for (joy = 0; joy < num_joysticks; joy++)
+		for (raw = 0; raw < SDL_Joysticks[joy].n_axes; raw++)
+			if (button - SDL_Joysticks[joy].axis_button_map[raw] == 0 || button - SDL_Joysticks[joy].axis_button_map[raw] == 1)
+				return 1;
+	return 0;
+}
+
 /* ----------------------------------------------- */
 
 void joy_init()
