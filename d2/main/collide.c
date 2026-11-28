@@ -1843,12 +1843,20 @@ void collide_player_and_player( object * player1, object * player2, vms_vector *
 	return;
 }
 
+// SNG: static pickups never leave their spawn, so deaths drop none of them
+static int stays_at_spawn(int powerup_id)
+{
+	return (Game_mode & GM_MULTI) && powerup_is_static(powerup_id);
+}
+
 int maybe_drop_primary_weapon_egg(object *playerobj, int weapon_index)
 {
 	int weapon_flag = HAS_FLAG(weapon_index);
 	int powerup_num;
 
 	powerup_num = Primary_weapon_to_powerup[weapon_index];
+	if (stays_at_spawn(powerup_num))
+		return -1;
 
 	if (Players[playerobj->id].primary_weapon_flags & weapon_flag)
 		return call_object_create_egg(playerobj, 1, OBJ_POWERUP, powerup_num);
@@ -1973,11 +1981,11 @@ void drop_player_eggs_remote(object *playerobj, ubyte remote)
 
 		if (Players[pnum].laser_level > MAX_LASER_LEVEL)
 			call_object_create_egg(playerobj, Players[pnum].laser_level-MAX_LASER_LEVEL, OBJ_POWERUP, POW_SUPER_LASER);
-		else if (Players[pnum].laser_level >= 1)
+		else if (Players[pnum].laser_level >= 1 && !stays_at_spawn(POW_LASER))
 			call_object_create_egg(playerobj, Players[pnum].laser_level, OBJ_POWERUP, POW_LASER);	// Note: laser_level = 0 for laser level 1.
 
 		//	Drop quad laser if appropos
-		if (Players[pnum].flags & PLAYER_FLAGS_QUAD_LASERS)
+		if ((Players[pnum].flags & PLAYER_FLAGS_QUAD_LASERS) && !stays_at_spawn(POW_QUAD_FIRE))
 			call_object_create_egg(playerobj, 1, OBJ_POWERUP, POW_QUAD_FIRE);
 
 		if (Players[pnum].flags & PLAYER_FLAGS_CLOAKED)
@@ -2097,7 +2105,10 @@ void drop_player_eggs_remote(object *playerobj, ubyte remote)
 		//      If depleting   -- drop ammo unless gauss or vulcan
 		// coop or sp -- drop ammo unless gauss or vulcan
 
-		if( (! (Game_mode & GM_MULTI))  ||
+		// the static gun was stripped above, which would spill its ammo here
+		if (stays_at_spawn(POW_VULCAN_WEAPON) || stays_at_spawn(POW_GAUSS_WEAPON))
+			;
+		else if( (! (Game_mode & GM_MULTI))  ||
 			  (  Game_mode & GM_MULTI_COOP)   || 
 			  ( Netgame.GaussAmmoStyle == GAUSS_STYLE_DEPLETING)) {
 

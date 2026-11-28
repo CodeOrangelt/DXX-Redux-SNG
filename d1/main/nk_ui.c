@@ -2015,7 +2015,7 @@ static void nk_ui_build_static_weapons(struct nk_context *ctx, void *userdata)
 	nk_ui_checkbox_ubyte(ctx, "Spreadfire", &Netgame.StaticSpread);
 	nk_ui_checkbox_ubyte(ctx, "Vulcan", &Netgame.StaticVulcan);
 	nk_ui_checkbox_ubyte(ctx, "Plasma", &Netgame.StaticPlasma);
-	nk_ui_checkbox_ubyte(ctx, "Lasers", &Netgame.StaticLasers);
+	nk_ui_checkbox_ubyte(ctx, "Lasers + Quad", &Netgame.StaticLasers);
 	nk_ui_checkbox_ubyte(ctx, "Bombs", &Netgame.StaticBombs);
 	nk_ui_checkbox_ubyte(ctx, "Missiles", &Netgame.StaticMissiles);
 }

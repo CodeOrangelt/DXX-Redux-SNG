@@ -5488,7 +5488,7 @@ void net_udp_staticpowerupsmenu(void)
 	opt_spread = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Spreadfire"; m[opt].value = Netgame.StaticSpread; opt++;
 	opt_vulcan = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Vulcan"; m[opt].value = Netgame.StaticVulcan; opt++;
 	opt_plasma = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Plasma"; m[opt].value = Netgame.StaticPlasma; opt++;
-	opt_lasers = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Lasers"; m[opt].value = Netgame.StaticLasers; opt++;
+	opt_lasers = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Lasers + Quad"; m[opt].value = Netgame.StaticLasers; opt++;
 	opt_gauss = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Gauss"; m[opt].value = Netgame.StaticGauss; opt++;
 	opt_helix = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Helix"; m[opt].value = Netgame.StaticHelix; opt++;
 	opt_phoenix = opt; m[opt].type = NM_TYPE_CHECK;  m[opt].text = "Phoenix"; m[opt].value = Netgame.StaticPhoenix; opt++;

@@ -2018,7 +2018,7 @@ static void nk_ui_build_static_weapons(struct nk_context *ctx, void *userdata)
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 1);
 	nk_ui_checkbox_ubyte(ctx, "All Weapons", &Netgame.StaticPowerups);
 	nk_layout_row_dynamic(ctx, NK_UI_ROW_HEIGHT, 2);
-	nk_ui_checkbox_ubyte(ctx, "Lasers", &Netgame.StaticLasers);
+	nk_ui_checkbox_ubyte(ctx, "Lasers + Quad", &Netgame.StaticLasers);
 	nk_ui_checkbox_ubyte(ctx, "Gauss", &Netgame.StaticGauss);
 	nk_ui_checkbox_ubyte(ctx, "Vulcan", &Netgame.StaticVulcan);
 	nk_ui_checkbox_ubyte(ctx, "Helix", &Netgame.StaticHelix);

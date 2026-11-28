@@ -236,7 +236,8 @@ int powerup_is_static(int id)
 {
 	switch (id)
 	{
-		case POW_LASER:			return Netgame.StaticPowerups || Netgame.StaticLasers;
+		case POW_LASER:
+		case POW_QUAD_FIRE:		return Netgame.StaticPowerups || Netgame.StaticLasers;
 		case POW_VULCAN_WEAPON:		return Netgame.StaticPowerups || Netgame.StaticVulcan;
 		case POW_SPREADFIRE_WEAPON:	return Netgame.StaticPowerups || Netgame.StaticSpread;
 		case POW_PLASMA_WEAPON:		return Netgame.StaticPowerups || Netgame.StaticPlasma;
@@ -776,6 +777,10 @@ int do_powerup(object *obj)
 
 			if (!used && !(Game_mode & GM_MULTI) )
 				used = pick_up_energy();
+			if ((Game_mode & GM_MULTI) && powerup_is_static(POW_QUAD_FIRE) && used) {
+				only_sound = used;
+				used = 0;
+			}
 			break;
 		case	POW_VULCAN_WEAPON:
 			// SNG: Static Powerups - already collected this life, no-op (no sound, never destroyed)
