@@ -28,6 +28,7 @@ static int initialised=0;
 
 // SNG: gamepads drive menus by posing as the keyboard
 #define PAD_AXIS_DEADZONE	16000
+#define PAD_AXIS_RELEASE	12000	// hysteresis: a stick resting at the edge would chatter
 #define PAD_DIRECTIONS		4
 
 #define PAD_AXIS_MAX		32767
@@ -107,6 +108,11 @@ static void pad_scroll_axis(int value)
 	pad_scroll_deflect = value;
 }
 
+static int pad_axis_threshold(int held)
+{
+	return held ? PAD_AXIS_RELEASE : PAD_AXIS_DEADZONE;
+}
+
 static int pad_axis_event(SDL_Event *out, const SDL_JoyAxisEvent *axis)
 {
 	int wanted[PAD_DIRECTIONS], vertical;
@@ -123,8 +129,8 @@ static int pad_axis_event(SDL_Event *out, const SDL_JoyAxisEvent *axis)
 	vertical = axis->axis & 1;
 	pad_deflect[vertical ? 0 : 2] = pad_deflect[vertical ? 1 : 3] = abs(axis->value);
 	memcpy(wanted, pad_held, sizeof(wanted));
-	wanted[vertical ? 0 : 2] = axis->value < -PAD_AXIS_DEADZONE;
-	wanted[vertical ? 1 : 3] = axis->value > PAD_AXIS_DEADZONE;
+	wanted[vertical ? 0 : 2] = axis->value < -pad_axis_threshold(pad_held[vertical ? 0 : 2]);
+	wanted[vertical ? 1 : 3] = axis->value > pad_axis_threshold(pad_held[vertical ? 1 : 3]);
 	return pad_direction_event(out, wanted);
 }
 
@@ -168,6 +174,13 @@ extern window *Game_wind;
 static int pad_drives_menus(window *front)
 {
 	return front && front != Game_wind && !GameArg.CtlNoJoystick && !kconfig_binding();
+}
+
+// a release seen only by the game would leave a menu repeating forever
+static void pad_forget_held(void)
+{
+	memset(pad_held, 0, sizeof(pad_held));
+	pad_scroll_deflect = 0;
 }
 
 static int pad_event(const SDL_Event *event)
@@ -282,7 +295,9 @@ void event_poll()
 #endif
 	while ((wind == window_get_front()) && SDL_PollEvent(&event))
 	{
-		if (pad_drives_menus(wind) && !event_pad_as_key(&event))
+		if (!pad_drives_menus(wind))
+			pad_forget_held();
+		else if (!event_pad_as_key(&event))
 			continue;
 		pad_pause_in_game(wind, &event);
 #ifdef USE_NK_UI
