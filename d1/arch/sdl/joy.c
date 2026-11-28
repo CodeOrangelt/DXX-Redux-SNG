@@ -57,6 +57,7 @@ static struct {
 	int axis_map[MAX_AXES_PER_JOYSTICK];
 	int button_map[MAX_BUTTONS_PER_JOYSTICK];
 	int axis_button_map[MAX_AXES_PER_JOYSTICK];
+	ubyte axis_is_trigger[MAX_AXES_PER_JOYSTICK];	// SNG: rests at full negative
 } SDL_Joysticks[MAX_JOYSTICKS];
 
 void joy_button_handler(SDL_JoyButtonEvent *jbe)
@@ -155,35 +156,37 @@ static int send_axis_button_event(unsigned button, event_type e)
 	return 1;
 }
 
+// SNG: hysteresis, so an axis held at the edge doesn't chatter
+#define AXIS_BUTTON_PRESS	38
+#define AXIS_BUTTON_RELEASE	25
+#define TRIGGER_REST_RAW	-24000
+
+static int axis_button_wanted(int level, int held)
+{
+	return level > (held ? AXIS_BUTTON_RELEASE : AXIS_BUTTON_PRESS);
+}
+
+static int axis_button_set(unsigned button, int wanted)
+{
+	if (Joystick.button_state[button] == wanted)
+		return 0;
+	return send_axis_button_event(button, wanted ? EVENT_JOYSTICK_BUTTON_DOWN : EVENT_JOYSTICK_BUTTON_UP);
+}
+
+// A trigger is one button from rest to full pull; a resting trigger would
+// otherwise hold its negative half down.
 int joy_axisbutton_handler(SDL_JoyAxisEvent *jae)
 {
-	int button;
+	unsigned positive = SDL_Joysticks[jae->which].axis_button_map[jae->axis];
+	unsigned negative = positive + 1;
+	int level = jae->value / 256;
 	int sent = 0;
 
-	button = SDL_Joysticks[jae->which].axis_button_map[jae->axis];
+	if (SDL_Joysticks[jae->which].axis_is_trigger[jae->axis])
+		level = (level + 128) / 2;
 
-	// We have to hardcode a deadzone here. It's not mapped into the settings.
-	// We could add another deadzone slider called "axis button deadzone".
-	// I think it's safe to assume a 30% deadzone on analog button presses for now.
-	int deadzone = 38;
-	int prev_value = joy_apply_deadzone(Joystick.axis_value[jae->axis], deadzone);
-	int new_value = joy_apply_deadzone(jae->value/256, deadzone);
-
-	if (prev_value <= 0 && new_value >= 0) // positive pressed
-	{
-		if (prev_value < 0) // Do previous direction release first if the case
-			sent |= send_axis_button_event(button + 1, EVENT_JOYSTICK_BUTTON_UP);
-		if (new_value > 0)
-			sent |= send_axis_button_event(button, EVENT_JOYSTICK_BUTTON_DOWN);
-	}
-	else if (prev_value >= 0 && new_value <= 0) // negative pressed
-	{
-		if (prev_value > 0) // Do previous direction release first if the case
-			sent |= send_axis_button_event(button, EVENT_JOYSTICK_BUTTON_UP);
-		if (new_value < 0)
-			sent |= send_axis_button_event(button + 1, EVENT_JOYSTICK_BUTTON_DOWN);
-	}
-
+	sent |= axis_button_set(positive, axis_button_wanted(level, Joystick.button_state[positive]));
+	sent |= axis_button_set(negative, axis_button_wanted(-level, Joystick.button_state[negative]));
 	return sent;
 }
 
@@ -268,15 +271,18 @@ void joy_init()
 				sprintf(temp, "J%d H%d%c", i + 1, j + 1, 0201);
 				joybutton_text[Joystick.n_buttons++] = d_strdup(temp);
 			}
+			SDL_JoystickUpdate();	// fresh resting values for trigger detection
 			for (j=0; j < SDL_Joysticks[num_joysticks].n_axes; j++)
 			{
 				if (Joystick.n_buttons + 2 > MAX_BUTTONS_PER_JOYSTICK)
 					break;
 				SDL_Joysticks[num_joysticks].axis_button_map[j] = Joystick.n_buttons;
-				//an axis count as 2 buttons. negative - and positive +
-				sprintf(temp, "J%d -A%d", i + 1, j + 1);
-				joybutton_text[Joystick.n_buttons++] = d_strdup(temp);
+				SDL_Joysticks[num_joysticks].axis_is_trigger[j] =
+					SDL_JoystickGetAxis(SDL_Joysticks[num_joysticks].handle, j) < TRIGGER_REST_RAW;
+				//an axis count as 2 buttons: positive +, then negative -
 				sprintf(temp, "J%d +A%d", i + 1, j + 1);
+				joybutton_text[Joystick.n_buttons++] = d_strdup(temp);
+				sprintf(temp, "J%d -A%d", i + 1, j + 1);
 				joybutton_text[Joystick.n_buttons++] = d_strdup(temp);
 			}
 
