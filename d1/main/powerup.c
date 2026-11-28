@@ -230,7 +230,6 @@ int red_key_seg;// segment flag(red) is in
 #define STATIC_COLLECTED_SPREAD  (1<<1)
 #define STATIC_COLLECTED_PLASMA  (1<<2)
 #define STATIC_COLLECTED_FUSION  (1<<3)
-#define STATIC_COLLECTED_LASER   (1<<4)
 // SNG: a static weapon stays in the level for everyone; only who has it changes
 int powerup_is_static(int id)
 {
@@ -248,9 +247,32 @@ int powerup_is_static(int id)
 
 static ubyte StaticPowerupsCollected = 0;
 
+// SNG: each static laser pickup upgrades you once per life; a second one can
+// take you further, so lasers still climb to level 4 without moving
+#define MAX_STATIC_LASERS_TAKEN	MAX_LASER_LEVEL
+static int Static_lasers_taken[MAX_STATIC_LASERS_TAKEN];
+static int Num_static_lasers_taken;
+
+static int static_laser_taken(object *obj)
+{
+	int i;
+
+	for (i = 0; i < Num_static_lasers_taken; i++)
+		if (Static_lasers_taken[i] == obj->signature)
+			return 1;
+	return 0;
+}
+
+static void static_laser_take(object *obj)
+{
+	if (Num_static_lasers_taken < MAX_STATIC_LASERS_TAKEN)
+		Static_lasers_taken[Num_static_lasers_taken++] = obj->signature;
+}
+
 void reset_static_powerups_collected(void)
 {
 	StaticPowerupsCollected = 0;
+	Num_static_lasers_taken = 0;
 }
 
 // SNG: Arcade mode "super powers" ------------------------------------------------
@@ -624,7 +646,7 @@ int do_powerup(object *obj)
 			break;
 		case POW_LASER:
 			// SNG: Static Powerups - already collected this life, no-op (no sound, never destroyed)
-			if ((Netgame.StaticPowerups || Netgame.StaticLasers) && (StaticPowerupsCollected & STATIC_COLLECTED_LASER)) {
+			if ((Netgame.StaticPowerups || Netgame.StaticLasers) && static_laser_taken(obj)) {
 				used = 0;
 				break;
 			}
@@ -655,7 +677,7 @@ int do_powerup(object *obj)
 
 			// SNG: Static Powerups - mark collected, play sound once, never destroy the object
 			if ((Netgame.StaticPowerups || Netgame.StaticLasers) && used) {
-				StaticPowerupsCollected |= STATIC_COLLECTED_LASER;
+				static_laser_take(obj);
 				only_sound = used;
 				used = 0;
 			}
