@@ -36,8 +36,10 @@ build_app() {
     cp -p $dlldir/libFLAC.dll $outdir/libFLAC-8.dll
 
     # CLANG64's SDL.dll is sdl12-compat, which loads SDL2.dll at run time,
-    # so ntldd never sees it
-    cp -p $dlldir/SDL2.dll $outdir/
+    # and SDL2.dll is sdl2-compat, which loads SDL3.dll; ntldd sees neither
+    cp -p $dlldir/SDL2.dll $outdir/ || exit 1
+    cp -p $dlldir/SDL3.dll $outdir/ || exit 1
+    ntldd -R ${outdir}/SDL3.dll |grep -i $MSYSTEM |sort |awk '{print $3}' |while read -r dll; do cp -p "`cygpath -u "${dll}"`" ${outdir}/; done
 
     # Copy in other resources
     cp ../COPYING.txt ${outdir}/
