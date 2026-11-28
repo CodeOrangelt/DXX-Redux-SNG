@@ -826,7 +826,10 @@ int wall_hit_process(segment *seg, int side, fix damage, int playernum, object *
 		return WHP_BLASTABLE;
 	}
 
-	if (playernum != Player_num && !(obj && duelbot_is_bot(obj)))	//return if was robot fire
+	if (playernum < 0)	//robot fire
+		return WHP_NOT_SPECIAL;
+	// SNG: obj may be the shot; ask about the ship that fired it
+	if (playernum != Player_num && !duelbot_is_bot(&Objects[Players[playernum].objnum]))
 		return WHP_NOT_SPECIAL;
 
 	Assert( playernum > -1 );
