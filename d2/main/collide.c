@@ -1849,6 +1849,14 @@ static int stays_at_spawn(int powerup_id)
 	return (Game_mode & GM_MULTI) && powerup_is_static(powerup_id);
 }
 
+// concussions are starting loadout; a static game leaves none lying around
+static int static_game(void)
+{
+	return (Game_mode & GM_MULTI) && (Netgame.StaticPowerups || Netgame.StaticFusion || Netgame.StaticPlasma || Netgame.StaticVulcan ||
+		Netgame.StaticSpread || Netgame.StaticLasers || Netgame.StaticGauss || Netgame.StaticHelix ||
+		Netgame.StaticPhoenix || Netgame.StaticOmega);
+}
+
 int maybe_drop_primary_weapon_egg(object *playerobj, int weapon_index)
 {
 	int weapon_flag = HAS_FLAG(weapon_index);
@@ -2095,7 +2103,8 @@ void drop_player_eggs_remote(object *playerobj, ubyte remote)
 		//	Drop the player's missiles in packs of 1 and/or 4
 		drop_missile_1_or_4(playerobj,HOMING_INDEX, remote);
 		drop_missile_1_or_4(playerobj,GUIDED_INDEX, remote);
-		drop_missile_1_or_4(playerobj,CONCUSSION_INDEX, remote);
+		if (!static_game())
+			drop_missile_1_or_4(playerobj,CONCUSSION_INDEX, remote);
 		drop_missile_1_or_4(playerobj,SMISSILE1_INDEX, remote);
 		drop_missile_1_or_4(playerobj,SMISSILE4_INDEX, remote);
 

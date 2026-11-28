@@ -1134,6 +1134,23 @@ static int stays_at_spawn(int powerup_id)
 	return (Game_mode & GM_MULTI) && powerup_is_static(powerup_id);
 }
 
+static int static_missiles(void)
+{
+	return (Game_mode & GM_MULTI) && (Netgame.StaticPowerups || Netgame.StaticMissiles);
+}
+
+static int static_bombs(void)
+{
+	return (Game_mode & GM_MULTI) && (Netgame.StaticPowerups || Netgame.StaticBombs);
+}
+
+// concussions are starting loadout; a static game leaves none lying around
+static int static_game(void)
+{
+	return (Game_mode & GM_MULTI) && (Netgame.StaticPowerups || Netgame.StaticFusion || Netgame.StaticPlasma || Netgame.StaticVulcan ||
+		Netgame.StaticSpread || Netgame.StaticLasers || Netgame.StaticMissiles || Netgame.StaticBombs);
+}
+
 int maybe_drop_primary_weapon_egg(object *playerobj, int weapon_index)
 {
 	int weapon_flag = HAS_FLAG(weapon_index);
@@ -1284,14 +1301,18 @@ void drop_player_eggs_remote(object *playerobj, ubyte remote)
 		//	Drop the secondary weapons
 		//	Note, proximity weapon only comes in packets of 4.  So drop n/2, but a max of 3 (handled inside maybe_drop..)  Make sense?
 
+		if (!static_bombs())
 			maybe_drop_secondary_weapon_egg(playerobj, PROXIMITY_INDEX, (Players[playerobj->id].secondary_ammo[PROXIMITY_INDEX])/4);
 
-		maybe_drop_secondary_weapon_egg(playerobj, SMART_INDEX, Players[playerobj->id].secondary_ammo[SMART_INDEX]);
-		maybe_drop_secondary_weapon_egg(playerobj, MEGA_INDEX, Players[playerobj->id].secondary_ammo[MEGA_INDEX]);
+		if (!static_missiles()) {
+			maybe_drop_secondary_weapon_egg(playerobj, SMART_INDEX, Players[playerobj->id].secondary_ammo[SMART_INDEX]);
+			maybe_drop_secondary_weapon_egg(playerobj, MEGA_INDEX, Players[playerobj->id].secondary_ammo[MEGA_INDEX]);
+			drop_missile_1_or_4(playerobj,HOMING_INDEX, remote);
+		}
 
 		//	Drop the player's missiles in packs of 1 and/or 4
-		drop_missile_1_or_4(playerobj,HOMING_INDEX, remote);
-		drop_missile_1_or_4(playerobj,CONCUSSION_INDEX, remote);
+		if (!static_game())
+			drop_missile_1_or_4(playerobj,CONCUSSION_INDEX, remote);
 
 		// the static gun was stripped above, which would spill its ammo here
 		if (stays_at_spawn(POW_VULCAN_WEAPON))
