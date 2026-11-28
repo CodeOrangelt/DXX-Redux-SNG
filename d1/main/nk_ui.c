@@ -2948,23 +2948,7 @@ void nk_ui_advanced_options(void)
 // One X-macro entry per plain integer-like Netgame field a preset should
 // capture. Keeping a single list drives both the writer and the reader, so
 // adding a field to a preset never means touching two duplicated switches.
-#define NK_UI_PRESET_FIELDS(X) \
-	X(gamemode) X(RefusePlayers) X(difficulty) X(max_numplayers) X(max_numobservers) \
-	X(game_flags) X(AllowedItems) X(ShowEnemyNames) X(BrightPlayers) X(SpawnStyle) \
-	X(NewSpawnAlgorithm) X(GaussAmmoStyle) X(KillGoal) X(PlayTimeAllowed) X(control_invul_time) \
-	X(PacketsPerSec) X(ShortPackets) X(NoFriendlyFire) X(RetroProtocol) X(RespawnConcs) \
-	X(LowVulcan) X(AllowPreferredColors) X(AllowColoredLighting) X(FairColors) X(BlackAndWhitePyros) \
-	X(PrimaryDupFactor) X(SecondaryDupFactor) X(SecondaryCapFactor) X(obs_delay) X(obs_min) \
-	X(HomingUpdateRate) X(RemoteHitSpark) X(AllowCustomModelsTextures) X(ReducedFlash) X(DisableFOVChange) \
-	X(WeaponStun) X(PurpleFlash) X(VulcanShake) X(FusionShake) X(FastDoor) X(QuietFan) \
-	X(DarkSmartBlobs) X(SmallerSpawn) X(CTF) X(Deathmatch) X(DeathmatchShields) \
-	X(PointCapture) X(PointCaptureRate) X(ScoreGoal) X(CpuCount) X(CpuSkill) \
-	X(TurkeyRoundMinutes) X(TurkeyShields) X(TurkeySpeedPct) X(TurkeyCloakInterval) X(TurkeyCloakDuration) \
-	X(TurkeyMinKills) X(TurkeyKillsPerHunter) \
-	X(ArcadeTeams) X(ArcadeInterval) X(ArcadeMaxActive) X(ArcadeCountdown) X(ArcadeEnergyTime) \
-	X(ArcadeHomingCount) X(ArcadeSmartCount) X(ArcadeProxyCount) X(ArcadeMegaCount) \
-	X(StaticPowerups) X(StaticFusion) X(StaticPlasma) X(StaticVulcan) X(StaticSpread) X(StaticLasers) X(StaticMissiles) X(StaticBombs) \
-	X(FusionSpawn) X(VulcanSpawn) X(LasersSpawn) X(PlasmaSpawn) X(SpreadSpawn) X(SmartsSpawn) X(HomersSpawn) X(BombsSpawn) X(MegasSpawn)
+#define NK_UI_PRESET_FIELDS NETGAME_SETTING_FIELDS
 
 #define NK_UI_PRESET_EXT ".ngs"
 #define NK_UI_PRESET_LIST_MAX 64

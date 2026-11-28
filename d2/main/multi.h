@@ -671,6 +671,24 @@ typedef struct netgame_info
 	ubyte						CpuSkill;	// SNG: 0 trainee .. NDL-1 insane
 } __pack__ netgame_info;
 
+// SNG: every plain Netgame field the hosting screen sets; drives
+// presets and the remembered host profile alike
+#define NETGAME_SETTING_FIELDS(X) \
+	X(gamemode) X(RefusePlayers) X(difficulty) X(max_numplayers) X(max_numobservers) \
+	X(game_flags) X(AllowedItems) X(ShowEnemyNames) X(BrightPlayers) X(SpawnStyle) \
+	X(NewSpawnAlgorithm) X(GaussAmmoStyle) X(KillGoal) X(PlayTimeAllowed) X(control_invul_time) \
+	X(PacketsPerSec) X(ShortPackets) X(NoFriendlyFire) X(RetroProtocol) X(RespawnConcs) \
+	X(LowVulcan) X(AllowPreferredColors) X(AllowColoredLighting) X(FairColors) X(BlackAndWhitePyros) \
+	X(PrimaryDupFactor) X(SecondaryDupFactor) X(SecondaryCapFactor) X(obs_delay) X(obs_min) \
+	X(HomingUpdateRate) X(RemoteHitSpark) X(AllowCustomModelsTextures) X(ReducedFlash) X(DisableFOVChange) \
+	X(WeaponStun) X(PurpleFlash) X(VulcanShake) X(GaussOverheat) X(FusionShake) X(FastDoor) X(QuietFan) \
+	X(DarkSmartBlobs) X(SmallerSpawn) X(CpuCount) X(CpuSkill) \
+	X(Allow_marker_view) X(AlwaysLighting) X(BornWithBurner) X(DisableGaussSplash) \
+	X(StaticPowerups) X(StaticFusion) X(StaticPlasma) X(StaticVulcan) X(StaticSpread) X(StaticLasers) \
+	X(StaticGauss) X(StaticHelix) X(StaticPhoenix) X(StaticOmega) \
+	X(GaussSpawn) X(HelixSpawn) X(PhoenixSpawn) X(OmegaSpawn) X(FlashSpawn) X(GuidedSpawn) X(SmartMineSpawn) X(MercurySpawn) X(EarthshakerSpawn) \
+	X(FusionSpawn) X(VulcanSpawn) X(LasersSpawn) X(PlasmaSpawn) X(SpreadSpawn) X(SmartsSpawn) X(HomersSpawn) X(BombsSpawn) X(MegasSpawn)
+
 extern int Host_is_obs; // Reminder for host only that they are an observer.  Do not set for other players or observers.
 
 // Events for observatory UI.

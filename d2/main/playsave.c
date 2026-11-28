@@ -1229,6 +1229,23 @@ int get_lifetime_checksum (int a,int b)
 }
 
 // read stored values from ngp file to netgame_info
+static int netgame_setting_read(netgame_info *ng, const char *token, const char *value)
+{
+	long v = strtol(value, NULL, 10);
+
+#define READ_ONE(field) if (!strcmp(token, #field)) { ng->field = (__typeof__(ng->field))v; return 1; }
+	NETGAME_SETTING_FIELDS(READ_ONE)
+#undef READ_ONE
+	return 0;
+}
+
+static void netgame_setting_write(PHYSFS_file *file, netgame_info *ng)
+{
+#define WRITE_ONE(field) PHYSFSX_printf(file, #field "=%d\n", (int)ng->field);
+	NETGAME_SETTING_FIELDS(WRITE_ONE)
+#undef WRITE_ONE
+}
+
 void read_netgame_profile(netgame_info *ng)
 {
 	char filename[PATH_MAX];
@@ -1272,84 +1289,8 @@ int read_netgame_settings_file(const char *filename, netgame_info *ng, int no_na
 				p = strchr( ng->game_name, '\n');
 				if ( p ) *p = 0;
 			}
-			else if (!strcmp(token, "gamemode"))
-				ng->gamemode = strtol(value, NULL, 10);
-			else if (!strcmp(token, "RefusePlayers"))
-				ng->RefusePlayers = strtol(value, NULL, 10);
-			else if (!strcmp(token, "difficulty"))
-				ng->difficulty = strtol(value, NULL, 10);
-			else if (!strcmp(token, "max_numplayers"))
-				ng->max_numplayers = strtol(value, NULL, 10);
-			else if (!strcmp(token, "max_numobservers"))
-				ng->max_numobservers = strtol(value, NULL, 10);
-			else if (!strcmp(token, "game_flags"))
-				ng->game_flags = strtol(value, NULL, 10);
-			else if (!strcmp(token, "AllowedItems"))
-				ng->AllowedItems = strtol(value, NULL, 10);
-			else if (!strcmp(token, "Allow_marker_view"))
-				ng->Allow_marker_view = strtol(value, NULL, 10);
-			else if (!strcmp(token, "AlwaysLighting"))
-				ng->AlwaysLighting = strtol(value, NULL, 10);
-			else if (!strcmp(token, "ShowEnemyNames"))
-				ng->ShowEnemyNames = strtol(value, NULL, 10);
-			else if (!strcmp(token, "BrightPlayers"))
-				ng->BrightPlayers = strtol(value, NULL, 10);
-			else if (!strcmp(token, "SpawnStyle"))
-				ng->SpawnStyle = strtol(value, NULL, 10);	
-			else if (!strcmp(token, "GaussAmmoStyle"))
-				ng->GaussAmmoStyle = strtol(value, NULL, 10);
-			else if (!strcmp(token, "KillGoal"))
-				ng->KillGoal = strtol(value, NULL, 10);
-			else if (!strcmp(token, "PlayTimeAllowed"))
-				ng->PlayTimeAllowed = strtol(value, NULL, 10);
-			else if (!strcmp(token, "control_invul_time"))
-				ng->control_invul_time = strtol(value, NULL, 10);
-			else if (!strcmp(token, "PacketsPerSec"))
-				ng->PacketsPerSec = strtol(value, NULL, 10);
-			else if (!strcmp(token, "ShortPackets"))
-				ng->ShortPackets = strtol(value, NULL, 10);
-			else if (!strcmp(token, "NoFriendlyFire"))
-				ng->NoFriendlyFire = strtol(value, NULL, 10);
-			else if (!strcmp(token, "RetroProtocol"))
-				ng->RetroProtocol = strtol(value, NULL, 10);
-			else if (!strcmp(token, "RespawnConcs"))
-				ng->RespawnConcs = strtol(value, NULL, 10);	
-			//else if (!strcmp(token, "DarkSmartBlobs"))
-			//	ng->DarkSmartBlobs = strtol(value, NULL, 10);
-			else if (!strcmp(token, "LowVulcan"))
-				ng->LowVulcan = strtol(value, NULL, 10);
-			else if (!strcmp(token, "AllowPreferredColors"))
-				ng->AllowPreferredColors = strtol(value, NULL, 10);						
-			else if (!strcmp(token, "AllowColoredLighting"))
-				ng->AllowColoredLighting = strtol(value, NULL, 10);			
-			else if (!strcmp(token, "FairColors"))
-				ng->FairColors = strtol(value, NULL, 10);	
-			else if (!strcmp(token, "BlackAndWhitePyros"))
-				ng->BlackAndWhitePyros = strtol(value, NULL, 10);	
-			else if (!strcmp(token, "BornWithBurner"))
-				ng->BornWithBurner = strtol(value, NULL, 10);	
-			else if (!strcmp(token, "OriginalD1Weapons"))
-				ng->OriginalD1Weapons = strtol(value, NULL, 10);
-			else if (!strcmp(token, "PrimaryDupFactor"))
-				ng->PrimaryDupFactor = strtol(value, NULL, 10);
-			else if (!strcmp(token, "SecondaryDupFactor"))
-				ng->SecondaryDupFactor = strtol(value, NULL, 10);
-			else if (!strcmp(token, "SecondaryCapFactor"))
-				ng->SecondaryCapFactor = strtol(value, NULL, 10);
-			else if (!strcmp(token, "obs_delay"))
-				ng->obs_delay = strtol(value, NULL, 10);
-			else if (!strcmp(token, "obs_min"))
-				ng->obs_min = strtol(value, NULL, 10);
-			else if (!strcmp(token, "HomingUpdateRate"))
-				ng->HomingUpdateRate = strtol(value, NULL, 10);
-			else if (!strcmp(token, "RemoteHitSpark"))
-				ng->RemoteHitSpark = strtol(value, NULL, 10);
-			else if (!strcmp(token, "AllowCustomModelsTextures"))
-				ng->AllowCustomModelsTextures = strtol(value, NULL, 10);
-			else if (!strcmp(token, "ReducedFlash"))
-				ng->ReducedFlash = strtol(value, NULL, 10);
-			else if (!strcmp(token, "DisableGaussSplash"))
-				ng->DisableGaussSplash = strtol(value, NULL, 10);
+			else if (netgame_setting_read(ng, token, value))
+				continue;
 #ifdef USE_TRACKER
 			else if (!strcmp(token, "Tracker"))
 				ng->Tracker = strtol(value, NULL, 10);
@@ -1385,46 +1326,7 @@ int write_netgame_settings_file(const char *filename, netgame_info *ng, int no_n
 
 	if (!no_name)
 		PHYSFSX_printf(file, "game_name=%s\n", ng->game_name);
-	PHYSFSX_printf(file, "gamemode=%i\n", ng->gamemode);
-	PHYSFSX_printf(file, "RefusePlayers=%i\n", ng->RefusePlayers);
-	PHYSFSX_printf(file, "difficulty=%i\n", ng->difficulty);
-	PHYSFSX_printf(file, "max_numplayers=%i\n", ng->max_numplayers);
-	PHYSFSX_printf(file, "max_numobservers=%i\n", ng->max_numobservers);
-	PHYSFSX_printf(file, "game_flags=%i\n", ng->game_flags);
-	PHYSFSX_printf(file, "AllowedItems=%i\n", ng->AllowedItems);
-	PHYSFSX_printf(file, "Allow_marker_view=%i\n", ng->Allow_marker_view);
-	PHYSFSX_printf(file, "AlwaysLighting=%i\n", ng->AlwaysLighting);
-	PHYSFSX_printf(file, "ShowEnemyNames=%i\n", ng->ShowEnemyNames);
-	PHYSFSX_printf(file, "BrightPlayers=%i\n", ng->BrightPlayers);
-	PHYSFSX_printf(file, "SpawnStyle=%i\n", ng->SpawnStyle);
-	PHYSFSX_printf(file, "GaussAmmoStyle=%i\n", ng->GaussAmmoStyle);
-	PHYSFSX_printf(file, "KillGoal=%i\n", ng->KillGoal);
-	PHYSFSX_printf(file, "PlayTimeAllowed=%i\n", ng->PlayTimeAllowed);
-	PHYSFSX_printf(file, "control_invul_time=%i\n", ng->control_invul_time);
-	PHYSFSX_printf(file, "PacketsPerSec=%i\n", ng->PacketsPerSec);
-	PHYSFSX_printf(file, "ShortPackets=%i\n", ng->ShortPackets);
-	PHYSFSX_printf(file, "NoFriendlyFire=%i\n", ng->NoFriendlyFire);
-	PHYSFSX_printf(file, "RetroProtocol=%i\n", ng->RetroProtocol);
-	PHYSFSX_printf(file, "RespawnConcs=%i\n", ng->RespawnConcs);
-	//PHYSFSX_printf(file, "DarkSmartBlobs=%i\n", ng->DarkSmartBlobs);
-	PHYSFSX_printf(file, "LowVulcan=%i\n", ng->LowVulcan);
-	PHYSFSX_printf(file, "AllowPreferredColors=%i\n", ng->AllowPreferredColors);
-	PHYSFSX_printf(file, "AllowColoredLighting=%i\n", ng->AllowColoredLighting);
-	PHYSFSX_printf(file, "FairColors=%i\n", ng->FairColors);
-	PHYSFSX_printf(file, "BlackAndWhitePyros=%i\n", ng->BlackAndWhitePyros);
-	PHYSFSX_printf(file, "BornWithBurner=%i\n", ng->BornWithBurner);
-	PHYSFSX_printf(file, "OriginalD1Weapons=%i\n", ng->OriginalD1Weapons);
-	PHYSFSX_printf(file, "PrimaryDupFactor=%i\n", ng->PrimaryDupFactor);
-	PHYSFSX_printf(file, "SecondaryDupFactor=%i\n", ng->SecondaryDupFactor);
-	PHYSFSX_printf(file, "SecondaryCapFactor=%i\n", ng->SecondaryCapFactor);
-	PHYSFSX_printf(file, "obs_delay=%i\n", ng->obs_delay);
-	PHYSFSX_printf(file, "obs_min=%i\n", ng->obs_min);
-	PHYSFSX_printf(file, "HomingUpdateRate=%i\n", ng->HomingUpdateRate);
-	PHYSFSX_printf(file, "RemoteHitSpark=%i\n", ng->RemoteHitSpark);
-	PHYSFSX_printf(file, "AllowCustomModelsTextures=%i\n", ng->AllowCustomModelsTextures);
-	PHYSFSX_printf(file, "ReducedFlash=%i\n", ng->ReducedFlash);
-	PHYSFSX_printf(file, "DisableGaussSplash=%i\n", ng->DisableGaussSplash);
-	
+	netgame_setting_write(file, ng);
 #ifdef USE_TRACKER
 	PHYSFSX_printf(file, "Tracker=%i\n", ng->Tracker);
 #else
