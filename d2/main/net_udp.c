@@ -7342,18 +7342,22 @@ int net_udp_start_game(void)
 		// show a "please wait" screen so this doesn't look like a freeze.
 		newmenu_item m[1];
 		newmenu *wait_menu;
+		window *wait_wind = NULL;
 
 		m[0].type = NM_TYPE_TEXT;
 		m[0].text = "Setting up peer-to-peer hosting\n\nPlease wait...";
 
 		wait_menu = newmenu_do3_nk(NULL, NULL, 1, m, NULL, NULL, 0, NULL);
+		if (wait_menu)
+			wait_wind = newmenu_get_window(wait_menu);
 		timer_delay(F1_0 / 4);
 		event_process();
 
 		net_udp_upnp_map_port(atoi(UDP_MyPort));
 
-		if (wait_menu)
-			window_close(newmenu_get_window(wait_menu));
+		// SNG: a keypress can close it during event_process, freeing the menu
+		if (wait_wind && window_exists(wait_wind))
+			window_close(wait_wind);
 	}
 #endif
 
