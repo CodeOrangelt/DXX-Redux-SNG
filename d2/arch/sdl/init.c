@@ -35,9 +35,25 @@ void arch_close(void)
 	SDL_Quit();
 }
 
+// SNG: sdl12-compat picks its monitor from these at SDL_Init; a user's own env wins
+static void select_display(void)
+{
+	static char display_env[48];
+
+	if (!SDL_getenv("SDL_VIDEO_FULLSCREEN_DISPLAY"))
+	{
+		snprintf(display_env, sizeof(display_env), "SDL_VIDEO_FULLSCREEN_DISPLAY=%d", GameCfg.Display);
+		SDL_putenv(display_env);
+	}
+	if (!SDL_getenv("SDL_VIDEO_WINDOW_POS") && !SDL_getenv("SDL_VIDEO_CENTERED"))
+		SDL_putenv("SDL_VIDEO_CENTERED=1");
+}
+
 void arch_init(void)
 {
 	int t;
+
+	select_display();
 
 	if (SDL_Init(SDL_INIT_VIDEO) < 0)
 		Error("SDL library initialisation failed: %s.",SDL_GetError());

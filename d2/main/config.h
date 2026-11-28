@@ -61,6 +61,7 @@ typedef struct Cfg
 	int Grabinput;
 	int ClassicDepth;
 	int BorderlessWindow;
+	int Display;	// SNG: monitor index, read once at video init
 	int MenuColor;	// SNG: accent colour family of the menus, see nk_ui.c
 	int UiScale;	// SNG: menu size in percent, see nk_ui_scale()
 	int UiTextScale;	// SNG: text size relative to UiScale, percent

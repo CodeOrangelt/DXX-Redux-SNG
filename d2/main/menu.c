@@ -980,11 +980,101 @@ static int change_res_menuset(newmenu *menu, d_event *event, void *userdata)
 	return 0;
 }
 
+#define MAX_MONITORS 8
+#define DISPLAY_CONFIRM_SECONDS 12
+
+typedef struct
+{
+	u_int32_t mode;
+	int aspect_x, aspect_y;
+	int fullscreen;
+	int borderless;
+} video_settings;
+
+static void video_settings_current(video_settings *v)
+{
+	v->mode = Game_screen_mode;
+	v->aspect_x = GameCfg.AspectX;
+	v->aspect_y = GameCfg.AspectY;
+	v->fullscreen = gr_check_fullscreen();
+	v->borderless = GameCfg.BorderlessWindow;
+}
+
+static int video_settings_equal(const video_settings *a, const video_settings *b)
+{
+	return a->mode == b->mode && a->aspect_x == b->aspect_x && a->aspect_y == b->aspect_y &&
+		a->fullscreen == b->fullscreen && a->borderless == b->borderless;
+}
+
+static void video_settings_apply(const video_settings *v)
+{
+	int recreate = v->mode != Game_screen_mode || v->borderless != GameCfg.BorderlessWindow;
+
+	GameCfg.AspectX = v->aspect_x;
+	GameCfg.AspectY = v->aspect_y;
+	GameCfg.BorderlessWindow = v->borderless;
+	if (v->fullscreen != gr_check_fullscreen())
+		gr_toggle_fullscreen();
+
+	newmenu_free_background();
+	set_screen_mode(SCREEN_MENU);
+	if (recreate)
+	{
+		gr_set_mode(v->mode);
+		Game_screen_mode = v->mode;
+		if (Game_wind) // shortly activate Game_wind so it's canvas will align to new resolution. really minor glitch but whatever
+		{
+			d_event event;
+			WINDOW_SEND_EVENT(Game_wind, EVENT_WINDOW_ACTIVATED);
+			WINDOW_SEND_EVENT(Game_wind, EVENT_WINDOW_DEACTIVATED);
+		}
+	}
+	game_init_render_buffers(SM_W(Game_screen_mode), SM_H(Game_screen_mode));
+}
+
+typedef struct
+{
+	fix64 deadline;
+	char countdown[48];
+} display_confirm;
+
+static int display_confirm_handler(newmenu *menu, d_event *event, void *userdata)
+{
+	display_confirm *confirm = userdata;
+	fix64 left;
+
+	menu = menu;
+	if (event->type != EVENT_IDLE)
+		return 0;
+	left = confirm->deadline - timer_query();
+	if (left <= 0)
+		return -2;
+	snprintf(confirm->countdown, sizeof(confirm->countdown), "Reverting in %d seconds", f2i(left) + 1);
+	return 0;
+}
+
+// a mode the monitor can't show leaves the screen black; Esc, Enter or waiting reverts
+static int display_confirm_keep(void)
+{
+	enum { opt_countdown, opt_keep, opt_revert, opt_count };
+	newmenu_item m[opt_count];
+	display_confirm confirm;
+
+	confirm.deadline = timer_query() + i2f(DISPLAY_CONFIRM_SECONDS);
+	snprintf(confirm.countdown, sizeof(confirm.countdown), "Reverting in %d seconds", DISPLAY_CONFIRM_SECONDS);
+	memset(m, 0, sizeof(m));
+	m[opt_countdown].type = NM_TYPE_TEXT; m[opt_countdown].text = confirm.countdown;
+	m[opt_keep].type = NM_TYPE_MENU; m[opt_keep].text = "Keep";
+	m[opt_revert].type = NM_TYPE_MENU; m[opt_revert].text = "Revert";
+	return newmenu_do1_nk(NULL, "Keep these display settings?", opt_count, m, display_confirm_handler, &confirm, opt_revert) == opt_keep;
+}
+
 void change_res()
 {
 	u_int32_t modes[50], new_mode = 0;
 	int i = 0, mc = 0, num_presets = 0, citem = -1, opt_cval = -1, opt_fullscr = -1, opt_borderless = -1, opt_preset0 = 0;
-	int cur_borderless, new_borderless;
+	video_settings before, after;
+	int opt_monitor = -1;
 
 	num_presets = gr_list_modes( modes );
 
@@ -1026,6 +1116,10 @@ void change_res()
 	opt_borderless = mc;
 	m[mc].type = NM_TYPE_CHECK; m[mc].text = "Borderless window"; m[mc].value = GameCfg.BorderlessWindow; mc++;
 
+	opt_monitor = mc;
+	m[mc].type = NM_TYPE_NUMBER; m[mc].text = "Monitor"; m[mc].value = GameCfg.Display + 1;
+	m[mc].min_value = 1; m[mc].max_value = MAX_MONITORS; mc++;
+
 	Assert(mc <= SDL_arraysize(m));
 
 	// create the menu
@@ -1039,21 +1133,24 @@ void change_res()
 		if ((m[i].type == NM_TYPE_RADIO) && (m[i].group==0) && (m[i].value == 1))
 			break;
 
-	cur_borderless = GameCfg.BorderlessWindow;
-	new_borderless = GameCfg.BorderlessWindow = m[opt_borderless].value;
+	video_settings_current(&before);
+	after = before;
+	after.fullscreen = m[opt_fullscr].value;
+	after.borderless = m[opt_borderless].value;
+	new_mode = Game_screen_mode;
 
-	// now check for fullscreen toggle and apply if necessary
-	if (m[opt_fullscr].value != gr_check_fullscreen())
-		gr_toggle_fullscreen();
+	if (m[opt_monitor].value - 1 != GameCfg.Display)
+	{
+		GameCfg.Display = m[opt_monitor].value - 1;
+		nm_messagebox(NULL, 1, TXT_OK, "Monitor change applies\nafter restarting the game.");
+	}
 
 	if (i == opt_cval) // set custom resolution and aspect
 	{
 		u_int32_t cmode = Game_screen_mode, casp = Game_screen_mode;
 
-		if (!strchr(crestext, 'x'))
-			return;
-
-		cmode = SM(atoi(crestext), atoi(strchr(crestext, 'x')+1));
+		if (strchr(crestext, 'x'))
+			cmode = SM(atoi(crestext), atoi(strchr(crestext, 'x')+1));
 		if (SM_W(cmode) < 320 || SM_H(cmode) < 200) // oh oh - the resolution is too small. Revert!
 		{
 			nm_messagebox( TXT_WARNING, 1, "OK", "Entered resolution is too small.\nReverting ..." );
@@ -1065,32 +1162,23 @@ void change_res()
 		{
 			casp = SM(atoi(casptext), atoi(strchr(casptext, 'x')+1));
 		}
-		GameCfg.AspectY = SM_W(casp)/gcd(SM_W(casp),SM_H(casp));
-		GameCfg.AspectX = SM_H(casp)/gcd(SM_W(casp),SM_H(casp));
+		after.aspect_y = SM_W(casp)/gcd(SM_W(casp),SM_H(casp));
+		after.aspect_x = SM_H(casp)/gcd(SM_W(casp),SM_H(casp));
 		new_mode = cmode;
 	}
 	else if (i >= opt_preset0 && i < opt_preset0 + num_presets) // set preset resolution
 	{
 		new_mode = modes[i - opt_preset0];
-		GameCfg.AspectY = SM_W(new_mode)/gcd(SM_W(new_mode),SM_H(new_mode));
-		GameCfg.AspectX = SM_H(new_mode)/gcd(SM_W(new_mode),SM_H(new_mode));
+		after.aspect_y = SM_W(new_mode)/gcd(SM_W(new_mode),SM_H(new_mode));
+		after.aspect_x = SM_H(new_mode)/gcd(SM_W(new_mode),SM_H(new_mode));
 	}
 
-	// clean up and apply everything
-	newmenu_free_background();
-	set_screen_mode(SCREEN_MENU);
-	if (new_mode != Game_screen_mode || cur_borderless != new_borderless)
-	{
-		gr_set_mode(new_mode);
-		Game_screen_mode = new_mode;
-		if (Game_wind) // shortly activate Game_wind so it's canvas will align to new resolution. really minor glitch but whatever
-		{
-			d_event event;
-			WINDOW_SEND_EVENT(Game_wind, EVENT_WINDOW_ACTIVATED);
-			WINDOW_SEND_EVENT(Game_wind, EVENT_WINDOW_DEACTIVATED);
-		}
-	}
-	game_init_render_buffers(SM_W(Game_screen_mode), SM_H(Game_screen_mode));
+	after.mode = new_mode;
+
+	video_settings_apply(&after);
+	if (video_settings_equal(&before, &after) || display_confirm_keep())
+		return;
+	video_settings_apply(&before);
 	}
 }
 

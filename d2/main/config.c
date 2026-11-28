@@ -68,6 +68,7 @@ static const char FPSIndicatorStr[] ="FPSIndicator";
 static const char AutoDownloadMissionsStr[] ="AutoDownloadMissions";
 static const char GrabinputStr[] ="GrabInput";
 static const char BorderlessWindowStr[] ="BorderlessWindow";
+static const char DisplayStr[] ="Display";
 static const char MenuBackgroundStr[] ="MenuBackground";
 static const char MenuColorStr[] ="MenuColor";	// SNG: accent colour of the Nuklear menus
 static const char UiScaleStr[] ="UiScale";
@@ -131,6 +132,7 @@ int ReadConfigFile()
 	GameCfg.FOVZoom = 0;
 	GameCfg.Grabinput = 1;
 	GameCfg.BorderlessWindow = 0;
+	GameCfg.Display = 0;
 	GameCfg.MenuColor = 0;
 	GameCfg.UiScale = 100;
 	GameCfg.UiTextScale = 100;
@@ -265,6 +267,8 @@ int ReadConfigFile()
 				GameCfg.Grabinput = strtol(value, NULL, 10);
 			else if (!strcmp(token, BorderlessWindowStr))
 				GameCfg.BorderlessWindow = strtol(value, NULL, 10);
+			else if (!strcmp(token, DisplayStr))
+				GameCfg.Display = strtol(value, NULL, 10);
 			else if (!strcmp(token, MenuColorStr))
 				GameCfg.MenuColor = strtol(value, NULL, 10);
 			else if (!strcmp(token, UiScaleStr))
@@ -348,6 +352,7 @@ int WriteConfigFile()
 	PHYSFSX_printf(infile, "FOVZoom=%i\n", GameCfg.FOVZoom);
 	PHYSFSX_printf(infile, "%s=%i\n", GrabinputStr, GameCfg.Grabinput);
 	PHYSFSX_printf(infile, "%s=%i\n", BorderlessWindowStr, GameCfg.BorderlessWindow);
+	PHYSFSX_printf(infile, "%s=%i\n", DisplayStr, GameCfg.Display);
 	PHYSFSX_printf(infile, "%s=%i\n", MenuColorStr, GameCfg.MenuColor);
 	PHYSFSX_printf(infile, "%s=%i\n", UiScaleStr, GameCfg.UiScale);
 	PHYSFSX_printf(infile, "%s=%i\n", UiTextScaleStr, GameCfg.UiTextScale);
